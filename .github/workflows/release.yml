@@ -1,0 +1,139 @@
+name: Release Package
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to release (e.g., v0.1.0)'
+        required: true
+        type: string
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          path: rosmadair
+
+      - name: Checkout Alizarin (Rust dependency)
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ vars.ALIZARIN_REPO || 'flaxandteal/alizarin' }}
+          path: alizarin
+          ref: ${{ vars.ALIZARIN_REF || 'v0.2.1-alpha.59' }}
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Install wasm-pack
+        run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Cache Rust dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            rosmadair/target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('rosmadair/Cargo.lock') }}
+
+      - name: Cache Node dependencies
+        uses: actions/cache@v4
+        with:
+          path: rosmadair/node_modules
+          key: ${{ runner.os }}-node-${{ hashFiles('rosmadair/package-lock.json') }}
+
+      - name: Install Node dependencies
+        working-directory: rosmadair
+        run: npm install
+
+      - name: Build WASM + JS bundle
+        working-directory: rosmadair
+        run: npm run build
+
+      - name: Verify build artifacts
+        working-directory: rosmadair
+        run: |
+          echo "dist/:"
+          ls -lh dist/
+          echo ""
+          echo "pkg/:"
+          ls -lh pkg/
+
+      - name: Prepare package for npm
+        working-directory: rosmadair
+        run: |
+          # Remove pkg/.gitignore created by wasm-pack so pkg/ contents are included in tarball
+          rm -f pkg/.gitignore
+          echo "Removed pkg/.gitignore to ensure WASM files are included in package"
+
+      - name: Create tarball
+        working-directory: rosmadair
+        run: |
+          npm pack
+          echo ""
+          echo "Tarball contents:"
+          tar -tzf ros-madair-*.tgz | head -30
+
+      - name: Get version from tag or input
+        id: get_version
+        run: |
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+            echo "version=${{ github.event.inputs.version }}" >> $GITHUB_OUTPUT
+          else
+            echo "version=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ steps.get_version.outputs.version }}
+          name: Release ${{ steps.get_version.outputs.version }}
+          draft: false
+          prerelease: ${{ contains(steps.get_version.outputs.version, 'alpha') || contains(steps.get_version.outputs.version, 'beta') }}
+          files: |
+            rosmadair/*.tgz
+          body: |
+            ## Installation
+
+            Install from the tarball:
+
+            ```bash
+            npm install https://github.com/${{ github.repository }}/releases/download/${{ steps.get_version.outputs.version }}/ros-madair-${{ steps.get_version.outputs.version }}.tgz
+            ```
+
+            ## Usage
+
+            ```typescript
+            import { initWasm, SparqlStore } from 'ros-madair';
+
+            await initWasm();
+            const store = new SparqlStore('https://cdn.example.org/index/');
+            await store.loadSummary();
+            ```
+
+            ## What's Included
+
+            - Pre-built WASM binary (`pkg/`)
+            - Bundled JavaScript/TypeScript distribution (`dist/`)
+            - Type definitions
+            - Source maps
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

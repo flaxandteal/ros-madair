@@ -11,5 +11,13 @@ pkg/
 # Rust build
 target/
 
+# Vite build output
+dist/
+
+# Node modules
+node_modules/
+
 # MkDocs build output
 site/
+
+/*.tgz

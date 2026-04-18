@@ -16,7 +16,7 @@ dependencies = [
 
 [[package]]
 name = "alizarin-core"
-version = "0.2.1-alpha.58"
+version = "0.2.1-alpha.59"
 dependencies = [
  "chrono",
  "csv",

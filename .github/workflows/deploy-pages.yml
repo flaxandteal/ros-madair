@@ -6,9 +6,8 @@
 #   /example/      → Sparnatural demo + Arches index (from example/)
 #
 # Manual trigger only by default — flip the `push` block on once you trust it.
-# Requires two repository secrets:
+# Requires one repository secret:
 #
-#   ALIZARIN_REPO          e.g. flaxandteal/alizarin   (public, no auth needed)
 #   CORAL_REPO_DEPLOY_KEY  SSH private key with read access to the (private)
 #                          prebuild dataset repo.
 #
@@ -25,16 +24,15 @@ name: Deploy docs + example to GitHub Pages
 
 on:
   workflow_dispatch:
-  # Uncomment after the first successful manual run:
-  # push:
-  #   branches: [main]
-  #   paths:
-  #     - 'crates/**'
-  #     - 'docs/**'
-  #     - 'example/**'
-  #     - 'mkdocs.yml'
-  #     - 'requirements-docs.txt'
-  #     - '.github/workflows/deploy-pages.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'crates/**'
+      - 'docs/**'
+      - 'example/**'
+      - 'mkdocs.yml'
+      - 'requirements-docs.txt'
+      - '.github/workflows/deploy-pages.yml'
 
 # Pages deploys need write permission for the deployment, plus id-token for OIDC.
 permissions:
@@ -61,10 +59,9 @@ jobs:
       - name: Checkout Alizarin (sibling JS/WASM SDK)
         uses: actions/checkout@v4
         with:
-          repository: ${{ vars.ALIZARIN_REPO || 'flaxandteal/alizarin' }}
+          repository: flaxandteal/alizarin
           path: alizarin
-          # Pin via vars.ALIZARIN_REF if you want a specific tag/branch.
-          ref: ${{ vars.ALIZARIN_REF || 'main' }}
+          ref: v0.2.1-alpha.59
 
       - name: Checkout Arches prebuild dataset (private)
         uses: actions/checkout@v4
