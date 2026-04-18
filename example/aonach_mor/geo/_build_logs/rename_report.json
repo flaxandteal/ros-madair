@@ -1,0 +1,252 @@
+{
+  "per_file_stats": {
+    "coastline.geojson": {
+      "features": 33,
+      "by_kind": {
+        "other": 33
+      }
+    },
+    "gcc_boundary.geojson": {
+      "features": 1,
+      "by_kind": {
+        "city": 1
+      }
+    },
+    "ward_boundaries.geojson": {
+      "features": 186,
+      "by_kind": {
+        "ward": 186
+      }
+    },
+    "neighbourhoods.geojson": {
+      "features": 633,
+      "by_kind": {
+        "neighbourhood": 633
+      }
+    },
+    "rivers.geojson": {
+      "features": 61,
+      "by_kind": {
+        "water": 61
+      }
+    },
+    "roads_primary.geojson": {
+      "features": 2157,
+      "by_kind": {
+        "road": 2157
+      }
+    },
+    "bbox.geojson": {
+      "features": 1,
+      "by_kind": {
+        "other": 1
+      }
+    }
+  },
+  "unmapped_source_names": {
+    "count_distinct": 907,
+    "count_total_occurrences": 1564,
+    "top_50": [
+      [
+        "Grand Northern Trunk Road (Old NH5)",
+        21
+      ],
+      [
+        "Velachery Main Road",
+        19
+      ],
+      [
+        "Rajiv Gandhi IT Expressway",
+        19
+      ],
+      [
+        "General Hospital Road",
+        18
+      ],
+      [
+        "Konnur High Road",
+        18
+      ],
+      [
+        "Kathipara Interchange Flyover",
+        16
+      ],
+      [
+        "Mount - Poonamallee - Avadi Road",
+        16
+      ],
+      [
+        "Arcot Road",
+        16
+      ],
+      [
+        "Dr MGR Salai",
+        15
+      ],
+      [
+        "Morasali Maran Flyover",
+        14
+      ],
+      [
+        "EVR Periyar Salai Flyover Ramp",
+        14
+      ],
+      [
+        "Semmozhi Salai",
+        14
+      ],
+      [
+        "Basin Bridge",
+        13
+      ],
+      [
+        "Santhome High Road",
+        13
+      ],
+      [
+        "Kalaingar Karunanidhi Salai",
+        12
+      ],
+      [
+        "Erukkancheri High Road",
+        12
+      ],
+      [
+        "EVR Periyar Salai Flyover",
+        12
+      ],
+      [
+        "Uttamar Gandhi Salai (Nungambakkam High Road)",
+        12
+      ],
+      [
+        "Nagerkoyil Sudalaimuthu Krishnan (NSK) Salai",
+        12
+      ],
+      [
+        "West Avenue Road",
+        11
+      ],
+      [
+        "Chennai - Tiruttani - Renigunta Road",
+        11
+      ],
+      [
+        "Madhavaram Flyover",
+        10
+      ],
+      [
+        "Thiruvalluvar Road",
+        10
+      ],
+      [
+        "Thillaiganga Nagar Subway",
+        10
+      ],
+      [
+        "Velachery Main Road Flyover",
+        10
+      ],
+      [
+        "Moolakadai Flyover",
+        10
+      ],
+      [
+        "Vyasarpadi Flyover",
+        10
+      ],
+      [
+        "Thirumangalam Flyover",
+        10
+      ],
+      [
+        "North Fort Road",
+        9
+      ],
+      [
+        "Manali High Road",
+        9
+      ],
+      [
+        "St Thomas Mount Subway",
+        9
+      ],
+      [
+        "Vadapalani Flyover",
+        9
+      ],
+      [
+        "Suryanarayana Chetty Street",
+        9
+      ],
+      [
+        "DGS Dhinakaran Road",
+        8
+      ],
+      [
+        "Gandhi Mandapam Flyover",
+        8
+      ],
+      [
+        "Perambur High Road",
+        8
+      ],
+      [
+        "Thirumangalam – Mogappair Road",
+        8
+      ],
+      [
+        "Koyambedu Flyover",
+        8
+      ],
+      [
+        "Kodambakkam Railway Flyover",
+        7
+      ],
+      [
+        "RBI Subway",
+        7
+      ],
+      [
+        "Basin Bridge Road",
+        7
+      ],
+      [
+        "Old Jail Road",
+        7
+      ],
+      [
+        "New Avadi Road",
+        7
+      ],
+      [
+        "Medavakkam - Mambakkam - Sembakkam Road",
+        7
+      ],
+      [
+        "Manali Oil Refinary Road",
+        7
+      ],
+      [
+        "ORR Service Road",
+        7
+      ],
+      [
+        "Suryanarayana Street",
+        6
+      ],
+      [
+        "Velachery MRTS Bridge",
+        6
+      ],
+      [
+        "Music Academy Flyover",
+        6
+      ],
+      [
+        "Kamarajar Salai",
+        6
+      ]
+    ]
+  }
+}

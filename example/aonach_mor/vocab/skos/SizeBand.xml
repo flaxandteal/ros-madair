@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rdf:RDF
+  xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+  xmlns:rdfs="http://www.w3.org/2000/01/rdf-schema#"
+  xmlns:skos="http://www.w3.org/2004/02/skos/core#"
+  xmlns:dcterms="http://purl.org/dc/terms/">
+  <!-- Aonach Mór controlled vocabulary: SizeBand. Generated on 2026-04-11 by example/aonach_mor/build/20_skos_collections.py. Do not hand-edit. -->
+  <skos:ConceptScheme rdf:about="https://rosmadair.example.org/aonach_mor/vocab/SizeBand">
+    <skos:prefLabel xml:lang="en">Organisation size band</skos:prefLabel>
+    <dcterms:description xml:lang="en">Headcount-based size bands for Organisation resources.</dcterms:description>
+  </skos:ConceptScheme>
+  <skos:Concept rdf:about="https://rosmadair.example.org/aonach_mor/vocab/SizeBand/micro">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/aonach_mor/vocab/SizeBand"/>
+    <skos:prefLabel xml:lang="en">Micro (1–9)</skos:prefLabel>
+    <skos:notation>1</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/aonach_mor/vocab/SizeBand/small">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/aonach_mor/vocab/SizeBand"/>
+    <skos:prefLabel xml:lang="en">Small (10–49)</skos:prefLabel>
+    <skos:notation>2</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/aonach_mor/vocab/SizeBand/medium">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/aonach_mor/vocab/SizeBand"/>
+    <skos:prefLabel xml:lang="en">Medium (50–249)</skos:prefLabel>
+    <skos:notation>3</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/aonach_mor/vocab/SizeBand/large">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/aonach_mor/vocab/SizeBand"/>
+    <skos:prefLabel xml:lang="en">Large (250–999)</skos:prefLabel>
+    <skos:notation>4</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/aonach_mor/vocab/SizeBand/very_large">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/aonach_mor/vocab/SizeBand"/>
+    <skos:prefLabel xml:lang="en">Very large (1000+)</skos:prefLabel>
+    <skos:notation>5</skos:notation>
+  </skos:Concept>
+</rdf:RDF>

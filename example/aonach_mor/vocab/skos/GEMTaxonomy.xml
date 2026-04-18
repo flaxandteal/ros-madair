@@ -1,0 +1,92 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rdf:RDF
+  xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+  xmlns:rdfs="http://www.w3.org/2000/01/rdf-schema#"
+  xmlns:skos="http://www.w3.org/2004/02/skos/core#"
+  xmlns:dcterms="http://purl.org/dc/terms/">
+  <!-- Aonach Mór controlled vocabulary: GEMTaxonomy. Generated on 2026-04-11 by example/aonach_mor/build/20_skos_collections.py. Do not hand-edit. -->
+  <skos:ConceptScheme rdf:about="https://rosmadair.example.org/aonach_mor/vocab/GEMTaxonomy">
+    <skos:prefLabel xml:lang="en">GEM Building Taxonomy v3 subset</skos:prefLabel>
+    <dcterms:description xml:lang="en">Hand-picked subset of GEM Building Taxonomy v3 primary material+lateral-load-resisting-system codes. Not a full taxonomy import; reviewers who need the canonical definitions should consult the GEM specification document.</dcterms:description>
+  </skos:ConceptScheme>
+  <skos:Concept rdf:about="https://rosmadair.example.org/aonach_mor/vocab/GEMTaxonomy/cr_lfinf">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/aonach_mor/vocab/GEMTaxonomy"/>
+    <skos:prefLabel xml:lang="en">CR/LFINF — Reinforced concrete, infilled frame</skos:prefLabel>
+    <skos:notation>1</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/aonach_mor/vocab/GEMTaxonomy/cr_lfm">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/aonach_mor/vocab/GEMTaxonomy"/>
+    <skos:prefLabel xml:lang="en">CR/LFM — Reinforced concrete, moment frame</skos:prefLabel>
+    <skos:notation>2</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/aonach_mor/vocab/GEMTaxonomy/cr_lwal">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/aonach_mor/vocab/GEMTaxonomy"/>
+    <skos:prefLabel xml:lang="en">CR/LWAL — Reinforced concrete, shear wall</skos:prefLabel>
+    <skos:notation>3</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/aonach_mor/vocab/GEMTaxonomy/cr_lpb">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/aonach_mor/vocab/GEMTaxonomy"/>
+    <skos:prefLabel xml:lang="en">CR/LPB — Reinforced concrete, precast</skos:prefLabel>
+    <skos:notation>4</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/aonach_mor/vocab/GEMTaxonomy/mur_adb">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/aonach_mor/vocab/GEMTaxonomy"/>
+    <skos:prefLabel xml:lang="en">MUR+ADO — Unreinforced masonry, adobe block</skos:prefLabel>
+    <skos:notation>5</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/aonach_mor/vocab/GEMTaxonomy/mur_clbrs">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/aonach_mor/vocab/GEMTaxonomy"/>
+    <skos:prefLabel xml:lang="en">MUR+CLBRS — Unreinforced masonry, clay brick</skos:prefLabel>
+    <skos:notation>6</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/aonach_mor/vocab/GEMTaxonomy/mur_stdre">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/aonach_mor/vocab/GEMTaxonomy"/>
+    <skos:prefLabel xml:lang="en">MUR+STDRE — Unreinforced masonry, stone dressed</skos:prefLabel>
+    <skos:notation>7</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/aonach_mor/vocab/GEMTaxonomy/mcf_clbrs">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/aonach_mor/vocab/GEMTaxonomy"/>
+    <skos:prefLabel xml:lang="en">MCF+CLBRS — Confined masonry, clay brick</skos:prefLabel>
+    <skos:notation>8</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/aonach_mor/vocab/GEMTaxonomy/mr_clbrs">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/aonach_mor/vocab/GEMTaxonomy"/>
+    <skos:prefLabel xml:lang="en">MR+CLBRS — Reinforced masonry, clay brick</skos:prefLabel>
+    <skos:notation>9</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/aonach_mor/vocab/GEMTaxonomy/s_lfm">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/aonach_mor/vocab/GEMTaxonomy"/>
+    <skos:prefLabel xml:lang="en">S/LFM — Steel, moment frame</skos:prefLabel>
+    <skos:notation>10</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/aonach_mor/vocab/GEMTaxonomy/s_lfbr">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/aonach_mor/vocab/GEMTaxonomy"/>
+    <skos:prefLabel xml:lang="en">S/LFBR — Steel, braced frame</skos:prefLabel>
+    <skos:notation>11</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/aonach_mor/vocab/GEMTaxonomy/w_lwal">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/aonach_mor/vocab/GEMTaxonomy"/>
+    <skos:prefLabel xml:lang="en">W/LWAL — Wood, shear wall</skos:prefLabel>
+    <skos:notation>12</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/aonach_mor/vocab/GEMTaxonomy/w_lpb">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/aonach_mor/vocab/GEMTaxonomy"/>
+    <skos:prefLabel xml:lang="en">W/LPB — Wood, post and beam</skos:prefLabel>
+    <skos:notation>13</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/aonach_mor/vocab/GEMTaxonomy/e_lwal">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/aonach_mor/vocab/GEMTaxonomy"/>
+    <skos:prefLabel xml:lang="en">E/LWAL — Earthen, load-bearing wall</skos:prefLabel>
+    <skos:notation>14</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/aonach_mor/vocab/GEMTaxonomy/mix">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/aonach_mor/vocab/GEMTaxonomy"/>
+    <skos:prefLabel xml:lang="en">MIX — Mixed / hybrid structural system</skos:prefLabel>
+    <skos:notation>15</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/aonach_mor/vocab/GEMTaxonomy/unk">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/aonach_mor/vocab/GEMTaxonomy"/>
+    <skos:prefLabel xml:lang="en">UNK — Unknown / not assessed</skos:prefLabel>
+    <skos:notation>99</skos:notation>
+  </skos:Concept>
+</rdf:RDF>

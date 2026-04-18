@@ -1,0 +1,122 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rdf:RDF
+  xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+  xmlns:rdfs="http://www.w3.org/2000/01/rdf-schema#"
+  xmlns:skos="http://www.w3.org/2004/02/skos/core#"
+  xmlns:dcterms="http://purl.org/dc/terms/">
+  <!-- Aonach Mór controlled vocabulary: IntensityBand. Generated on 2026-04-11 by example/aonach_mor/build/20_skos_collections.py. Do not hand-edit. -->
+  <skos:ConceptScheme rdf:about="https://rosmadair.example.org/aonach_mor/vocab/IntensityBand">
+    <skos:prefLabel xml:lang="en">Intensity band</skos:prefLabel>
+    <dcterms:description xml:lang="en">Hazard-type-specific intensity bandings. Concepts encode both the hazard family and the band so a single column on HazardFootprint can resolve either cyclone wind-speeds or flood water depths.</dcterms:description>
+  </skos:ConceptScheme>
+  <skos:Concept rdf:about="https://rosmadair.example.org/aonach_mor/vocab/IntensityBand/flood_nuisance">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/aonach_mor/vocab/IntensityBand"/>
+    <skos:prefLabel xml:lang="en">Flood — nuisance (&lt;0.3 m)</skos:prefLabel>
+    <skos:notation>1</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/aonach_mor/vocab/IntensityBand/flood_shallow">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/aonach_mor/vocab/IntensityBand"/>
+    <skos:prefLabel xml:lang="en">Flood — shallow (0.3–1.0 m)</skos:prefLabel>
+    <skos:notation>2</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/aonach_mor/vocab/IntensityBand/flood_deep">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/aonach_mor/vocab/IntensityBand"/>
+    <skos:prefLabel xml:lang="en">Flood — deep (1.0–3.0 m)</skos:prefLabel>
+    <skos:notation>3</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/aonach_mor/vocab/IntensityBand/flood_extreme">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/aonach_mor/vocab/IntensityBand"/>
+    <skos:prefLabel xml:lang="en">Flood — extreme (&gt;3.0 m)</skos:prefLabel>
+    <skos:notation>4</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/aonach_mor/vocab/IntensityBand/wind_tropical_storm">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/aonach_mor/vocab/IntensityBand"/>
+    <skos:prefLabel xml:lang="en">Wind — tropical storm</skos:prefLabel>
+    <skos:notation>10</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/aonach_mor/vocab/IntensityBand/wind_cat1">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/aonach_mor/vocab/IntensityBand"/>
+    <skos:prefLabel xml:lang="en">Wind — Cat 1 cyclone</skos:prefLabel>
+    <skos:notation>11</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/aonach_mor/vocab/IntensityBand/wind_cat2">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/aonach_mor/vocab/IntensityBand"/>
+    <skos:prefLabel xml:lang="en">Wind — Cat 2 cyclone</skos:prefLabel>
+    <skos:notation>12</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/aonach_mor/vocab/IntensityBand/wind_cat3">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/aonach_mor/vocab/IntensityBand"/>
+    <skos:prefLabel xml:lang="en">Wind — Cat 3 cyclone</skos:prefLabel>
+    <skos:notation>13</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/aonach_mor/vocab/IntensityBand/wind_cat4">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/aonach_mor/vocab/IntensityBand"/>
+    <skos:prefLabel xml:lang="en">Wind — Cat 4 cyclone</skos:prefLabel>
+    <skos:notation>14</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/aonach_mor/vocab/IntensityBand/wind_cat5">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/aonach_mor/vocab/IntensityBand"/>
+    <skos:prefLabel xml:lang="en">Wind — Cat 5 cyclone</skos:prefLabel>
+    <skos:notation>15</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/aonach_mor/vocab/IntensityBand/eq_weak">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/aonach_mor/vocab/IntensityBand"/>
+    <skos:prefLabel xml:lang="en">Earthquake — weak (PGA &lt;0.05 g)</skos:prefLabel>
+    <skos:notation>20</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/aonach_mor/vocab/IntensityBand/eq_moderate">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/aonach_mor/vocab/IntensityBand"/>
+    <skos:prefLabel xml:lang="en">Earthquake — moderate (0.05–0.15 g)</skos:prefLabel>
+    <skos:notation>21</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/aonach_mor/vocab/IntensityBand/eq_strong">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/aonach_mor/vocab/IntensityBand"/>
+    <skos:prefLabel xml:lang="en">Earthquake — strong (0.15–0.3 g)</skos:prefLabel>
+    <skos:notation>22</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/aonach_mor/vocab/IntensityBand/eq_severe">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/aonach_mor/vocab/IntensityBand"/>
+    <skos:prefLabel xml:lang="en">Earthquake — severe (&gt;0.3 g)</skos:prefLabel>
+    <skos:notation>23</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/aonach_mor/vocab/IntensityBand/heat_warm">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/aonach_mor/vocab/IntensityBand"/>
+    <skos:prefLabel xml:lang="en">Heat — warm (&lt;35 °C)</skos:prefLabel>
+    <skos:notation>30</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/aonach_mor/vocab/IntensityBand/heat_hot">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/aonach_mor/vocab/IntensityBand"/>
+    <skos:prefLabel xml:lang="en">Heat — hot (35–40 °C)</skos:prefLabel>
+    <skos:notation>31</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/aonach_mor/vocab/IntensityBand/heat_very_hot">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/aonach_mor/vocab/IntensityBand"/>
+    <skos:prefLabel xml:lang="en">Heat — very hot (40–45 °C)</skos:prefLabel>
+    <skos:notation>32</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/aonach_mor/vocab/IntensityBand/heat_extreme">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/aonach_mor/vocab/IntensityBand"/>
+    <skos:prefLabel xml:lang="en">Heat — extreme (&gt;45 °C)</skos:prefLabel>
+    <skos:notation>33</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/aonach_mor/vocab/IntensityBand/crowd_sparse">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/aonach_mor/vocab/IntensityBand"/>
+    <skos:prefLabel xml:lang="en">Crowd — sparse (&lt;2 p/m²)</skos:prefLabel>
+    <skos:notation>40</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/aonach_mor/vocab/IntensityBand/crowd_moderate">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/aonach_mor/vocab/IntensityBand"/>
+    <skos:prefLabel xml:lang="en">Crowd — moderate (2–4 p/m²)</skos:prefLabel>
+    <skos:notation>41</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/aonach_mor/vocab/IntensityBand/crowd_dense">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/aonach_mor/vocab/IntensityBand"/>
+    <skos:prefLabel xml:lang="en">Crowd — dense (4–6 p/m²)</skos:prefLabel>
+    <skos:notation>42</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/aonach_mor/vocab/IntensityBand/crowd_critical">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/aonach_mor/vocab/IntensityBand"/>
+    <skos:prefLabel xml:lang="en">Crowd — critical (&gt;6 p/m²)</skos:prefLabel>
+    <skos:notation>43</skos:notation>
+  </skos:Concept>
+</rdf:RDF>

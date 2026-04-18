@@ -1,0 +1,425 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Rós Madair — Sparnatural Query Demo</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/sparnatural@12.2.1/dist/browser/sparnatural.css">
+
+  <!-- Install fetch interceptor synchronously, before any script can capture window.fetch.
+       Sparnatural's classic script may start fetching from `about:rosmadair-endpoint`
+       on connectedCallback, which would otherwise race the module script below. -->
+  <script>
+    (function() {
+      const ENDPOINT_MARKER = 'about:rosmadair-endpoint';
+      // Sparnatural's ShaclSparqlPostProcessor parses & re-serialises queries via
+      // sparqljs, which strips SPARQL comments. We therefore encode the collection
+      // ID in the targetClass URI ($range substitution) which survives the round-trip.
+      const COLLECTION_RE = /collection_([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i;
+      // Sparnatural appears to ignore our custom queryString for AutocompleteProperty
+      // and instead emits its built-in template with
+      //   FILTER(CONTAINS(LCASE(?label), LCASE("user-typed-key")))
+      // The first LCASE wraps a variable (?label), the second wraps the literal we
+      // need. Match the literal form specifically — the variable form has no quotes
+      // so this regex never accidentally hits it.
+      const SEARCH_KEY_RE = /LCASE\(\s*"([^"]*)"\s*\)/i;
+      const MAX_RESULTS = 50;
+      const DEBUG = true;
+      const conceptCache = new Map();
+
+      function extractQuery(input, init) {
+        const url = typeof input === 'string' ? input : (input && input.url) || '';
+        const m = url.match(/[?&]query=([^&#]*)/);
+        if (m) {
+          try { return decodeURIComponent(m[1].replace(/\+/g, ' ')); }
+          catch { return m[1]; }
+        }
+        try {
+          const u = new URL(url);
+          const q = u.searchParams.get('query');
+          if (q) return q;
+        } catch (_) { /* ignore */ }
+        if (init && init.body) {
+          if (typeof init.body === 'string') {
+            try {
+              const params = new URLSearchParams(init.body);
+              const q = params.get('query');
+              if (q) return q;
+            } catch (_) { /* ignore */ }
+            return init.body;
+          }
+          if (typeof URLSearchParams !== 'undefined' && init.body instanceof URLSearchParams) {
+            return init.body.get('query') || '';
+          }
+        }
+        return '';
+      }
+
+      async function loadCollection(id) {
+        if (conceptCache.has(id)) return conceptCache.get(id);
+        const resp = await origFetch('./static/index/sparnatural/concepts/' + id + '.json');
+        if (!resp.ok) {
+          if (DEBUG) console.warn('[rosmadair-endpoint] concept fetch failed', id, resp.status);
+          conceptCache.set(id, []);
+          return [];
+        }
+        const data = await resp.json();
+        const values = data.values || [];
+        conceptCache.set(id, values);
+        return values;
+      }
+
+      async function serve(input, init) {
+        const queryStr = extractQuery(input, init);
+        const m = queryStr.match(COLLECTION_RE);
+        const keyMatch = queryStr.match(SEARCH_KEY_RE);
+        const searchKey = keyMatch ? keyMatch[1].toLowerCase() : null;
+        if (DEBUG) {
+          const url = typeof input === 'string' ? input : (input && input.url) || '';
+          console.log('[rosmadair-endpoint] hit', url);
+          console.log('[rosmadair-endpoint] decoded query:', queryStr.slice(0, 800));
+          console.log('[rosmadair-endpoint] collection match:', m && m[1]);
+          console.log('[rosmadair-endpoint] search key:', searchKey);
+        }
+        if (!m) {
+          return new Response(
+            JSON.stringify({ head: { vars: ['uri', 'label'] }, results: { bindings: [] } }),
+            { status: 200, headers: { 'Content-Type': 'application/sparql-results+json' } }
+          );
+        }
+        let values = await loadCollection(m[1]);
+        // If the query embeds a search key, filter by case-insensitive substring.
+        // An empty key on an autocomplete query → return nothing (Sparnatural
+        // requires 3 chars before triggering, so this only happens if the user
+        // somehow clears the input mid-flight).
+        if (searchKey !== null) {
+          if (searchKey.length === 0) {
+            values = [];
+          } else {
+            values = values.filter(function(v) {
+              return v.label.toLowerCase().indexOf(searchKey) !== -1;
+            });
+          }
+        }
+        const capped = values.slice(0, MAX_RESULTS);
+        if (DEBUG) {
+          console.log('[rosmadair-endpoint] returning',
+            capped.length, '/', values.length, 'for', m[1],
+            searchKey !== null ? `(key="${searchKey}")` : '(no key)');
+        }
+        const bindings = capped.map(function(v) {
+          return {
+            uri: { type: 'uri', value: v.uri },
+            label: { type: 'literal', value: v.label, 'xml:lang': 'en' },
+          };
+        });
+        return new Response(
+          JSON.stringify({ head: { vars: ['uri', 'label'] }, results: { bindings: bindings } }),
+          { status: 200, headers: { 'Content-Type': 'application/sparql-results+json' } }
+        );
+      }
+
+      const origFetch = window.fetch.bind(window);
+      window.fetch = function(input, init) {
+        const url = typeof input === 'string' ? input : (input && input.url) || '';
+        if (url.indexOf('rosmadair-endpoint') !== -1) {
+          return serve(input, init);
+        }
+        return origFetch(input, init);
+      };
+      // Also expose as globalThis.fetch in case anything captured it under that name.
+      if (typeof globalThis !== 'undefined') globalThis.fetch = window.fetch;
+      console.log('[rosmadair-endpoint] fetch interceptor installed');
+    })();
+  </script>
+
+  <style>
+    * { box-sizing: border-box; }
+    body { font-family: system-ui, sans-serif; max-width: 1200px; margin: 0 auto; padding: 1rem; }
+    h1 { margin: 0 0 0.5rem; }
+    .nav { margin-bottom: 1rem; font-size: 0.9rem; }
+    .section { margin-bottom: 1.5rem; }
+    #status { color: #666; font-style: italic; padding: 0.5rem 0; }
+    #status.error { color: #c00; font-weight: 600; }
+    spar-natural { display: block; min-height: 220px; }
+    .controls { margin: 1rem 0; }
+    button { padding: 0.5rem 1rem; font-size: 14px; cursor: pointer; }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+    #results { display: grid; gap: 1rem; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); }
+    .card { border: 1px solid #ccc; border-radius: 4px; padding: 0.75rem; background: #fafafa; }
+    .card h3 { margin: 0 0 0.5rem; font-size: 1rem; }
+    .card .id { font-family: monospace; font-size: 11px; color: #888; word-break: break-all; }
+    .card .desc { font-size: 13px; color: #333; margin-top: 0.5rem; }
+    .meta { font-size: 12px; color: #666; margin: 0.5rem 0; }
+    pre.error { color: #c00; background: #fee; padding: 0.5rem; white-space: pre-wrap; font-size: 12px; }
+  </style>
+</head>
+<body>
+  <h1>Rós Madair — Sparnatural Query Demo</h1>
+  <div class="nav"><a href="./index.html">← back to JSON pattern demo</a></div>
+
+  <div id="status">Initializing…</div>
+
+  <div class="section">
+    <spar-natural
+      src="./static/index/sparnatural/config.ttl"
+      endpoint="about:rosmadair-endpoint"
+      lang="en"
+      defaultLang="en"
+      limit="500">
+    </spar-natural>
+  </div>
+
+  <div class="controls">
+    <button id="run-btn" disabled>Run Query</button>
+    <span id="meta" class="meta"></span>
+  </div>
+
+  <div id="results"></div>
+
+  <script type="module">
+    import init, { SparqlStore } from './pkg/ros_madair_client.js';
+    import * as alizarin from './pkg/alizarin/alizarin.js';
+
+    // ----- WASM URL must be set BEFORE alizarin's auto-init microtask fires
+    alizarin.setWasmURL('./pkg/alizarin/alizarin_bg.wasm');
+
+    const statusEl = document.getElementById('status');
+    const runBtn = document.getElementById('run-btn');
+    const resultsEl = document.getElementById('results');
+    const metaEl = document.getElementById('meta');
+
+    function setStatus(msg, isError = false) {
+      statusEl.textContent = msg;
+      statusEl.className = isError ? 'error' : '';
+    }
+
+    // ------------------------------------------------------------------ //
+    // 1-2. Fetch interceptor and concept loader are installed in the     //
+    //       inline <script> in <head>. See top of this file.             //
+    // ------------------------------------------------------------------ //
+    // 3. Initialise Rós Madair + Alizarin in parallel                    //
+    // ------------------------------------------------------------------ //
+    const HA_GRAPH_ID = '076f9381-7b00-11e9-8d6b-80000b44d1d9';
+    let store = null;
+    let gm = null;
+    let resourceFileIndex = null; // resource_id -> file basename
+    const fetchedFiles = new Set();
+
+    async function initAll() {
+      setStatus('Loading Rós Madair WASM…');
+      await init();
+      store = new SparqlStore('./static/index/');
+      await store.load_summary();
+
+      setStatus('Loading Alizarin…');
+      await alizarin.wasmReady;
+
+      const client = new alizarin.client.ArchesClientRemoteStatic('./static/index/aliz', {
+        allGraphFile: () => 'resource_models/_all.json',
+        graphIdToGraphFile: (id) => `resource_models/${id}.json`,
+        graphIdToResourcesFiles: (id) => {
+          // Not invoked in our flow because we manually populate the registry,
+          // but provide a sensible default.
+          return [];
+        },
+        collectionIdToFile: (id) => `collections/${id}.json`,
+      });
+      // Wire the client into the global staticStore so getResource() can
+      // reach our data even if our manual cache misses.
+      alizarin.staticStore.archesClient = client;
+
+      gm = new alizarin.GraphManager(client);
+      await gm.initialize();
+      // Eagerly load the Heritage Asset graph definition so it's ready
+      // when we need to render results.
+      await gm.loadGraph(HA_GRAPH_ID);
+
+      setStatus('Loading resource index…');
+      const idxResp = await fetch('./static/index/aliz/business_data/_resource_index.json');
+      resourceFileIndex = await idxResp.json();
+
+      setStatus('Ready. Build a query above and click "Run Query".');
+      runBtn.disabled = false;
+    }
+
+    // ------------------------------------------------------------------ //
+    // 4. Sparnatural wiring                                              //
+    // ------------------------------------------------------------------ //
+    const sn = document.querySelector('spar-natural');
+    let lastAst = null;
+
+    sn.addEventListener('queryUpdated', (e) => {
+      lastAst = e.detail && e.detail.querySparqlJs;
+    });
+
+    // ------------------------------------------------------------------ //
+    // 5. AST → Rós Madair triple patterns                                //
+    // ------------------------------------------------------------------ //
+    function termToString(term) {
+      if (term == null) return null;
+      if (typeof term === 'string') {
+        // sparqljs sometimes serialises variables as "?x" already
+        return term;
+      }
+      if (term.termType === 'Variable') return '?' + term.value;
+      if (term.termType === 'NamedNode') return term.value;
+      if (term.termType === 'Literal') return term.value;
+      if (term.value !== undefined) return term.value;
+      return String(term);
+    }
+
+    function astToPatterns(ast) {
+      if (!ast || !ast.where) {
+        throw new Error('No query yet — pick at least one criterion.');
+      }
+      const patterns = [];
+      for (const clause of ast.where) {
+        if (clause.type === 'bgp') {
+          for (const t of clause.triples) {
+            const s = termToString(t.subject);
+            const p = termToString(t.predicate);
+            const o = termToString(t.object);
+            if (!p || p.startsWith('?')) {
+              throw new Error('Variable predicates are not supported.');
+            }
+            patterns.push({ s, p, o });
+          }
+        } else if (clause.type === 'filter' || clause.type === 'optional' ||
+                   clause.type === 'union' || clause.type === 'minus' ||
+                   clause.type === 'service' || clause.type === 'bind') {
+          throw new Error(`Unsupported SPARQL construct: ${clause.type}`);
+        }
+      }
+      return patterns;
+    }
+
+    // ------------------------------------------------------------------ //
+    // 6. Result rendering via Alizarin                                   //
+    // ------------------------------------------------------------------ //
+    async function ensureResource(resourceId) {
+      const fileName = resourceFileIndex[resourceId];
+      if (!fileName) return null;
+      if (!fetchedFiles.has(fileName)) {
+        fetchedFiles.add(fileName);
+        const resp = await fetch(`./static/index/aliz/business_data/${fileName}`);
+        const text = await resp.text();
+        try {
+          const resources = alizarin.staticTypes.StaticResource
+            .fromBusinessDataJsonString(text);
+          alizarin.staticStore.registry.mergeFromResources(resources, true, true);
+        } catch (e) {
+          console.error('parse failed for', fileName, e);
+          throw e;
+        }
+      }
+      try {
+        return await gm.getResource(resourceId);
+      } catch (e) {
+        console.warn('getResource failed for', resourceId, e);
+        return null;
+      }
+    }
+
+    function renderCard(wrapper, uri) {
+      const card = document.createElement('div');
+      card.className = 'card';
+      const id = uri.split('/').pop();
+      const title = document.createElement('h3');
+      let name = id;
+      try {
+        name = wrapper.getName?.() || id;
+      } catch { /* ignore */ }
+      title.textContent = name;
+      card.appendChild(title);
+
+      const idEl = document.createElement('div');
+      idEl.className = 'id';
+      idEl.textContent = id;
+      card.appendChild(idEl);
+
+      try {
+        const descs = wrapper.getDescriptors?.();
+        if (descs) {
+          const en = descs.en || descs[Object.keys(descs)[0]];
+          if (en && en.description) {
+            const d = document.createElement('div');
+            d.className = 'desc';
+            d.textContent = en.description;
+            card.appendChild(d);
+          }
+        }
+      } catch { /* ignore */ }
+
+      return card;
+    }
+
+    function renderError(card, uri) {
+      const c = document.createElement('div');
+      c.className = 'card';
+      const t = document.createElement('h3');
+      t.textContent = '(unresolved)';
+      c.appendChild(t);
+      const idEl = document.createElement('div');
+      idEl.className = 'id';
+      idEl.textContent = uri;
+      c.appendChild(idEl);
+      return c;
+    }
+
+    // ------------------------------------------------------------------ //
+    // 7. Run-button handler                                              //
+    // ------------------------------------------------------------------ //
+    runBtn.addEventListener('click', async () => {
+      resultsEl.innerHTML = '';
+      metaEl.textContent = '';
+      try {
+        const patterns = astToPatterns(lastAst);
+        if (patterns.length === 0) {
+          throw new Error('No triple patterns in query.');
+        }
+        setStatus(`Querying with ${patterns.length} pattern(s)…`);
+        const t0 = performance.now();
+        const uris = await store.query_patterns(JSON.stringify(patterns));
+        const t1 = performance.now();
+        metaEl.textContent = `${uris.length} results in ${(t1 - t0).toFixed(0)} ms`;
+        setStatus('Loading resources…');
+
+        const display = uris.slice(0, 50);
+        let resolved = 0;
+        for (const uri of display) {
+          const id = uri.split('/').pop();
+          let card;
+          try {
+            const wrapper = await ensureResource(id);
+            card = wrapper ? renderCard(wrapper, uri) : renderError(null, uri);
+            if (wrapper) resolved++;
+          } catch (e) {
+            console.error('render failed', uri, e);
+            card = renderError(null, uri);
+          }
+          resultsEl.appendChild(card);
+        }
+        setStatus(`Done. ${resolved}/${display.length} rendered (${uris.length} total matches).`);
+      } catch (e) {
+        console.error(e);
+        setStatus(e.message || String(e), true);
+        const pre = document.createElement('pre');
+        pre.className = 'error';
+        pre.textContent = (e && e.stack) || String(e);
+        resultsEl.appendChild(pre);
+      }
+    });
+
+    // ------------------------------------------------------------------ //
+    // 8. Kick off init                                                   //
+    // ------------------------------------------------------------------ //
+    initAll().catch(e => {
+      console.error(e);
+      setStatus(`Init failed: ${e.message || e}`, true);
+    });
+  </script>
+
+  <script src="https://cdn.jsdelivr.net/npm/sparnatural@12.2.1/dist/browser/sparnatural.js"></script>
+</body>
+</html>

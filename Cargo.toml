@@ -1,0 +1,24 @@
+[workspace]
+members = [
+    "crates/ros-madair-core",
+    "crates/ros-madair-builder",
+    "crates/ros-madair-client",
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+authors = ["Phil Weir <phil.weir@flaxandteal.co.uk>"]
+edition = "2021"
+license = "AGPL-3.0-or-later"
+repository = "https://github.com/flaxandteal/ros-madair"
+homepage = "https://github.com/flaxandteal/ros-madair"
+keywords = ["sparql", "wasm", "heritage", "rdf", "static-files"]
+categories = ["database", "wasm", "web-programming"]
+
+[profile.release]
+opt-level = "s"
+debug = true
+
+[profile.dev]
+debug = true

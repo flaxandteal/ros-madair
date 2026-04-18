@@ -1,0 +1,96 @@
+{
+  "description": "Focus wards for the Aonach Mór resilience demo. Labels are fictional; seed coordinates stay in raw lon/lat for use by downstream spatial-join stages until the final CRS rebranding step.",
+  "wards": [
+    {
+      "key": "tra_bealtaine",
+      "aonach_mor_label": "Trá Bealtaine",
+      "cluster": "coastal",
+      "seed_lon": 80.283,
+      "seed_lat": 13.05
+    },
+    {
+      "key": "baile_an_iarthair",
+      "aonach_mor_label": "Baile an Iarthair",
+      "cluster": "coastal",
+      "seed_lon": 80.267,
+      "seed_lat": 12.9985
+    },
+    {
+      "key": "tra_theas",
+      "aonach_mor_label": "Trá Theas",
+      "cluster": "coastal",
+      "seed_lon": 80.28,
+      "seed_lat": 13.038
+    },
+    {
+      "key": "cnoc_an_chaisil",
+      "aonach_mor_label": "Cnoc an Chaisil",
+      "cluster": "riverine",
+      "seed_lon": 80.244,
+      "seed_lat": 13.0175
+    },
+    {
+      "key": "seandun",
+      "aonach_mor_label": "Seandún",
+      "cluster": "riverine",
+      "seed_lon": 80.227,
+      "seed_lat": 13.022
+    },
+    {
+      "key": "baile_thoir",
+      "aonach_mor_label": "Baile Thoir",
+      "cluster": "commercial",
+      "seed_lon": 80.234,
+      "seed_lat": 13.041
+    },
+    {
+      "key": "cluain_mor",
+      "aonach_mor_label": "Cluain Mór",
+      "cluster": "commercial",
+      "seed_lon": 80.241,
+      "seed_lat": 13.058
+    },
+    {
+      "key": "ce_an_ri",
+      "aonach_mor_label": "Cé an Rí",
+      "cluster": "port",
+      "seed_lon": 80.294,
+      "seed_lat": 13.101
+    },
+    {
+      "key": "imeall_eanach",
+      "aonach_mor_label": "Imeall Eanach",
+      "cluster": "port",
+      "seed_lon": 80.322,
+      "seed_lat": 13.215
+    },
+    {
+      "key": "tri_chuain",
+      "aonach_mor_label": "Trí Chuain",
+      "cluster": "heritage",
+      "seed_lon": 80.276,
+      "seed_lat": 13.057
+    },
+    {
+      "key": "mi_locha",
+      "aonach_mor_label": "Mí Locha",
+      "cluster": "heritage",
+      "seed_lon": 80.268,
+      "seed_lat": 13.033
+    },
+    {
+      "key": "baile_na_ciorai",
+      "aonach_mor_label": "Baile na Cíoraí",
+      "cluster": "peri-urban",
+      "seed_lon": 80.22,
+      "seed_lat": 12.977
+    },
+    {
+      "key": "ciumhais_an_oir",
+      "aonach_mor_label": "Ciumhais an Óir",
+      "cluster": "peri-urban",
+      "seed_lon": 80.241,
+      "seed_lat": 12.934
+    }
+  ]
+}

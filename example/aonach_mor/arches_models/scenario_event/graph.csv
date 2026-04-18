@@ -1,0 +1,2 @@
+name,ontology_class,author,description,is_resource
+ScenarioEvent,http://www.cidoc-crm.org/cidoc-crm/E5_Event,Flax & Teal Limited,"A scenario event in the Aonach Mór resilience demo. A CRM E5_Event that records a named hazard scenario (storm, flood, cascading failure), its time bracket, and the list of HazardModel procedures used to generate its footprints.",true

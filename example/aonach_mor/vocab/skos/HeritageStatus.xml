@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rdf:RDF
+  xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+  xmlns:rdfs="http://www.w3.org/2000/01/rdf-schema#"
+  xmlns:skos="http://www.w3.org/2004/02/skos/core#"
+  xmlns:dcterms="http://purl.org/dc/terms/">
+  <!-- Aonach Mór controlled vocabulary: HeritageStatus. Generated on 2026-04-11 by example/aonach_mor/build/20_skos_collections.py. Do not hand-edit. -->
+  <skos:ConceptScheme rdf:about="https://rosmadair.example.org/aonach_mor/vocab/HeritageStatus">
+    <skos:prefLabel xml:lang="en">Heritage status</skos:prefLabel>
+    <skos:prefLabel xml:lang="ga">Stádas oidhreachta</skos:prefLabel>
+    <skos:prefLabel xml:lang="ta">மரபு நிலை</skos:prefLabel>
+    <dcterms:description xml:lang="en">Listing / protection status of a heritage asset. Trilingual labels exercise the multilingual column syntax on heritage resources (plan Section 11).</dcterms:description>
+  </skos:ConceptScheme>
+  <skos:Concept rdf:about="https://rosmadair.example.org/aonach_mor/vocab/HeritageStatus/listed">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/aonach_mor/vocab/HeritageStatus"/>
+    <skos:prefLabel xml:lang="en">Listed</skos:prefLabel>
+    <skos:prefLabel xml:lang="ga">Liostaithe</skos:prefLabel>
+    <skos:prefLabel xml:lang="ta">பட்டியலிடப்பட்டது</skos:prefLabel>
+    <skos:notation>1</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/aonach_mor/vocab/HeritageStatus/candidate">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/aonach_mor/vocab/HeritageStatus"/>
+    <skos:prefLabel xml:lang="en">Candidate</skos:prefLabel>
+    <skos:prefLabel xml:lang="ga">Iarrthóir</skos:prefLabel>
+    <skos:prefLabel xml:lang="ta">வேட்பாளர்</skos:prefLabel>
+    <skos:notation>2</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/aonach_mor/vocab/HeritageStatus/non_listed">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/aonach_mor/vocab/HeritageStatus"/>
+    <skos:prefLabel xml:lang="en">Non-listed</skos:prefLabel>
+    <skos:prefLabel xml:lang="ga">Neamhliostaithe</skos:prefLabel>
+    <skos:prefLabel xml:lang="ta">பட்டியலிடப்படவில்லை</skos:prefLabel>
+    <skos:notation>3</skos:notation>
+  </skos:Concept>
+</rdf:RDF>

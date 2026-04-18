@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rdf:RDF
+  xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+  xmlns:rdfs="http://www.w3.org/2000/01/rdf-schema#"
+  xmlns:skos="http://www.w3.org/2004/02/skos/core#"
+  xmlns:dcterms="http://purl.org/dc/terms/">
+  <!-- Aonach Mór controlled vocabulary: HazardType. Generated on 2026-04-11 by example/aonach_mor/build/20_skos_collections.py. Do not hand-edit. -->
+  <skos:ConceptScheme rdf:about="https://rosmadair.example.org/aonach_mor/vocab/HazardType">
+    <skos:prefLabel xml:lang="en">Hazard type</skos:prefLabel>
+    <dcterms:description xml:lang="en">Kinds of hazard the demo carries hazard footprints for. Matches plan Section 6.5.</dcterms:description>
+  </skos:ConceptScheme>
+  <skos:Concept rdf:about="https://rosmadair.example.org/aonach_mor/vocab/HazardType/flood">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/aonach_mor/vocab/HazardType"/>
+    <skos:prefLabel xml:lang="en">Flood</skos:prefLabel>
+    <skos:notation>1</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/aonach_mor/vocab/HazardType/cyclone">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/aonach_mor/vocab/HazardType"/>
+    <skos:prefLabel xml:lang="en">Cyclone</skos:prefLabel>
+    <skos:notation>2</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/aonach_mor/vocab/HazardType/earthquake">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/aonach_mor/vocab/HazardType"/>
+    <skos:prefLabel xml:lang="en">Earthquake</skos:prefLabel>
+    <skos:notation>3</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/aonach_mor/vocab/HazardType/wind">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/aonach_mor/vocab/HazardType"/>
+    <skos:prefLabel xml:lang="en">Wind</skos:prefLabel>
+    <skos:notation>4</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/aonach_mor/vocab/HazardType/heat">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/aonach_mor/vocab/HazardType"/>
+    <skos:prefLabel xml:lang="en">Heat</skos:prefLabel>
+    <skos:notation>5</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/aonach_mor/vocab/HazardType/crowding">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/aonach_mor/vocab/HazardType"/>
+    <skos:prefLabel xml:lang="en">Crowding</skos:prefLabel>
+    <skos:notation>6</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/aonach_mor/vocab/HazardType/surge">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/aonach_mor/vocab/HazardType"/>
+    <skos:prefLabel xml:lang="en">Storm surge</skos:prefLabel>
+    <skos:notation>7</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/aonach_mor/vocab/HazardType/landslide">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/aonach_mor/vocab/HazardType"/>
+    <skos:prefLabel xml:lang="en">Landslide</skos:prefLabel>
+    <skos:notation>8</skos:notation>
+  </skos:Concept>
+</rdf:RDF>

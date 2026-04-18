@@ -1,0 +1,7 @@
+parent_alias,alias,name,datatype,cardinality,ontology_class,parent_property,description,collection_name,required,searchable,exportable,sortorder
+,coverage_id,Coverage ID,string,1,http://www.cidoc-crm.org/cidoc-crm/E42_Identifier,http://www.cidoc-crm.org/cidoc-crm/P48_has_preferred_identifier,Primary identifier for this coverage line.,,true,true,true,1
+,part_of_policy,Part of policy,resource-instance,1,https://rosmadair.example.org/aonach_mor/ins#InsurancePolicy,http://www.cidoc-crm.org/cidoc-crm/P67_refers_to,InsurancePolicy this coverage belongs to.,,false,true,true,2
+,covered_buildings,Covered buildings,resource-instance-list,n,http://www.cidoc-crm.org/cidoc-crm/E22_Human-Made_Object,http://www.cidoc-crm.org/cidoc-crm/P67_refers_to,Buildings covered by this coverage line.,,false,true,true,3
+,coverage_type,Coverage type,concept,1,http://www.cidoc-crm.org/cidoc-crm/E55_Type,http://www.cidoc-crm.org/cidoc-crm/P2_has_type,Kind of coverage drawn from the CoverageType collection.,CoverageType,false,true,true,4
+,limit_band,Limit band,concept,1,http://www.cidoc-crm.org/cidoc-crm/E55_Type,http://www.cidoc-crm.org/cidoc-crm/P2_has_type,Coverage limit tier drawn from the LimitBand collection.,LimitBand,false,true,true,5
+,notes,Notes,string,1,http://www.cidoc-crm.org/cidoc-crm/E62_String,http://www.cidoc-crm.org/cidoc-crm/P3_has_note,Free-text reviewer notes.,,false,false,true,6

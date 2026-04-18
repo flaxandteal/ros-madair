@@ -1,0 +1,2 @@
+name,ontology_class,author,description,is_resource
+Person,http://www.cidoc-crm.org/cidoc-crm/E21_Person,Flax & Teal Limited,"Individual person in the Aonach Mór resilience demo (emergency coordinator, responder, reviewer, insurer contact). Person-to-Organisation affiliation is modelled separately as a Membership event in a later stage.",true

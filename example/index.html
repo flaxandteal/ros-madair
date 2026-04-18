@@ -1,0 +1,326 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Rós Madair — SPARQL Query Demo</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { font-family: system-ui, sans-serif; max-width: 960px; margin: 0 auto; padding: 1rem; }
+        h1 { margin-bottom: 1rem; }
+        .section { margin-bottom: 1.5rem; }
+        label { display: block; font-weight: 600; margin-bottom: 0.25rem; }
+        textarea { width: 100%; height: 120px; font-family: monospace; font-size: 14px; padding: 0.5rem; }
+        button { padding: 0.5rem 1rem; font-size: 14px; cursor: pointer; margin-right: 0.5rem; margin-top: 0.5rem; }
+        #status { color: #666; font-style: italic; }
+        #results { white-space: pre-wrap; font-family: monospace; background: #f5f5f5; padding: 1rem; max-height: 400px; overflow-y: auto; }
+        #cache-stats { font-family: monospace; color: #444; }
+        .error { color: #c00; }
+        .pass { color: #070; }
+        .fail { color: #c00; font-weight: 600; }
+        .warn { color: #a60; }
+        #validation { font-family: monospace; font-size: 13px; white-space: pre-wrap; background: #f5f5f5; padding: 1rem; max-height: 500px; overflow-y: auto; }
+        table.val { border-collapse: collapse; width: 100%; font-size: 13px; font-family: monospace; }
+        table.val th, table.val td { border: 1px solid #ccc; padding: 0.3rem 0.5rem; text-align: left; }
+        table.val th { background: #eee; }
+        table.val tr.pass td:first-child { border-left: 4px solid #070; }
+        table.val tr.fail td:first-child { border-left: 4px solid #c00; }
+        table.val tr.warn td:first-child { border-left: 4px solid #a60; }
+    </style>
+</head>
+<body>
+    <h1>Rós Madair Query Demo</h1>
+
+    <div class="section" style="font-size: 0.9rem;">
+        <a href="./sparnatural.html">→ sparnatural query builder</a>
+        &nbsp;|&nbsp;
+        <a href="./graph.html">→ graph explorer</a>
+    </div>
+
+    <div class="section">
+        <div id="status">Loading WASM module...</div>
+    </div>
+
+    <div class="section">
+        <label for="base-url">Index URL:</label>
+        <input type="text" id="base-url" value="./static/index/" style="width: 100%; padding: 0.25rem; font-family: monospace;">
+        <button onclick="initStore()">Load Index</button>
+    </div>
+
+    <div class="section">
+        <label for="query-input">Triple Patterns (JSON):</label>
+        <textarea id="query-input">[
+  {"s": "?place", "p": "https://example.org/node/monument_type_n1", "o": "https://example.org/concept/43bf135f-e369-f6f4-a85d-9a54fb1fa44b"},
+  {"s": "?place", "p": "https://example.org/node/townland", "o": "https://example.org/concept/afad673d-a7f1-d1ed-12b9-abd1ac321134"}
+]</textarea>
+        <button onclick="runQuery()">Run Query</button>
+        <div style="margin-top: 0.75rem">
+            <strong>Single predicate:</strong><br>
+            <button onclick="loadExample('monument_a')">Monument Type A (~6900)</button>
+            <button onclick="loadExample('monument_b')">Monument Type B (~3800)</button>
+            <button onclick="loadExample('townland')">Townland (~330)</button>
+        </div>
+        <div style="margin-top: 0.5rem">
+            <strong>Two-predicate intersection:</strong><br>
+            <button onclick="loadExample('type_townland')">Type A + Townland (~160)</button>
+            <button onclick="loadExample('type_grade')">Type A + Grade (~1900)</button>
+        </div>
+        <div style="margin-top: 0.5rem">
+            <strong>Three-predicate intersection:</strong><br>
+            <button onclick="loadExample('type_townland_grade')">Type A + Townland + Grade (~100)</button>
+        </div>
+        <div style="margin-top: 0.5rem">
+            <strong>Open-ended (variable object):</strong><br>
+            <button onclick="loadExample('all_typed')">All with any Monument Type</button>
+            <button onclick="loadExample('all_graded')">All with any Grade</button>
+        </div>
+    </div>
+
+    <div class="section">
+        <label>Cache:</label>
+        <div id="cache-stats">No data loaded</div>
+    </div>
+
+    <div class="section">
+        <label>Results:</label>
+        <div id="results">No query run yet.</div>
+    </div>
+
+    <div class="section">
+        <label>Validation:</label>
+        <button onclick="runValidation()">Run All Queries &amp; Validate</button>
+        <span id="val-status" style="margin-left: 0.5rem; font-style: italic; color: #666;"></span>
+        <div id="validation" style="margin-top: 0.5rem;"></div>
+    </div>
+
+    <script type="module">
+        let store = null;
+
+        // Concept UUIDs (opaque in this dataset)
+        const C = 'https://example.org/concept/';
+        const N = 'https://example.org/node/';
+
+        // Shared example definitions — used by loadExample() and runValidation()
+        const examples = {
+            monument_a: {
+                label: 'Monument Type A',
+                patterns: [
+                    {s: '?place', p: `${N}monument_type_n1`, o: `${C}43bf135f-e369-f6f4-a85d-9a54fb1fa44b`},
+                ],
+            },
+            monument_b: {
+                label: 'Monument Type B',
+                patterns: [
+                    {s: '?place', p: `${N}monument_type_n1`, o: `${C}50ae187e-98ab-7ff3-6925-a75398112e70`},
+                ],
+            },
+            townland: {
+                label: 'Townland',
+                patterns: [
+                    {s: '?place', p: `${N}townland`, o: `${C}afad673d-a7f1-d1ed-12b9-abd1ac321134`},
+                ],
+            },
+            type_townland: {
+                label: 'Type A + Townland',
+                patterns: [
+                    {s: '?place', p: `${N}monument_type_n1`, o: `${C}43bf135f-e369-f6f4-a85d-9a54fb1fa44b`},
+                    {s: '?place', p: `${N}townland`, o: `${C}afad673d-a7f1-d1ed-12b9-abd1ac321134`},
+                ],
+            },
+            type_grade: {
+                label: 'Type A + Grade',
+                patterns: [
+                    {s: '?place', p: `${N}monument_type_n1`, o: `${C}43bf135f-e369-f6f4-a85d-9a54fb1fa44b`},
+                    {s: '?place', p: `${N}grade`, o: `${C}e47378ae-6ede-a0ab-dba8-97e840833f25`},
+                ],
+            },
+            type_townland_grade: {
+                label: 'Type A + Townland + Grade',
+                patterns: [
+                    {s: '?place', p: `${N}monument_type_n1`, o: `${C}43bf135f-e369-f6f4-a85d-9a54fb1fa44b`},
+                    {s: '?place', p: `${N}townland`, o: `${C}afad673d-a7f1-d1ed-12b9-abd1ac321134`},
+                    {s: '?place', p: `${N}grade`, o: `${C}e47378ae-6ede-a0ab-dba8-97e840833f25`},
+                ],
+            },
+            all_typed: {
+                label: 'All with any Monument Type',
+                patterns: [
+                    {s: '?place', p: `${N}monument_type_n1`, o: '?type'},
+                ],
+            },
+            all_graded: {
+                label: 'All with any Grade',
+                patterns: [
+                    {s: '?place', p: `${N}grade`, o: '?g'},
+                ],
+            },
+        };
+
+        window.initStore = async function() {
+            const status = document.getElementById('status');
+            const baseUrl = document.getElementById('base-url').value;
+
+            try {
+                status.textContent = 'Loading WASM module...';
+                const wasm = await import('./pkg/ros_madair_client.js');
+                await wasm.default();
+
+                status.textContent = 'Loading summary index...';
+                store = new wasm.SparqlStore(baseUrl);
+                await store.load_summary();
+
+                status.textContent = 'Ready. Summary loaded.';
+                updateCacheStats();
+            } catch (e) {
+                status.innerHTML = `<span class="error">Error: ${e}</span>`;
+                console.error(e);
+            }
+        };
+
+        window.runQuery = async function() {
+            const resultsEl = document.getElementById('results');
+            if (!store) {
+                resultsEl.innerHTML = '<span class="error">Store not initialized. Click "Load Index" first.</span>';
+                return;
+            }
+
+            const patternsJson = document.getElementById('query-input').value;
+            try {
+                const startTime = performance.now();
+                const results = await store.query_patterns(patternsJson);
+                const elapsed = (performance.now() - startTime).toFixed(1);
+
+                if (Array.isArray(results)) {
+                    resultsEl.textContent = `${results.length} results (${elapsed}ms):\n\n${results.join('\n')}`;
+                } else {
+                    resultsEl.textContent = `Result (${elapsed}ms):\n\n${JSON.stringify(results, null, 2)}`;
+                }
+                updateCacheStats();
+            } catch (e) {
+                resultsEl.innerHTML = `<span class="error">Query error: ${e}</span>`;
+                console.error(e);
+            }
+        };
+
+        window.loadExample = function(name) {
+            const input = document.getElementById('query-input');
+            const ex = examples[name];
+            input.value = ex ? JSON.stringify(ex.patterns, null, 2) : '[]';
+        };
+
+        window.runValidation = async function() {
+            const valEl = document.getElementById('validation');
+            const valStatus = document.getElementById('val-status');
+
+            if (!store) {
+                valEl.innerHTML = '<span class="error">Store not initialized. Click "Load Index" first.</span>';
+                return;
+            }
+
+            valStatus.textContent = 'Loading validation data...';
+            valEl.innerHTML = '';
+
+            // Fetch ground-truth from validation.json
+            const baseUrl = document.getElementById('base-url').value;
+            let expected;
+            try {
+                const resp = await fetch(`${baseUrl}validation.json`);
+                if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+                expected = await resp.json();
+            } catch (e) {
+                valEl.innerHTML = `<span class="error">Failed to load validation.json: ${e}</span>`;
+                valStatus.textContent = '';
+                return;
+            }
+
+            // Run each example query and compare
+            const names = Object.keys(examples);
+            let passed = 0, failed = 0, warned = 0;
+
+            let html = '<table class="val"><tr><th>Query</th><th>Expected</th><th>Got</th><th>Time</th><th>Details</th></tr>';
+
+            for (const name of names) {
+                const ex = examples[name];
+                const truth = expected[name];
+                valStatus.textContent = `Running: ${ex.label}...`;
+
+                let results, elapsed;
+                try {
+                    const t0 = performance.now();
+                    results = await store.query_patterns(JSON.stringify(ex.patterns));
+                    elapsed = (performance.now() - t0).toFixed(0);
+                    if (!Array.isArray(results)) results = [];
+                } catch (e) {
+                    html += `<tr class="fail"><td>${ex.label}</td><td>${truth?.count ?? '?'}</td><td colspan="3"><span class="fail">ERROR: ${e}</span></td></tr>`;
+                    failed++;
+                    continue;
+                }
+
+                const gotCount = results.length;
+                const gotSet = new Set(results);
+
+                if (!truth) {
+                    html += `<tr class="warn"><td>${ex.label}</td><td>?</td><td>${gotCount}</td><td>${elapsed}ms</td><td class="warn">No ground truth</td></tr>`;
+                    warned++;
+                    continue;
+                }
+
+                const expectedCount = truth.count;
+                const expectedSet = new Set(truth.uris);
+
+                // Compare counts
+                const countMatch = gotCount === expectedCount;
+
+                // Compare URI sets
+                const missing = truth.uris.filter(u => !gotSet.has(u));
+                const extra = results.filter(u => !expectedSet.has(u));
+                const exactMatch = missing.length === 0 && extra.length === 0;
+
+                let status, details;
+                if (exactMatch) {
+                    status = 'pass';
+                    details = 'exact match';
+                    passed++;
+                } else if (countMatch) {
+                    status = 'warn';
+                    details = `count matches but ${missing.length} missing, ${extra.length} extra`;
+                    warned++;
+                } else {
+                    status = 'fail';
+                    const diff = gotCount - expectedCount;
+                    const sign = diff > 0 ? '+' : '';
+                    details = `count off by ${sign}${diff}`;
+                    if (missing.length > 0) details += `, ${missing.length} missing`;
+                    if (extra.length > 0) details += `, ${extra.length} extra`;
+                    failed++;
+                }
+
+                html += `<tr class="${status}"><td>${ex.label}</td><td>${expectedCount}</td><td>${gotCount}</td><td>${elapsed}ms</td><td class="${status}">${details}</td></tr>`;
+            }
+
+            html += '</table>';
+
+            const summary = `${passed} passed, ${failed} failed, ${warned} warnings`;
+            valStatus.innerHTML = failed > 0
+                ? `<span class="fail">${summary}</span>`
+                : warned > 0
+                    ? `<span class="warn">${summary}</span>`
+                    : `<span class="pass">${summary}</span>`;
+            valEl.innerHTML = html;
+            updateCacheStats();
+        };
+
+        function updateCacheStats() {
+            if (!store) return;
+            const stats = JSON.parse(store.cache_stats());
+            document.getElementById('cache-stats').textContent =
+                `Pages: ${stats.pages_loaded} | Records: ${stats.records_loaded}`;
+        }
+
+        // Auto-init if hash has base URL
+        if (location.hash) {
+            document.getElementById('base-url').value = location.hash.slice(1);
+        }
+    </script>
+</body>
+</html>

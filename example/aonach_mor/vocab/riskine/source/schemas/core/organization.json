@@ -1,0 +1,154 @@
+{
+    "$id": "https://ontology.riskine.com/organization.json",
+    "type": "object",
+    "properties": {
+        "business-name": {
+            "type": "string",
+            "description": "name of organization"
+        },
+        "address": {
+            "description": "address of person, organization, structure or property",
+            "$ref": "address.json"
+        },
+        "founding-date": {
+            "description": "founding date of organization",
+            "$ref": "definitions.json#/date"
+        },
+        "commercial-registry-entry-date": {
+            "description": "date of entry in commercial registry",
+            "$ref": "definitions.json#/date"
+        },
+        "company-registry-number": {
+            "type": "string",
+            "description": "company registry number"
+        },
+        "industry": {
+            "type": "string",
+            "description": "industry the organization operates in"
+        },
+        "economic-activity": {
+            "type": "string",
+            "description": "economic activity of organization"
+        },
+        "economic-activity-detail": {
+            "type": "string",
+            "description": "detailed description (additional specification) of economic activity of organization"
+        },
+        "legal-form": {
+            "type": "string",
+            "description": "legal form of organization (ELF ISO standard 20275)"
+        },
+        "email": {
+            "type": "string",
+            "description": "email-address"
+        },
+        "phone-number": {
+            "type": "string",
+            "description": "phone number"
+        },
+        "mobile-number": {
+            "type": "string",
+            "description": "mobile number"
+        },
+        "employs": {
+            "type": "array",
+            "description": "employees of organization",
+            "items": {
+                "$ref": "employee.json"
+            }
+        },
+        "revenue": {
+            "description": "revenue of organization",
+            "$ref": "revenue.json"
+        },
+        "tangible-asset-type": {
+            "description": "tangible assets owned or rented by organization",
+            "$ref": "#/definitions/tangible-asset-type"
+        },
+        "export-ewr": {
+            "type": "boolean",
+            "description": "organization exports goods to European countries (EWR)"
+        },
+        "export-us": {
+            "type": "boolean",
+            "description": "organization exports goods to the US"
+        },
+        "export-other-countries": {
+            "type": "boolean",
+            "description": "organization exports goods to countries outside US, EWR"
+        },
+        "import-non-eu": {
+            "type": "boolean",
+            "description": "organization imports goods from outside the European Union"
+        },
+        "operating-sites-abroad": {
+            "type": "boolean",
+            "description": "organization has operating sites abroad"
+        },
+        "sites": {
+            "type": "array",
+            "description": "site(s) of the organization",
+            "items": {
+                "$ref": "site.json"
+            }
+        },
+        "subsidiary-ewr": {
+            "type": "boolean",
+            "description": "organization has subsidiaries in EWR"
+        },
+        "subsidiary-other-countries": {
+            "type": "boolean",
+            "description": "organization has subsidiaries in other countries"
+        },
+        "subsidiary-own-country": {
+            "type": "boolean",
+            "description": "organization has subsidiaries in own country"
+        },
+        "subsidiary-us": {
+            "type": "boolean",
+            "description": "organization has subsidiaries in US"
+        },
+        "finances": {
+            "description": "financial information of organization",
+            "$ref": "finances.json"
+        },
+        "security-measure": {
+            "description": "security-measures of organization",
+            "$ref": "security-measure.json"
+        },
+        "data-processing": {
+            "description": "data processed by organization",
+            "$ref": "data-processing.json"
+        },
+        "business-processes": {
+            "type": "array",
+            "description": "business-processes of organzation",
+            "items": {
+                "$ref": "business-process.json"
+            }
+        },
+        "preferences": {
+            "type": "array",
+            "description": "subjective preferences regarding risks and coverages",
+            "items": {
+                "$ref": "preference.json"
+            }
+        },
+        "at-stock-market": {
+            "type": "boolean",
+            "description": "shares of organization (and / or ev. subsidiary) are traded at the stock market"
+        },
+        "insolvency-proceedings-in-place": {
+            "type": "boolean",
+            "description": "organization (and / or ev. subsidiary) is involved in insolvency proceedings"
+        },
+        "merger-in-place": {
+            "type": "boolean",
+            "description": "organization (and / or ev. subsidiary) recently actively participated in a merger / acquisition"
+        },
+        "takeover-in-place": {
+            "type": "boolean",
+            "description": "organization (and / or ev.subsidiary) was sold recently"
+        }
+    }
+}

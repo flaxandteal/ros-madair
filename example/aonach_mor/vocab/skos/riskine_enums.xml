@@ -1,0 +1,1181 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rdf:RDF
+  xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+  xmlns:rdfs="http://www.w3.org/2000/01/rdf-schema#"
+  xmlns:skos="http://www.w3.org/2004/02/skos/core#"
+  xmlns:dcterms="http://purl.org/dc/terms/">
+  <!-- Automatically generated from definitions.json enum entries in Riskine commit 4cd6876ac305e5e10adeefc400548dc6e96b0a0f on 2026-04-11. Do not hand-edit: run example/aonach_mor/build/riskine_to_owl.py -->
+  <skos:ConceptScheme rdf:about="https://rosmadair.example.org/riskine/enum/AcademicDegree">
+    <skos:prefLabel xml:lang="en">academic degree</skos:prefLabel>
+    <dcterms:source rdf:resource="https://ontology.riskine.com/definitions.json"/>
+  </skos:ConceptScheme>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/AcademicDegree/bachelor">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/AcademicDegree"/>
+    <skos:prefLabel xml:lang="en">bachelor</skos:prefLabel>
+    <skos:notation>1</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/AcademicDegree/master">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/AcademicDegree"/>
+    <skos:prefLabel xml:lang="en">master</skos:prefLabel>
+    <skos:notation>2</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/AcademicDegree/diploma">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/AcademicDegree"/>
+    <skos:prefLabel xml:lang="en">diploma</skos:prefLabel>
+    <skos:notation>3</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/AcademicDegree/state_examination">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/AcademicDegree"/>
+    <skos:prefLabel xml:lang="en">state examination</skos:prefLabel>
+    <skos:notation>4</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/AcademicDegree/doctor_phd">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/AcademicDegree"/>
+    <skos:prefLabel xml:lang="en">doctor - phd</skos:prefLabel>
+    <skos:notation>5</skos:notation>
+  </skos:Concept>
+  <skos:ConceptScheme rdf:about="https://rosmadair.example.org/riskine/enum/AreaOfValidity">
+    <skos:prefLabel xml:lang="en">area of validity</skos:prefLabel>
+    <dcterms:source rdf:resource="https://ontology.riskine.com/definitions.json"/>
+  </skos:ConceptScheme>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/AreaOfValidity/region">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/AreaOfValidity"/>
+    <skos:prefLabel xml:lang="en">region</skos:prefLabel>
+    <skos:notation>1</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/AreaOfValidity/country">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/AreaOfValidity"/>
+    <skos:prefLabel xml:lang="en">country</skos:prefLabel>
+    <skos:notation>2</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/AreaOfValidity/EU">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/AreaOfValidity"/>
+    <skos:prefLabel xml:lang="en">EU</skos:prefLabel>
+    <skos:notation>3</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/AreaOfValidity/worldwide">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/AreaOfValidity"/>
+    <skos:prefLabel xml:lang="en">worldwide</skos:prefLabel>
+    <skos:notation>4</skos:notation>
+  </skos:Concept>
+  <skos:ConceptScheme rdf:about="https://rosmadair.example.org/riskine/enum/BodyType">
+    <skos:prefLabel xml:lang="en">body type</skos:prefLabel>
+    <dcterms:source rdf:resource="https://ontology.riskine.com/definitions.json"/>
+  </skos:ConceptScheme>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/BodyType/other">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/BodyType"/>
+    <skos:prefLabel xml:lang="en">other</skos:prefLabel>
+    <skos:notation>other</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/BodyType/coupe">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/BodyType"/>
+    <skos:prefLabel xml:lang="en">coupe</skos:prefLabel>
+    <skos:notation>coupe</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/BodyType/sedan">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/BodyType"/>
+    <skos:prefLabel xml:lang="en">sedan</skos:prefLabel>
+    <skos:notation>sedan</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/BodyType/station_wagon_kombi">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/BodyType"/>
+    <skos:prefLabel xml:lang="en">station wagon (kombi)</skos:prefLabel>
+    <skos:notation>station-wagon</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/BodyType/convertible">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/BodyType"/>
+    <skos:prefLabel xml:lang="en">convertible</skos:prefLabel>
+    <skos:notation>convertible</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/BodyType/pick_up">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/BodyType"/>
+    <skos:prefLabel xml:lang="en">pick-up</skos:prefLabel>
+    <skos:notation>pick-up</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/BodyType/pick_up_double_cabin">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/BodyType"/>
+    <skos:prefLabel xml:lang="en">pick-up double cabin</skos:prefLabel>
+    <skos:notation>pick-up-double-cab</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/BodyType/targa">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/BodyType"/>
+    <skos:prefLabel xml:lang="en">targa</skos:prefLabel>
+    <skos:notation>targa</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/BodyType/pick_up_long">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/BodyType"/>
+    <skos:prefLabel xml:lang="en">pick-up long</skos:prefLabel>
+    <skos:notation>pick-up-long</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/BodyType/station_wagon_elevated">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/BodyType"/>
+    <skos:prefLabel xml:lang="en">station wagon elevated</skos:prefLabel>
+    <skos:notation>station-wagon-elevated</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/BodyType/station_wagon_raised_roof">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/BodyType"/>
+    <skos:prefLabel xml:lang="en">station wagon raised-roof</skos:prefLabel>
+    <skos:notation>station-wagon-raised-roof</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/BodyType/station_wagon_long">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/BodyType"/>
+    <skos:prefLabel xml:lang="en">station wagon long</skos:prefLabel>
+    <skos:notation>station-wagon-long</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/BodyType/van">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/BodyType"/>
+    <skos:prefLabel xml:lang="en">van</skos:prefLabel>
+    <skos:notation>van</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/BodyType/van_elevated">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/BodyType"/>
+    <skos:prefLabel xml:lang="en">van elevated</skos:prefLabel>
+    <skos:notation>van-elevated</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/BodyType/van_double_cabin">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/BodyType"/>
+    <skos:prefLabel xml:lang="en">van double cabin</skos:prefLabel>
+    <skos:notation>van-double-cab</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/BodyType/van_elevated_vitrified">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/BodyType"/>
+    <skos:prefLabel xml:lang="en">van elevated vitrified</skos:prefLabel>
+    <skos:notation>van-elevated-vitrified</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/BodyType/van_large_volume">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/BodyType"/>
+    <skos:prefLabel xml:lang="en">van large volume</skos:prefLabel>
+    <skos:notation>van-large-vol</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/BodyType/van_large_volume_vitrified">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/BodyType"/>
+    <skos:prefLabel xml:lang="en">van large volume vitrified</skos:prefLabel>
+    <skos:notation>van-large-vol-vitrified</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/BodyType/van_raised_roof">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/BodyType"/>
+    <skos:prefLabel xml:lang="en">van raised roof</skos:prefLabel>
+    <skos:notation>van-raised-roof</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/BodyType/van_raised_roof_vitrified">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/BodyType"/>
+    <skos:prefLabel xml:lang="en">van raised roof vitrified</skos:prefLabel>
+    <skos:notation>van-raised-roof-vitrified</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/BodyType/van_long">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/BodyType"/>
+    <skos:prefLabel xml:lang="en">van long</skos:prefLabel>
+    <skos:notation>van-long</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/BodyType/van_long_elevated">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/BodyType"/>
+    <skos:prefLabel xml:lang="en">van long, elevated</skos:prefLabel>
+    <skos:notation>van-long-elevated</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/BodyType/van_vitrified">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/BodyType"/>
+    <skos:prefLabel xml:lang="en">van vitrified</skos:prefLabel>
+    <skos:notation>van-vitrified</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/BodyType/tipper">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/BodyType"/>
+    <skos:prefLabel xml:lang="en">tipper</skos:prefLabel>
+    <skos:notation>tipper</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/BodyType/tipper_double_cabin">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/BodyType"/>
+    <skos:prefLabel xml:lang="en">tipper double cabin</skos:prefLabel>
+    <skos:notation>tipper-double-cab</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/BodyType/minivan">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/BodyType"/>
+    <skos:prefLabel xml:lang="en">minivan</skos:prefLabel>
+    <skos:notation>minivan</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/BodyType/minivan_elevated">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/BodyType"/>
+    <skos:prefLabel xml:lang="en">minivan elevated</skos:prefLabel>
+    <skos:notation>minivan-elevated</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/BodyType/minivan_raised_roof">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/BodyType"/>
+    <skos:prefLabel xml:lang="en">minivan raised roof</skos:prefLabel>
+    <skos:notation>minivan-raised-roof</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/BodyType/chassis">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/BodyType"/>
+    <skos:prefLabel xml:lang="en">chassis</skos:prefLabel>
+    <skos:notation>chassis</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/BodyType/chassis_double_cabin">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/BodyType"/>
+    <skos:prefLabel xml:lang="en">chassis double cabin</skos:prefLabel>
+    <skos:notation>chassis-double-cab</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/BodyType/platform">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/BodyType"/>
+    <skos:prefLabel xml:lang="en">platform</skos:prefLabel>
+    <skos:notation>platform</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/BodyType/semi_trailer">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/BodyType"/>
+    <skos:prefLabel xml:lang="en">semi-trailer</skos:prefLabel>
+    <skos:notation>semi-trailer</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/BodyType/semi_trailer_double_cabin">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/BodyType"/>
+    <skos:prefLabel xml:lang="en">semi-trailer double cabin</skos:prefLabel>
+    <skos:notation>semi-trailer-double-cab</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/BodyType/flatbed">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/BodyType"/>
+    <skos:prefLabel xml:lang="en">flatbed</skos:prefLabel>
+    <skos:notation>flatbed</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/BodyType/flatbed_double_cabin">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/BodyType"/>
+    <skos:prefLabel xml:lang="en">flatbed double cabin</skos:prefLabel>
+    <skos:notation>flatbed-double-cab</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/BodyType/camper">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/BodyType"/>
+    <skos:prefLabel xml:lang="en">camper</skos:prefLabel>
+    <skos:notation>camper</skos:notation>
+  </skos:Concept>
+  <skos:ConceptScheme rdf:about="https://rosmadair.example.org/riskine/enum/CivilServantStatus">
+    <skos:prefLabel xml:lang="en">civil servant status</skos:prefLabel>
+    <dcterms:source rdf:resource="https://ontology.riskine.com/definitions.json"/>
+  </skos:ConceptScheme>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/CivilServantStatus/civil_servant_for_life">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/CivilServantStatus"/>
+    <skos:prefLabel xml:lang="en">civil servant for life</skos:prefLabel>
+    <skos:notation>1</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/CivilServantStatus/civil_servant_on_probation">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/CivilServantStatus"/>
+    <skos:prefLabel xml:lang="en">civil servant on probation</skos:prefLabel>
+    <skos:notation>2</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/CivilServantStatus/civil_servant_on_revocation">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/CivilServantStatus"/>
+    <skos:prefLabel xml:lang="en">civil servant on revocation</skos:prefLabel>
+    <skos:notation>3</skos:notation>
+  </skos:Concept>
+  <skos:ConceptScheme rdf:about="https://rosmadair.example.org/riskine/enum/ConstructionType">
+    <skos:prefLabel xml:lang="en">construction type</skos:prefLabel>
+    <dcterms:source rdf:resource="https://ontology.riskine.com/definitions.json"/>
+  </skos:ConceptScheme>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/ConstructionType/solid_construction">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/ConstructionType"/>
+    <skos:prefLabel xml:lang="en">solid construction</skos:prefLabel>
+    <skos:notation>1</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/ConstructionType/skeleton_construction">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/ConstructionType"/>
+    <skos:prefLabel xml:lang="en">skeleton construction</skos:prefLabel>
+    <skos:notation>2</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/ConstructionType/skeleton_construction_flammable_material">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/ConstructionType"/>
+    <skos:prefLabel xml:lang="en">skeleton construction (flammable material)</skos:prefLabel>
+    <skos:notation>3</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/ConstructionType/skeleton_construction_inflammable_material">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/ConstructionType"/>
+    <skos:prefLabel xml:lang="en">skeleton construction (inflammable material)</skos:prefLabel>
+    <skos:notation>4</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/ConstructionType/wooden_construction">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/ConstructionType"/>
+    <skos:prefLabel xml:lang="en">wooden construction</skos:prefLabel>
+    <skos:notation>5</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/ConstructionType/mixed">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/ConstructionType"/>
+    <skos:prefLabel xml:lang="en">mixed</skos:prefLabel>
+    <skos:notation>6</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/ConstructionType/other">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/ConstructionType"/>
+    <skos:prefLabel xml:lang="en">other</skos:prefLabel>
+    <skos:notation>7</skos:notation>
+  </skos:Concept>
+  <skos:ConceptScheme rdf:about="https://rosmadair.example.org/riskine/enum/CoveragePeriod">
+    <skos:prefLabel xml:lang="en">coverage period</skos:prefLabel>
+    <dcterms:source rdf:resource="https://ontology.riskine.com/definitions.json"/>
+  </skos:ConceptScheme>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/CoveragePeriod/not_specified">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/CoveragePeriod"/>
+    <skos:prefLabel xml:lang="en">not specified</skos:prefLabel>
+    <skos:notation>0</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/CoveragePeriod/at_least_1_month">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/CoveragePeriod"/>
+    <skos:prefLabel xml:lang="en">at least 1 month</skos:prefLabel>
+    <skos:notation>1</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/CoveragePeriod/at_least_6_months">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/CoveragePeriod"/>
+    <skos:prefLabel xml:lang="en">at least 6 months</skos:prefLabel>
+    <skos:notation>6</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/CoveragePeriod/at_least_12_months">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/CoveragePeriod"/>
+    <skos:prefLabel xml:lang="en">at least 12 months</skos:prefLabel>
+    <skos:notation>12</skos:notation>
+  </skos:Concept>
+  <skos:ConceptScheme rdf:about="https://rosmadair.example.org/riskine/enum/CreditCardType">
+    <skos:prefLabel xml:lang="en">credit card type</skos:prefLabel>
+    <dcterms:source rdf:resource="https://ontology.riskine.com/definitions.json"/>
+  </skos:ConceptScheme>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/CreditCardType/visa">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/CreditCardType"/>
+    <skos:prefLabel xml:lang="en">visa</skos:prefLabel>
+    <skos:notation>1</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/CreditCardType/master_card">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/CreditCardType"/>
+    <skos:prefLabel xml:lang="en">master-card</skos:prefLabel>
+    <skos:notation>2</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/CreditCardType/american_express">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/CreditCardType"/>
+    <skos:prefLabel xml:lang="en">american express</skos:prefLabel>
+    <skos:notation>3</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/CreditCardType/diners_club">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/CreditCardType"/>
+    <skos:prefLabel xml:lang="en">diners club</skos:prefLabel>
+    <skos:notation>4</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/CreditCardType/other">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/CreditCardType"/>
+    <skos:prefLabel xml:lang="en">other</skos:prefLabel>
+    <skos:notation>5</skos:notation>
+  </skos:Concept>
+  <skos:ConceptScheme rdf:about="https://rosmadair.example.org/riskine/enum/DriverClub">
+    <skos:prefLabel xml:lang="en">driver club</skos:prefLabel>
+    <dcterms:source rdf:resource="https://ontology.riskine.com/definitions.json"/>
+  </skos:ConceptScheme>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/DriverClub/none">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/DriverClub"/>
+    <skos:prefLabel xml:lang="en">none</skos:prefLabel>
+    <skos:notation>0</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/DriverClub/ARB">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/DriverClub"/>
+    <skos:prefLabel xml:lang="en">ARBÖ</skos:prefLabel>
+    <skos:notation>1</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/DriverClub/AMTC">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/DriverClub"/>
+    <skos:prefLabel xml:lang="en">ÖAMTC</skos:prefLabel>
+    <skos:notation>2</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/DriverClub/ADAC">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/DriverClub"/>
+    <skos:prefLabel xml:lang="en">ADAC</skos:prefLabel>
+    <skos:notation>3</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/DriverClub/ACE">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/DriverClub"/>
+    <skos:prefLabel xml:lang="en">ACE</skos:prefLabel>
+    <skos:notation>4</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/DriverClub/AvD">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/DriverClub"/>
+    <skos:prefLabel xml:lang="en">AvD</skos:prefLabel>
+    <skos:notation>5</skos:notation>
+  </skos:Concept>
+  <skos:ConceptScheme rdf:about="https://rosmadair.example.org/riskine/enum/EducationalLevel">
+    <skos:prefLabel xml:lang="en">educational level</skos:prefLabel>
+    <dcterms:source rdf:resource="https://ontology.riskine.com/definitions.json"/>
+  </skos:ConceptScheme>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/EducationalLevel/no_graduation">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/EducationalLevel"/>
+    <skos:prefLabel xml:lang="en">no graduation</skos:prefLabel>
+    <skos:notation>0</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/EducationalLevel/high_school_diploma_academic">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/EducationalLevel"/>
+    <skos:prefLabel xml:lang="en">high school diploma (academic)</skos:prefLabel>
+    <skos:notation>3</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/EducationalLevel/university_degree">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/EducationalLevel"/>
+    <skos:prefLabel xml:lang="en">university degree</skos:prefLabel>
+    <skos:notation>5</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/EducationalLevel/qualified_comprehensive_school_certificate">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/EducationalLevel"/>
+    <skos:prefLabel xml:lang="en">(qualified) comprehensive school certificate</skos:prefLabel>
+    <skos:notation>1</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/EducationalLevel/secondary_school_certificate">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/EducationalLevel"/>
+    <skos:prefLabel xml:lang="en">secondary school certificate</skos:prefLabel>
+    <skos:notation>2</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/EducationalLevel/high_school_diploma_professional">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/EducationalLevel"/>
+    <skos:prefLabel xml:lang="en">high school diploma (professional)</skos:prefLabel>
+    <skos:notation>4</skos:notation>
+  </skos:Concept>
+  <skos:ConceptScheme rdf:about="https://rosmadair.example.org/riskine/enum/EmploymentCategory">
+    <skos:prefLabel xml:lang="en">employment category</skos:prefLabel>
+    <dcterms:source rdf:resource="https://ontology.riskine.com/definitions.json"/>
+  </skos:ConceptScheme>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/EmploymentCategory/no_income">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/EmploymentCategory"/>
+    <skos:prefLabel xml:lang="en">no income</skos:prefLabel>
+    <skos:notation>0</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/EmploymentCategory/labourer">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/EmploymentCategory"/>
+    <skos:prefLabel xml:lang="en">labourer</skos:prefLabel>
+    <skos:notation>1</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/EmploymentCategory/self_employed">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/EmploymentCategory"/>
+    <skos:prefLabel xml:lang="en">self-employed</skos:prefLabel>
+    <skos:notation>2</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/EmploymentCategory/farmer">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/EmploymentCategory"/>
+    <skos:prefLabel xml:lang="en">farmer</skos:prefLabel>
+    <skos:notation>3</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/EmploymentCategory/public_sector_employee">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/EmploymentCategory"/>
+    <skos:prefLabel xml:lang="en">public sector employee</skos:prefLabel>
+    <skos:notation>5</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/EmploymentCategory/student">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/EmploymentCategory"/>
+    <skos:prefLabel xml:lang="en">student</skos:prefLabel>
+    <skos:notation>7</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/EmploymentCategory/housewife_homemaker">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/EmploymentCategory"/>
+    <skos:prefLabel xml:lang="en">housewife - homemaker</skos:prefLabel>
+    <skos:notation>8</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/EmploymentCategory/unemployed">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/EmploymentCategory"/>
+    <skos:prefLabel xml:lang="en">unemployed</skos:prefLabel>
+    <skos:notation>9</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/EmploymentCategory/retired">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/EmploymentCategory"/>
+    <skos:prefLabel xml:lang="en">retired</skos:prefLabel>
+    <skos:notation>10</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/EmploymentCategory/maternity_leave">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/EmploymentCategory"/>
+    <skos:prefLabel xml:lang="en">(maternity) leave</skos:prefLabel>
+    <skos:notation>11</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/EmploymentCategory/apprentice">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/EmploymentCategory"/>
+    <skos:prefLabel xml:lang="en">apprentice</skos:prefLabel>
+    <skos:notation>12</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/EmploymentCategory/employee">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/EmploymentCategory"/>
+    <skos:prefLabel xml:lang="en">employee</skos:prefLabel>
+    <skos:notation>13</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/EmploymentCategory/civil_servant">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/EmploymentCategory"/>
+    <skos:prefLabel xml:lang="en">civil servant</skos:prefLabel>
+    <skos:notation>14</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/EmploymentCategory/miner">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/EmploymentCategory"/>
+    <skos:prefLabel xml:lang="en">miner</skos:prefLabel>
+    <skos:notation>15</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/EmploymentCategory/self_employed_artisans">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/EmploymentCategory"/>
+    <skos:prefLabel xml:lang="en">self-employed artisans</skos:prefLabel>
+    <skos:notation>25</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/EmploymentCategory/manager">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/EmploymentCategory"/>
+    <skos:prefLabel xml:lang="en">manager</skos:prefLabel>
+    <skos:notation>26</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/EmploymentCategory/director">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/EmploymentCategory"/>
+    <skos:prefLabel xml:lang="en">director</skos:prefLabel>
+    <skos:notation>28</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/EmploymentCategory/freelancer">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/EmploymentCategory"/>
+    <skos:prefLabel xml:lang="en">freelancer</skos:prefLabel>
+    <skos:notation>29</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/EmploymentCategory/public_sector_labourer">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/EmploymentCategory"/>
+    <skos:prefLabel xml:lang="en">public sector labourer</skos:prefLabel>
+    <skos:notation>31</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/EmploymentCategory/professional_soldier">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/EmploymentCategory"/>
+    <skos:prefLabel xml:lang="en">professional soldier</skos:prefLabel>
+    <skos:notation>33</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/EmploymentCategory/regular_soldier">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/EmploymentCategory"/>
+    <skos:prefLabel xml:lang="en">regular soldier</skos:prefLabel>
+    <skos:notation>34</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/EmploymentCategory/pupil">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/EmploymentCategory"/>
+    <skos:prefLabel xml:lang="en">pupil</skos:prefLabel>
+    <skos:notation>36</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/EmploymentCategory/director_with_pension_commitment">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/EmploymentCategory"/>
+    <skos:prefLabel xml:lang="en">director with pension commitment</skos:prefLabel>
+    <skos:notation>38</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/EmploymentCategory/executive">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/EmploymentCategory"/>
+    <skos:prefLabel xml:lang="en">executive</skos:prefLabel>
+    <skos:notation>39</skos:notation>
+  </skos:Concept>
+  <skos:ConceptScheme rdf:about="https://rosmadair.example.org/riskine/enum/EmploymentMode">
+    <skos:prefLabel xml:lang="en">employment mode</skos:prefLabel>
+    <dcterms:source rdf:resource="https://ontology.riskine.com/definitions.json"/>
+  </skos:ConceptScheme>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/EmploymentMode/full_time">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/EmploymentMode"/>
+    <skos:prefLabel xml:lang="en">full-time</skos:prefLabel>
+    <skos:notation>1</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/EmploymentMode/part_time">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/EmploymentMode"/>
+    <skos:prefLabel xml:lang="en">part-time</skos:prefLabel>
+    <skos:notation>2</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/EmploymentMode/marginally">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/EmploymentMode"/>
+    <skos:prefLabel xml:lang="en">marginally</skos:prefLabel>
+    <skos:notation>3</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/EmploymentMode/seasonal">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/EmploymentMode"/>
+    <skos:prefLabel xml:lang="en">seasonal</skos:prefLabel>
+    <skos:notation>4</skos:notation>
+  </skos:Concept>
+  <skos:ConceptScheme rdf:about="https://rosmadair.example.org/riskine/enum/FeeSchedule">
+    <skos:prefLabel xml:lang="en">fee schedule</skos:prefLabel>
+    <dcterms:source rdf:resource="https://ontology.riskine.com/definitions.json"/>
+  </skos:ConceptScheme>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/FeeSchedule/not_specified">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/FeeSchedule"/>
+    <skos:prefLabel xml:lang="en">not specified</skos:prefLabel>
+    <skos:notation>0</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/FeeSchedule/standard_coverage">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/FeeSchedule"/>
+    <skos:prefLabel xml:lang="en">standard coverage</skos:prefLabel>
+    <skos:notation>1</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/FeeSchedule/superior_coverage">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/FeeSchedule"/>
+    <skos:prefLabel xml:lang="en">superior coverage</skos:prefLabel>
+    <skos:notation>2</skos:notation>
+  </skos:Concept>
+  <skos:ConceptScheme rdf:about="https://rosmadair.example.org/riskine/enum/FuelType">
+    <skos:prefLabel xml:lang="en">fuel type</skos:prefLabel>
+    <dcterms:source rdf:resource="https://ontology.riskine.com/definitions.json"/>
+  </skos:ConceptScheme>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/FuelType/other">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/FuelType"/>
+    <skos:prefLabel xml:lang="en">other</skos:prefLabel>
+    <skos:notation>other</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/FuelType/gasoline">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/FuelType"/>
+    <skos:prefLabel xml:lang="en">gasoline</skos:prefLabel>
+    <skos:notation>gasoline</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/FuelType/diesel">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/FuelType"/>
+    <skos:prefLabel xml:lang="en">diesel</skos:prefLabel>
+    <skos:notation>diesel</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/FuelType/compressed_natural_gas_CNG">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/FuelType"/>
+    <skos:prefLabel xml:lang="en">compressed natural gas (CNG)</skos:prefLabel>
+    <skos:notation>cng</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/FuelType/liquefied_petroleum_gas_LPG">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/FuelType"/>
+    <skos:prefLabel xml:lang="en">liquefied petroleum gas (LPG)</skos:prefLabel>
+    <skos:notation>lpg</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/FuelType/electric">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/FuelType"/>
+    <skos:prefLabel xml:lang="en">electric</skos:prefLabel>
+    <skos:notation>electric</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/FuelType/hybrid">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/FuelType"/>
+    <skos:prefLabel xml:lang="en">hybrid</skos:prefLabel>
+    <skos:notation>hybrid</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/FuelType/electric_gasoline">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/FuelType"/>
+    <skos:prefLabel xml:lang="en">electric/gasoline</skos:prefLabel>
+    <skos:notation>electric-gasoline</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/FuelType/electric_diesel">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/FuelType"/>
+    <skos:prefLabel xml:lang="en">electric/diesel</skos:prefLabel>
+    <skos:notation>electric-diesel</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/FuelType/ethanol_gasoline">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/FuelType"/>
+    <skos:prefLabel xml:lang="en">ethanol/gasoline</skos:prefLabel>
+    <skos:notation>ethanol-gasoline</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/FuelType/CNG_gasoline">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/FuelType"/>
+    <skos:prefLabel xml:lang="en">CNG/gasoline</skos:prefLabel>
+    <skos:notation>cng-gasoline</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/FuelType/LPG_gasoline">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/FuelType"/>
+    <skos:prefLabel xml:lang="en">LPG/gasoline</skos:prefLabel>
+    <skos:notation>lpg-gasoline</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/FuelType/hydrogen_H2">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/FuelType"/>
+    <skos:prefLabel xml:lang="en">hydrogen (H2)</skos:prefLabel>
+    <skos:notation>hydrogen</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/FuelType/H2_E">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/FuelType"/>
+    <skos:prefLabel xml:lang="en">H2 (E)</skos:prefLabel>
+    <skos:notation>h2-e</skos:notation>
+  </skos:Concept>
+  <skos:ConceptScheme rdf:about="https://rosmadair.example.org/riskine/enum/Gender">
+    <skos:prefLabel xml:lang="en">gender</skos:prefLabel>
+    <dcterms:source rdf:resource="https://ontology.riskine.com/definitions.json"/>
+  </skos:ConceptScheme>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/Gender/male">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/Gender"/>
+    <skos:prefLabel xml:lang="en">male</skos:prefLabel>
+    <skos:notation>m</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/Gender/female">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/Gender"/>
+    <skos:prefLabel xml:lang="en">female</skos:prefLabel>
+    <skos:notation>f</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/Gender/other">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/Gender"/>
+    <skos:prefLabel xml:lang="en">other</skos:prefLabel>
+    <skos:notation>o</skos:notation>
+  </skos:Concept>
+  <skos:ConceptScheme rdf:about="https://rosmadair.example.org/riskine/enum/IdType">
+    <skos:prefLabel xml:lang="en">id type</skos:prefLabel>
+    <dcterms:source rdf:resource="https://ontology.riskine.com/definitions.json"/>
+  </skos:ConceptScheme>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/IdType/not_specified">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/IdType"/>
+    <skos:prefLabel xml:lang="en">not specified</skos:prefLabel>
+    <skos:notation>1</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/IdType/passport">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/IdType"/>
+    <skos:prefLabel xml:lang="en">passport</skos:prefLabel>
+    <skos:notation>2</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/IdType/id_card">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/IdType"/>
+    <skos:prefLabel xml:lang="en">id-card</skos:prefLabel>
+    <skos:notation>3</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/IdType/other">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/IdType"/>
+    <skos:prefLabel xml:lang="en">other</skos:prefLabel>
+    <skos:notation>4</skos:notation>
+  </skos:Concept>
+  <skos:ConceptScheme rdf:about="https://rosmadair.example.org/riskine/enum/InPlaceStatus">
+    <skos:prefLabel xml:lang="en">in place status</skos:prefLabel>
+    <dcterms:source rdf:resource="https://ontology.riskine.com/definitions.json"/>
+  </skos:ConceptScheme>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/InPlaceStatus/none">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/InPlaceStatus"/>
+    <skos:prefLabel xml:lang="en">none</skos:prefLabel>
+    <skos:notation>1</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/InPlaceStatus/none_legally_not_necessary">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/InPlaceStatus"/>
+    <skos:prefLabel xml:lang="en">none (legally not necessary)</skos:prefLabel>
+    <skos:notation>2</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/InPlaceStatus/yes_internal">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/InPlaceStatus"/>
+    <skos:prefLabel xml:lang="en">yes (internal)</skos:prefLabel>
+    <skos:notation>3</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/InPlaceStatus/yes_external">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/InPlaceStatus"/>
+    <skos:prefLabel xml:lang="en">yes (external)</skos:prefLabel>
+    <skos:notation>4</skos:notation>
+  </skos:Concept>
+  <skos:ConceptScheme rdf:about="https://rosmadair.example.org/riskine/enum/LevelOfCare">
+    <skos:prefLabel xml:lang="en">level of care</skos:prefLabel>
+    <dcterms:source rdf:resource="https://ontology.riskine.com/definitions.json"/>
+  </skos:ConceptScheme>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/LevelOfCare/level_1">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/LevelOfCare"/>
+    <skos:prefLabel xml:lang="en">level 1</skos:prefLabel>
+    <skos:notation>1</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/LevelOfCare/level_2">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/LevelOfCare"/>
+    <skos:prefLabel xml:lang="en">level 2</skos:prefLabel>
+    <skos:notation>2</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/LevelOfCare/level_3">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/LevelOfCare"/>
+    <skos:prefLabel xml:lang="en">level 3</skos:prefLabel>
+    <skos:notation>3</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/LevelOfCare/level_4">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/LevelOfCare"/>
+    <skos:prefLabel xml:lang="en">level 4</skos:prefLabel>
+    <skos:notation>4</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/LevelOfCare/level_5">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/LevelOfCare"/>
+    <skos:prefLabel xml:lang="en">level 5</skos:prefLabel>
+    <skos:notation>5</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/LevelOfCare/level_6">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/LevelOfCare"/>
+    <skos:prefLabel xml:lang="en">level 6</skos:prefLabel>
+    <skos:notation>6</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/LevelOfCare/level_7">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/LevelOfCare"/>
+    <skos:prefLabel xml:lang="en">level 7</skos:prefLabel>
+    <skos:notation>7</skos:notation>
+  </skos:Concept>
+  <skos:ConceptScheme rdf:about="https://rosmadair.example.org/riskine/enum/LicenseType">
+    <skos:prefLabel xml:lang="en">license type</skos:prefLabel>
+    <dcterms:source rdf:resource="https://ontology.riskine.com/definitions.json"/>
+  </skos:ConceptScheme>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/LicenseType/none">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/LicenseType"/>
+    <skos:prefLabel xml:lang="en">none</skos:prefLabel>
+    <skos:notation>0</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/LicenseType/eu_license">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/LicenseType"/>
+    <skos:prefLabel xml:lang="en">eu-license</skos:prefLabel>
+    <skos:notation>1</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/LicenseType/non_eu_license">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/LicenseType"/>
+    <skos:prefLabel xml:lang="en">non-eu license</skos:prefLabel>
+    <skos:notation>2</skos:notation>
+  </skos:Concept>
+  <skos:ConceptScheme rdf:about="https://rosmadair.example.org/riskine/enum/MaritalStatus">
+    <skos:prefLabel xml:lang="en">marital status</skos:prefLabel>
+    <dcterms:source rdf:resource="https://ontology.riskine.com/definitions.json"/>
+  </skos:ConceptScheme>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/MaritalStatus/single">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/MaritalStatus"/>
+    <skos:prefLabel xml:lang="en">single</skos:prefLabel>
+    <skos:notation>1</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/MaritalStatus/married">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/MaritalStatus"/>
+    <skos:prefLabel xml:lang="en">married</skos:prefLabel>
+    <skos:notation>2</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/MaritalStatus/divorced">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/MaritalStatus"/>
+    <skos:prefLabel xml:lang="en">divorced</skos:prefLabel>
+    <skos:notation>3</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/MaritalStatus/widowed">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/MaritalStatus"/>
+    <skos:prefLabel xml:lang="en">widowed</skos:prefLabel>
+    <skos:notation>4</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/MaritalStatus/partnership">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/MaritalStatus"/>
+    <skos:prefLabel xml:lang="en">partnership</skos:prefLabel>
+    <skos:notation>5</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/MaritalStatus/separated">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/MaritalStatus"/>
+    <skos:prefLabel xml:lang="en">separated</skos:prefLabel>
+    <skos:notation>8</skos:notation>
+  </skos:Concept>
+  <skos:ConceptScheme rdf:about="https://rosmadair.example.org/riskine/enum/PastSmokingHabits">
+    <skos:prefLabel xml:lang="en">past smoking habits</skos:prefLabel>
+    <dcterms:source rdf:resource="https://ontology.riskine.com/definitions.json"/>
+  </skos:ConceptScheme>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/PastSmokingHabits/never">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/PastSmokingHabits"/>
+    <skos:prefLabel xml:lang="en">never</skos:prefLabel>
+    <skos:notation>1</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/PastSmokingHabits/1_year">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/PastSmokingHabits"/>
+    <skos:prefLabel xml:lang="en">&gt;1 year</skos:prefLabel>
+    <skos:notation>2</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/PastSmokingHabits/1_year">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/PastSmokingHabits"/>
+    <skos:prefLabel xml:lang="en">&lt;=1 year</skos:prefLabel>
+    <skos:notation>3</skos:notation>
+  </skos:Concept>
+  <skos:ConceptScheme rdf:about="https://rosmadair.example.org/riskine/enum/PaymentMethod">
+    <skos:prefLabel xml:lang="en">payment method</skos:prefLabel>
+    <dcterms:source rdf:resource="https://ontology.riskine.com/definitions.json"/>
+  </skos:ConceptScheme>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/PaymentMethod/direct_debit">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/PaymentMethod"/>
+    <skos:prefLabel xml:lang="en">direct debit</skos:prefLabel>
+    <skos:notation>1</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/PaymentMethod/payment_slip">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/PaymentMethod"/>
+    <skos:prefLabel xml:lang="en">payment slip</skos:prefLabel>
+    <skos:notation>2</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/PaymentMethod/standing_order">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/PaymentMethod"/>
+    <skos:prefLabel xml:lang="en">standing order</skos:prefLabel>
+    <skos:notation>3</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/PaymentMethod/credit_card">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/PaymentMethod"/>
+    <skos:prefLabel xml:lang="en">credit card</skos:prefLabel>
+    <skos:notation>4</skos:notation>
+  </skos:Concept>
+  <skos:ConceptScheme rdf:about="https://rosmadair.example.org/riskine/enum/ProfessionalTraining">
+    <skos:prefLabel xml:lang="en">professional training</skos:prefLabel>
+    <dcterms:source rdf:resource="https://ontology.riskine.com/definitions.json"/>
+  </skos:ConceptScheme>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/ProfessionalTraining/completed_professional_training">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/ProfessionalTraining"/>
+    <skos:prefLabel xml:lang="en">completed professional training</skos:prefLabel>
+    <skos:notation>1</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/ProfessionalTraining/university_degree">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/ProfessionalTraining"/>
+    <skos:prefLabel xml:lang="en">university degree</skos:prefLabel>
+    <skos:notation>5</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/ProfessionalTraining/Meister">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/ProfessionalTraining"/>
+    <skos:prefLabel xml:lang="en">Meister</skos:prefLabel>
+    <skos:notation>3</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/ProfessionalTraining/Techniker">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/ProfessionalTraining"/>
+    <skos:prefLabel xml:lang="en">Techniker</skos:prefLabel>
+    <skos:notation>4</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/ProfessionalTraining/Betriebswirt_Fachwirt">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/ProfessionalTraining"/>
+    <skos:prefLabel xml:lang="en">Betriebswirt - Fachwirt</skos:prefLabel>
+    <skos:notation>2</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/ProfessionalTraining/none_not_finished">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/ProfessionalTraining"/>
+    <skos:prefLabel xml:lang="en">none - not finished</skos:prefLabel>
+    <skos:notation>0</skos:notation>
+  </skos:Concept>
+  <skos:ConceptScheme rdf:about="https://rosmadair.example.org/riskine/enum/ProfessionalTrainingType">
+    <skos:prefLabel xml:lang="en">professional training type</skos:prefLabel>
+    <dcterms:source rdf:resource="https://ontology.riskine.com/definitions.json"/>
+  </skos:ConceptScheme>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/ProfessionalTrainingType/commercial_training">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/ProfessionalTrainingType"/>
+    <skos:prefLabel xml:lang="en">commercial training</skos:prefLabel>
+    <skos:notation>1</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/ProfessionalTrainingType/craft_training">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/ProfessionalTrainingType"/>
+    <skos:prefLabel xml:lang="en">craft training</skos:prefLabel>
+    <skos:notation>2</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/ProfessionalTrainingType/industrial_training">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/ProfessionalTrainingType"/>
+    <skos:prefLabel xml:lang="en">industrial training</skos:prefLabel>
+    <skos:notation>3</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/ProfessionalTrainingType/short_training">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/ProfessionalTrainingType"/>
+    <skos:prefLabel xml:lang="en">short training</skos:prefLabel>
+    <skos:notation>4</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/ProfessionalTrainingType/other">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/ProfessionalTrainingType"/>
+    <skos:prefLabel xml:lang="en">other</skos:prefLabel>
+    <skos:notation>5</skos:notation>
+  </skos:Concept>
+  <skos:ConceptScheme rdf:about="https://rosmadair.example.org/riskine/enum/RiskSportHabits">
+    <skos:prefLabel xml:lang="en">risk sport habits</skos:prefLabel>
+    <dcterms:source rdf:resource="https://ontology.riskine.com/definitions.json"/>
+  </skos:ConceptScheme>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/RiskSportHabits/yes">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/RiskSportHabits"/>
+    <skos:prefLabel xml:lang="en">yes</skos:prefLabel>
+    <skos:notation>1</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/RiskSportHabits/no">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/RiskSportHabits"/>
+    <skos:prefLabel xml:lang="en">no</skos:prefLabel>
+    <skos:notation>2</skos:notation>
+  </skos:Concept>
+  <skos:ConceptScheme rdf:about="https://rosmadair.example.org/riskine/enum/RoomType">
+    <skos:prefLabel xml:lang="en">room type</skos:prefLabel>
+    <dcterms:source rdf:resource="https://ontology.riskine.com/definitions.json"/>
+  </skos:ConceptScheme>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/RoomType/not_specified">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/RoomType"/>
+    <skos:prefLabel xml:lang="en">not specified</skos:prefLabel>
+    <skos:notation>0</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/RoomType/single">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/RoomType"/>
+    <skos:prefLabel xml:lang="en">single</skos:prefLabel>
+    <skos:notation>1</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/RoomType/double">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/RoomType"/>
+    <skos:prefLabel xml:lang="en">double</skos:prefLabel>
+    <skos:notation>2</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/RoomType/standard">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/RoomType"/>
+    <skos:prefLabel xml:lang="en">standard</skos:prefLabel>
+    <skos:notation>3</skos:notation>
+  </skos:Concept>
+  <skos:ConceptScheme rdf:about="https://rosmadair.example.org/riskine/enum/Salutation">
+    <skos:prefLabel xml:lang="en">salutation</skos:prefLabel>
+    <dcterms:source rdf:resource="https://ontology.riskine.com/definitions.json"/>
+  </skos:ConceptScheme>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/Salutation/Ms">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/Salutation"/>
+    <skos:prefLabel xml:lang="en">Ms.</skos:prefLabel>
+    <skos:notation>1</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/Salutation/Mrs">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/Salutation"/>
+    <skos:prefLabel xml:lang="en">Mrs.</skos:prefLabel>
+    <skos:notation>2</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/Salutation/Mr">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/Salutation"/>
+    <skos:prefLabel xml:lang="en">Mr.</skos:prefLabel>
+    <skos:notation>3</skos:notation>
+  </skos:Concept>
+  <skos:ConceptScheme rdf:about="https://rosmadair.example.org/riskine/enum/SmokingHabits">
+    <skos:prefLabel xml:lang="en">smoking habits</skos:prefLabel>
+    <dcterms:source rdf:resource="https://ontology.riskine.com/definitions.json"/>
+  </skos:ConceptScheme>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/SmokingHabits/yes_regularly">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/SmokingHabits"/>
+    <skos:prefLabel xml:lang="en">yes, regularly</skos:prefLabel>
+    <skos:notation>1</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/SmokingHabits/yes_rarely">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/SmokingHabits"/>
+    <skos:prefLabel xml:lang="en">yes, rarely</skos:prefLabel>
+    <skos:notation>2</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/SmokingHabits/no">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/SmokingHabits"/>
+    <skos:prefLabel xml:lang="en">no</skos:prefLabel>
+    <skos:notation>3</skos:notation>
+  </skos:Concept>
+  <skos:ConceptScheme rdf:about="https://rosmadair.example.org/riskine/enum/SportHabits">
+    <skos:prefLabel xml:lang="en">sport habits</skos:prefLabel>
+    <dcterms:source rdf:resource="https://ontology.riskine.com/definitions.json"/>
+  </skos:ConceptScheme>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/SportHabits/yes_regularly">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/SportHabits"/>
+    <skos:prefLabel xml:lang="en">yes, regularly</skos:prefLabel>
+    <skos:notation>1</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/SportHabits/yes_rarely">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/SportHabits"/>
+    <skos:prefLabel xml:lang="en">yes, rarely</skos:prefLabel>
+    <skos:notation>2</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/SportHabits/no">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/SportHabits"/>
+    <skos:prefLabel xml:lang="en">no</skos:prefLabel>
+    <skos:notation>3</skos:notation>
+  </skos:Concept>
+  <skos:ConceptScheme rdf:about="https://rosmadair.example.org/riskine/enum/StartAge">
+    <skos:prefLabel xml:lang="en">start age</skos:prefLabel>
+    <dcterms:source rdf:resource="https://ontology.riskine.com/definitions.json"/>
+  </skos:ConceptScheme>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/StartAge/none">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/StartAge"/>
+    <skos:prefLabel xml:lang="en">none</skos:prefLabel>
+    <skos:notation>0</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/StartAge/65_years">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/StartAge"/>
+    <skos:prefLabel xml:lang="en">65 years</skos:prefLabel>
+    <skos:notation>1</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/StartAge/67_years">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/StartAge"/>
+    <skos:prefLabel xml:lang="en">67 years</skos:prefLabel>
+    <skos:notation>2</skos:notation>
+  </skos:Concept>
+  <skos:ConceptScheme rdf:about="https://rosmadair.example.org/riskine/enum/TemporalInterval">
+    <skos:prefLabel xml:lang="en">temporal interval</skos:prefLabel>
+    <dcterms:source rdf:resource="https://ontology.riskine.com/definitions.json"/>
+  </skos:ConceptScheme>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/TemporalInterval/not_specified">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/TemporalInterval"/>
+    <skos:prefLabel xml:lang="en">not specified</skos:prefLabel>
+    <skos:notation>0</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/TemporalInterval/one_off">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/TemporalInterval"/>
+    <skos:prefLabel xml:lang="en">one-off</skos:prefLabel>
+    <skos:notation>1</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/TemporalInterval/daily">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/TemporalInterval"/>
+    <skos:prefLabel xml:lang="en">daily</skos:prefLabel>
+    <skos:notation>2</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/TemporalInterval/weekly">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/TemporalInterval"/>
+    <skos:prefLabel xml:lang="en">weekly</skos:prefLabel>
+    <skos:notation>3</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/TemporalInterval/monthly">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/TemporalInterval"/>
+    <skos:prefLabel xml:lang="en">monthly</skos:prefLabel>
+    <skos:notation>4</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/TemporalInterval/quaterly">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/TemporalInterval"/>
+    <skos:prefLabel xml:lang="en">quaterly</skos:prefLabel>
+    <skos:notation>5</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/TemporalInterval/bi_annually">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/TemporalInterval"/>
+    <skos:prefLabel xml:lang="en">bi-annually</skos:prefLabel>
+    <skos:notation>6</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/TemporalInterval/annually">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/TemporalInterval"/>
+    <skos:prefLabel xml:lang="en">annually</skos:prefLabel>
+    <skos:notation>7</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/TemporalInterval/every_2_years">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/TemporalInterval"/>
+    <skos:prefLabel xml:lang="en">every 2 years</skos:prefLabel>
+    <skos:notation>8</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/TemporalInterval/every_3_years">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/TemporalInterval"/>
+    <skos:prefLabel xml:lang="en">every 3 years</skos:prefLabel>
+    <skos:notation>9</skos:notation>
+  </skos:Concept>
+  <skos:ConceptScheme rdf:about="https://rosmadair.example.org/riskine/enum/TransmissionType">
+    <skos:prefLabel xml:lang="en">transmission type</skos:prefLabel>
+    <dcterms:source rdf:resource="https://ontology.riskine.com/definitions.json"/>
+  </skos:ConceptScheme>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/TransmissionType/other">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/TransmissionType"/>
+    <skos:prefLabel xml:lang="en">other</skos:prefLabel>
+    <skos:notation>other</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/TransmissionType/manual_MT">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/TransmissionType"/>
+    <skos:prefLabel xml:lang="en">manual (MT)</skos:prefLabel>
+    <skos:notation>manual</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/TransmissionType/automatic_AT">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/TransmissionType"/>
+    <skos:prefLabel xml:lang="en">automatic (AT)</skos:prefLabel>
+    <skos:notation>automatic</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/TransmissionType/automatic_sequential">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/TransmissionType"/>
+    <skos:prefLabel xml:lang="en">automatic sequential</skos:prefLabel>
+    <skos:notation>automatic-sequential</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/TransmissionType/continuously_variable_transmission_CVT">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/TransmissionType"/>
+    <skos:prefLabel xml:lang="en">continuously variable transmission (CVT)</skos:prefLabel>
+    <skos:notation>cvt</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/TransmissionType/manual_sequential">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/TransmissionType"/>
+    <skos:prefLabel xml:lang="en">manual sequential</skos:prefLabel>
+    <skos:notation>manual-sequential</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/TransmissionType/automated_manual_AMT">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/TransmissionType"/>
+    <skos:prefLabel xml:lang="en">automated manual (AMT)</skos:prefLabel>
+    <skos:notation>automated-manual</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/TransmissionType/direct_drive_without_gearbox">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/TransmissionType"/>
+    <skos:prefLabel xml:lang="en">direct-drive/without gearbox</skos:prefLabel>
+    <skos:notation>direct-drive</skos:notation>
+  </skos:Concept>
+  <skos:ConceptScheme rdf:about="https://rosmadair.example.org/riskine/enum/VehicleType">
+    <skos:prefLabel xml:lang="en">vehicle type</skos:prefLabel>
+    <dcterms:source rdf:resource="https://ontology.riskine.com/definitions.json"/>
+  </skos:ConceptScheme>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/VehicleType/motor_assisted_bicycle">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/VehicleType"/>
+    <skos:prefLabel xml:lang="en">motor-assisted bicycle</skos:prefLabel>
+    <skos:notation>1</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/VehicleType/moped_max_50ccm">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/VehicleType"/>
+    <skos:prefLabel xml:lang="en">moped (max. 50ccm)</skos:prefLabel>
+    <skos:notation>2</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/VehicleType/sidecar_motorcycle">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/VehicleType"/>
+    <skos:prefLabel xml:lang="en">(sidecar) motorcycle</skos:prefLabel>
+    <skos:notation>3</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/VehicleType/trike">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/VehicleType"/>
+    <skos:prefLabel xml:lang="en">trike</skos:prefLabel>
+    <skos:notation>4</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/VehicleType/car">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/VehicleType"/>
+    <skos:prefLabel xml:lang="en">car</skos:prefLabel>
+    <skos:notation>5</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/VehicleType/truck_max_3500kg">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/VehicleType"/>
+    <skos:prefLabel xml:lang="en">truck (max. 3500kg)</skos:prefLabel>
+    <skos:notation>6</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/riskine/enum/VehicleType/truck_3500kg">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/riskine/enum/VehicleType"/>
+    <skos:prefLabel xml:lang="en">truck (&gt; 3500kg)</skos:prefLabel>
+    <skos:notation>7</skos:notation>
+  </skos:Concept>
+</rdf:RDF>

@@ -1,0 +1,2 @@
+name,ontology_class,author,description,is_resource
+HazardModel,http://www.w3.org/ns/sosa/Procedure,Flax & Teal Limited,"A reusable hazard computation procedure (hydraulic, wind-field, seismic, thermal or crowd model) in the Aonach Mór resilience demo. Modelled as sosa:Procedure so HazardFootprints can reference it via sosa:usedProcedure; maintained-by is expressed as prov:wasAttributedTo.",true

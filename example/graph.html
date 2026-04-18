@@ -1,0 +1,862 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Rós Madair — Graph Explorer</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/cytoscape/3.30.4/cytoscape.min.js"></script>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { font-family: system-ui, sans-serif; display: flex; flex-direction: column; height: 100vh; }
+        header { padding: 0.5rem 1rem; background: #1a1a2e; color: #eee; display: flex; align-items: center; gap: 1rem; flex-wrap: wrap; }
+        header h1 { font-size: 1.1rem; font-weight: 600; }
+        header a { color: #8ecae6; text-decoration: none; font-size: 0.85rem; }
+        header a:hover { text-decoration: underline; }
+
+        .controls { padding: 0.5rem 1rem; background: #f5f5f5; border-bottom: 1px solid #ddd; display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
+        .controls label { font-weight: 600; font-size: 0.85rem; }
+        .controls input[type="text"] { font-family: monospace; font-size: 0.85rem; padding: 0.25rem 0.5rem; }
+        .controls button { padding: 0.25rem 0.75rem; font-size: 0.85rem; cursor: pointer; }
+        #base-url { width: 220px; }
+
+        #status-bar { padding: 0.25rem 1rem; font-size: 0.8rem; color: #666; font-style: italic; background: #fafafa; border-bottom: 1px solid #eee; }
+
+        #main { flex: 1; display: flex; position: relative; overflow: hidden; }
+
+        /* Left panel — resource list for selected page */
+        #resource-panel { width: 300px; min-width: 300px; background: #fff; border-right: 1px solid #ddd; display: flex; flex-direction: column; overflow: hidden; z-index: 20; }
+        #resource-panel.hidden { display: none; }
+        #resource-panel .panel-header { padding: 0.5rem 0.75rem; background: #f0f0f0; border-bottom: 1px solid #ddd; display: flex; justify-content: space-between; align-items: center; }
+        #resource-panel .panel-header h3 { font-size: 0.9rem; margin: 0; }
+        #resource-panel .panel-header button { background: none; border: none; cursor: pointer; font-size: 1rem; color: #666; }
+        #resource-panel .panel-header button:hover { color: #000; }
+        #resource-panel .panel-meta { padding: 0.4rem 0.75rem; font-size: 0.8rem; color: #555; border-bottom: 1px solid #eee; }
+        #resource-list { flex: 1; overflow-y: auto; }
+        #resource-list .res-item { padding: 0.35rem 0.75rem; font-size: 0.8rem; font-family: monospace; cursor: pointer; border-bottom: 1px solid #f0f0f0; word-break: break-all; }
+        #resource-list .res-item:hover { background: #e8f4fd; }
+
+        #cy { flex: 1; }
+
+        /* Right panel — node info */
+        #info-panel { width: 300px; min-width: 300px; background: #fff; border-left: 1px solid #ddd; overflow-y: auto; padding: 1rem; font-size: 0.85rem; display: none; z-index: 20; }
+        #info-panel.visible { display: block; }
+        #info-panel h3 { margin-bottom: 0.5rem; }
+        #info-panel .field { margin-bottom: 0.4rem; }
+        #info-panel .field-label { font-weight: 600; color: #555; }
+        #info-panel .field-value { font-family: monospace; word-break: break-all; }
+        #info-panel button { margin-top: 0.5rem; margin-right: 0.25rem; }
+
+        .legend { position: absolute; bottom: 10px; right: 10px; background: rgba(255,255,255,0.92); border: 1px solid #ccc; border-radius: 4px; padding: 0.5rem; font-size: 0.75rem; z-index: 10; }
+        .legend-item { display: flex; align-items: center; gap: 0.3rem; margin-bottom: 0.15rem; }
+        .legend-swatch { width: 12px; height: 12px; border-radius: 2px; }
+
+        .breadcrumb { padding: 0.25rem 1rem; font-size: 0.8rem; background: #eef; border-bottom: 1px solid #dde; }
+        .breadcrumb a { color: #457b9d; cursor: pointer; text-decoration: underline; }
+    </style>
+</head>
+<body>
+    <header>
+        <h1>Rós Madair Graph Explorer</h1>
+        <a href="./index.html">query demo</a>
+        <a href="./sparnatural.html">sparnatural</a>
+    </header>
+
+    <div class="controls">
+        <label for="base-url">Index:</label>
+        <input type="text" id="base-url" value="./static/index/">
+        <button onclick="initStore()">Load</button>
+        <button onclick="showOverview()" style="margin-left: 1rem;">Overview</button>
+    </div>
+
+    <div id="breadcrumb" class="breadcrumb" style="display:none;"></div>
+    <div id="status-bar">Loading WASM module...</div>
+
+    <div id="main">
+        <div id="resource-panel" class="hidden">
+            <div class="panel-header">
+                <h3 id="rp-title">Resources</h3>
+                <button onclick="closeResourcePanel()" title="Close">&times;</button>
+            </div>
+            <div id="rp-meta" class="panel-meta"></div>
+            <div id="resource-list"></div>
+        </div>
+        <div id="cy"></div>
+        <div id="info-panel">
+            <h3 id="info-title">Select a node</h3>
+            <div id="info-body"></div>
+        </div>
+        <div class="legend">
+            <div class="legend-item"><div class="legend-swatch" style="background:#e63946;"></div> Center resource</div>
+            <div class="legend-item"><div class="legend-swatch" style="background:#457b9d;"></div> Page node</div>
+            <div class="legend-item"><div class="legend-swatch" style="background:#457b9d; opacity:0.5;"></div> Selected page</div>
+        </div>
+    </div>
+
+    <script type="module">
+        let store = null;
+        let cy = null;
+        let pageMeta = [];
+        let graphNames = {};
+        let currentMode = 'overview'; // 'overview' | 'resource'
+        let centerUri = null;
+        let centerPageId = null;
+
+        // Semantic zoom state
+        const pageExpansionData = new Map(); // nodeId → { resources: [{uri, predUris}] | null, loading: bool }
+        const expandedPages = new Set();
+        let initialZoom = 1;
+        const EXPAND_ZOOM_FACTOR = 2.5;
+        let semanticZoomTimer = null;   // single shared timer across cy instances
+        let storeCallInFlight = false;  // prevent concurrent &mut self WASM calls
+        let semanticZoomEnabled = false; // gate until layout is stable
+        let priorityExpandNode = null;  // node ID to expand first (set on click)
+
+        const PAGE_COLORS = [
+            '#457b9d', '#e9c46a', '#f4a261', '#2a9d8f', '#264653',
+            '#6a4c93', '#1982c4', '#8ac926', '#ffca3a', '#ff595e',
+        ];
+        function colorForGraph(graphId) {
+            let hash = 0;
+            for (let i = 0; i < graphId.length; i++) hash = ((hash << 5) - hash + graphId.charCodeAt(i)) | 0;
+            return PAGE_COLORS[Math.abs(hash) % PAGE_COLORS.length];
+        }
+
+        function shortUri(uri) {
+            if (!uri) return '?';
+            const i = Math.max(uri.lastIndexOf('/'), uri.lastIndexOf('#'));
+            return i >= 0 ? uri.substring(i + 1) : uri;
+        }
+
+        function shortLabel(uri, maxLen = 10) {
+            const s = shortUri(uri);
+            return s.length > maxLen ? s.slice(0, maxLen) + '\u2026' : s;
+        }
+
+        function setStatus(msg) {
+            document.getElementById('status-bar').textContent = msg;
+        }
+
+        function setBreadcrumb(html) {
+            const el = document.getElementById('breadcrumb');
+            if (html) { el.innerHTML = html; el.style.display = ''; }
+            else { el.style.display = 'none'; }
+        }
+
+        // ---- Init ----
+        window.initStore = async function() {
+            try {
+                setStatus('Loading WASM module...');
+                const wasm = await import('./pkg/ros_madair_client.js');
+                await wasm.default();
+
+                setStatus('Loading index...');
+                const baseUrl = document.getElementById('base-url').value;
+                store = new wasm.SparqlStore(baseUrl);
+                await store.load_summary();
+
+                const metaStr = store.page_meta_json();
+                pageMeta = metaStr ? JSON.parse(metaStr) : [];
+
+                try {
+                    const resp = await fetch(baseUrl + 'aliz/resource_models/_all.json');
+                    if (resp.ok) {
+                        const graphs = await resp.json();
+                        for (const g of graphs) {
+                            if (g.graphid && g.name) {
+                                const name = typeof g.name === 'string' ? g.name : (g.name.en || g.name.value || Object.values(g.name)[0] || g.graphid);
+                                graphNames[g.graphid] = name;
+                            }
+                        }
+                    }
+                } catch (_) {}
+
+                setStatus(`Ready. ${pageMeta.length} pages.`);
+                showOverview();
+            } catch (e) {
+                setStatus(`Error: ${e}`);
+                console.error(e);
+            }
+        };
+
+        // ---- Cytoscape ----
+        function initCy() {
+            if (cy) cy.destroy();
+            // Cancel any pending semantic zoom timer from the old cy
+            if (semanticZoomTimer) { clearTimeout(semanticZoomTimer); semanticZoomTimer = null; }
+            semanticZoomEnabled = false;
+            cy = cytoscape({
+                container: document.getElementById('cy'),
+                style: [
+                    { selector: 'node', style: {
+                        'label': 'data(label)',
+                        'text-valign': 'center',
+                        'text-halign': 'center',
+                        'font-size': '10px',
+                        'text-wrap': 'wrap',
+                        'text-max-width': '120px',
+                        'color': '#fff',
+                        'text-outline-color': '#333',
+                        'text-outline-width': 1,
+                    }},
+                    { selector: 'node[type="page"]', style: {
+                        'shape': 'ellipse',
+                        'background-color': 'data(color)',
+                        'width': 'data(size)',
+                        'height': 'data(size)',
+                    }},
+                    { selector: 'node[type="page"].selected-page', style: {
+                        'border-width': 4,
+                        'border-color': '#e63946',
+                    }},
+                    { selector: 'node[type="center"]', style: {
+                        'shape': 'diamond',
+                        'background-color': '#e63946',
+                        'width': 50,
+                        'height': 50,
+                        'font-size': '11px',
+                        'font-weight': 'bold',
+                    }},
+                    { selector: 'node[type="page-connected"]', style: {
+                        'shape': 'ellipse',
+                        'background-color': 'data(color)',
+                        'width': 'data(size)',
+                        'height': 'data(size)',
+                    }},
+                    { selector: 'node[type="expanded-resource"]', style: {
+                        'shape': 'ellipse',
+                        'background-color': 'data(color)',
+                        'width': 8,
+                        'height': 8,
+                        'label': '',
+                        'border-width': 1,
+                        'border-color': '#fff',
+                    }},
+                    { selector: 'node[type="expanded-resource"].show-label', style: {
+                        'label': 'data(label)',
+                        'font-size': '5px',
+                        'text-valign': 'bottom',
+                        'text-margin-y': 3,
+                        'text-background-color': '#fff',
+                        'text-background-opacity': 0.85,
+                        'text-background-padding': '1px',
+                        'min-zoomed-font-size': 9,
+                    }},
+                    { selector: 'edge.page-expanded', style: {
+                        'opacity': 0.2,
+                        'width': 0.5,
+                        'label': '',
+                    }},
+                    { selector: 'edge', style: {
+                        'width': 'data(width)',
+                        'line-color': '#aaa',
+                        'target-arrow-color': '#aaa',
+                        'target-arrow-shape': 'triangle',
+                        'curve-style': 'bezier',
+                        'label': 'data(label)',
+                        'font-size': '6px',
+                        'text-rotation': 'autorotate',
+                        'text-background-color': '#fff',
+                        'text-background-opacity': 0.7,
+                        'text-background-padding': '2px',
+                        'color': '#555',
+                        'min-zoomed-font-size': 8,
+                    }},
+                    { selector: 'edge[direction="forward"]', style: {
+                        'line-color': '#457b9d',
+                        'target-arrow-color': '#457b9d',
+                    }},
+                    { selector: 'edge[direction="reverse"]', style: {
+                        'line-style': 'dashed',
+                        'line-color': '#aaa',
+                        'target-arrow-color': '#aaa',
+                    }},
+                ],
+                layout: { name: 'preset' },
+                wheelSensitivity: 0.3,
+            });
+
+            cy.on('tap', 'node', function(evt) {
+                const data = evt.target.data();
+                if (currentMode === 'overview' && data.type === 'page') {
+                    selectPageNode(data.pageId, evt.target);
+                } else if (currentMode === 'resource' && data.type === 'page-connected') {
+                    // Zoom to this page node to trigger semantic expansion
+                    priorityExpandNode = evt.target.id();
+                    const targetZoom = initialZoom * EXPAND_ZOOM_FACTOR * 1.2;
+                    cy.animate({ center: { eles: evt.target }, zoom: targetZoom }, { duration: 400 });
+                } else if (currentMode === 'resource' && data.type === 'expanded-resource') {
+                    exploreResource(data.uri);
+                } else {
+                    showInfo(data);
+                }
+            });
+
+            cy.on('mouseover', 'node[type="expanded-resource"]', function(evt) {
+                evt.target.addClass('show-label');
+                setStatus(evt.target.data('uri'));
+            });
+            cy.on('mouseout', 'node[type="expanded-resource"]', function(evt) {
+                evt.target.removeClass('show-label');
+            });
+
+            cy.on('tap', function(evt) {
+                if (evt.target === cy) {
+                    document.getElementById('info-panel').classList.remove('visible');
+                    setTimeout(() => cy.resize(), 50);
+                }
+            });
+
+            // Semantic zoom: single shared timer to prevent stale-cy races
+            cy.on('zoom pan', function() {
+                clearTimeout(semanticZoomTimer);
+                semanticZoomTimer = setTimeout(handleSemanticZoom, 150);
+            });
+        }
+
+        // ---- Overview mode: all pages + edges ----
+        window.showOverview = function() {
+            if (!store) return;
+            currentMode = 'overview';
+            centerUri = null;
+            centerPageId = null;
+            closeResourcePanel();
+            setBreadcrumb(null);
+            document.getElementById('info-panel').classList.remove('visible');
+
+            setStatus('Building page overview...');
+
+            const allQuadsStr = store.summary_all_quads();
+            const allQuads = allQuadsStr ? JSON.parse(allQuadsStr) : [];
+
+            initCy();
+            const elements = [];
+
+            // Page nodes
+            const pageSet = new Set();
+            for (const pm of pageMeta) {
+                pageSet.add(pm.page_id);
+                const graphId = pm.graph_id || '';
+                const gName = graphNames[graphId] || graphId;
+                const nodeSize = 30 + Math.min(Math.log2(pm.resource_count + 1) * 8, 35);
+                elements.push({
+                    data: {
+                        id: `page-${pm.page_id}`,
+                        label: `${shortUri(gName)}\nP${pm.page_id} (${pm.resource_count})`,
+                        type: 'page',
+                        pageId: pm.page_id,
+                        graphId: graphId,
+                        resourceCount: pm.resource_count,
+                        color: colorForGraph(graphId),
+                        size: nodeSize,
+                    },
+                });
+            }
+
+            // Aggregate edges by (page_s, page_o) — sum edge counts across predicates
+            // Only include edges where both endpoints are real pages (page_o can be
+            // a quantized literal bucket for non-link predicates)
+            const edgeMap = new Map();
+            let skippedQuads = 0;
+            for (const q of allQuads) {
+                if (q.page_s === q.page_o) continue; // skip self-loops
+                if (!pageSet.has(q.page_s) || !pageSet.has(q.page_o)) { skippedQuads++; continue; }
+                const key = `${q.page_s}->${q.page_o}`;
+                if (!edgeMap.has(key)) {
+                    edgeMap.set(key, { page_s: q.page_s, page_o: q.page_o, totalEdges: 0, preds: [] });
+                }
+                const e = edgeMap.get(key);
+                e.totalEdges += q.edge_count;
+                e.preds.push(shortUri(q.pred_uri));
+            }
+
+            for (const [key, e] of edgeMap) {
+                const uniquePreds = [...new Set(e.preds)];
+                const label = uniquePreds.length <= 2
+                    ? `${uniquePreds.join(', ')} (${e.totalEdges})`
+                    : `${uniquePreds.length} preds (${e.totalEdges})`;
+                elements.push({
+                    data: {
+                        id: `edge-${key}`,
+                        source: `page-${e.page_s}`,
+                        target: `page-${e.page_o}`,
+                        label: label,
+                        width: 1 + Math.min(Math.log2(e.totalEdges + 1) * 1.2, 5),
+                        direction: 'forward',
+                    },
+                });
+            }
+
+            cy.add(elements);
+
+            // Use cose layout for force-directed positioning
+            cy.layout({
+                name: 'cose',
+                animate: false,
+                nodeRepulsion: function() { return 8000; },
+                idealEdgeLength: function() { return 150; },
+                gravity: 0.3,
+                padding: 40,
+            }).run();
+
+            console.log(`Overview: ${pageMeta.length} pages in pageSet, ${allQuads.length} total quads, ${skippedQuads} skipped (non-page targets), ${edgeMap.size} page-level edges, ${elements.length} cytoscape elements`);
+            setStatus(`Overview: ${pageMeta.length} pages, ${edgeMap.size} page-level edges. Click a page to see its resources.`);
+        };
+
+        // ---- Select a page node in overview mode ----
+        function selectPageNode(pageId, cyNode) {
+            try {
+                // Highlight
+                cy.elements('node.selected-page').removeClass('selected-page');
+                if (cyNode) cyNode.addClass('selected-page');
+
+                const panel = document.getElementById('resource-panel');
+                const list = document.getElementById('resource-list');
+                const title = document.getElementById('rp-title');
+                const metaEl = document.getElementById('rp-meta');
+
+                const meta = pageMeta.find(m => m.page_id === pageId);
+                const gName = meta ? (graphNames[meta.graph_id] || meta.graph_id) : '?';
+
+                title.textContent = `Page ${pageId}`;
+                metaEl.innerHTML = `<strong>${gName}</strong> &middot; ${meta ? meta.resource_count : '?'} resources`;
+
+                // Load resource list
+                list.innerHTML = '<div style="padding:0.5rem;color:#999;">Loading...</div>';
+                panel.classList.remove('hidden');
+
+                const urisStr = store.resources_on_page(pageId);
+                const uris = urisStr ? JSON.parse(urisStr) : [];
+
+                if (uris.length === 0) {
+                    list.innerHTML = '<div style="padding:0.5rem;color:#999;">No resources found on this page.</div>';
+                    return;
+                }
+
+                list.innerHTML = '';
+                for (const uri of uris) {
+                    const item = document.createElement('div');
+                    item.className = 'res-item';
+                    item.textContent = shortUri(uri);
+                    item.title = uri;
+                    item.addEventListener('click', () => exploreResource(uri));
+                    list.appendChild(item);
+                }
+
+                setStatus(`Page ${pageId}: ${uris.length} resources listed. Click one to explore its connections.`);
+                // Tell cytoscape its container resized
+                setTimeout(() => cy.resize(), 50);
+            } catch (e) {
+                console.error('selectPageNode error:', e);
+                setStatus(`Error loading page ${pageId}: ${e}`);
+            }
+        }
+
+        window.closeResourcePanel = function() {
+            document.getElementById('resource-panel').classList.add('hidden');
+            if (cy) {
+                cy.elements('node.selected-page').removeClass('selected-page');
+                setTimeout(() => cy.resize(), 50);
+            }
+        };
+
+        // ---- Resource exploration mode ----
+        async function exploreResource(uri) {
+            if (!store) return;
+            currentMode = 'resource';
+            centerUri = uri;
+            closeResourcePanel();
+
+            setStatus(`Looking up ${shortUri(uri)}...`);
+
+            const pageVal = store.page_for_resource(uri);
+            if (pageVal === null || pageVal === undefined) {
+                setStatus(`Resource not found in index: ${uri}`);
+                return;
+            }
+            centerPageId = typeof pageVal === 'number' ? pageVal : Number(pageVal);
+
+            setBreadcrumb(`<a onclick="showOverview()">Overview</a> &rsaquo; <a onclick="selectPageFromBreadcrumb(${centerPageId})">Page ${centerPageId}</a> &rsaquo; <strong>${shortUri(uri)}</strong>`);
+
+            setStatus(`Loading connections for ${shortUri(uri)}...`);
+
+            const fwdStr = store.summary_from_page(centerPageId);
+            const revStr = store.summary_to_page(centerPageId);
+            const allFwd = fwdStr ? JSON.parse(fwdStr) : [];
+            const allRev = revStr ? JSON.parse(revStr) : [];
+
+            // Filter to real page-to-page links only (exclude concept/literal buckets)
+            const validPages = new Set(pageMeta.map(m => m.page_id));
+            const fwdQuads = allFwd.filter(q => validPages.has(q.page_o));
+            const revQuads = allRev.filter(q => validPages.has(q.page_s));
+
+            buildResourceGraph(uri, centerPageId, fwdQuads, revQuads);
+
+            const totalEdges = fwdQuads.reduce((s,q) => s + q.edge_count, 0) + revQuads.reduce((s,q) => s + q.edge_count, 0);
+            setStatus(`${shortUri(uri)} on page ${centerPageId}: ${fwdQuads.length} fwd quads, ${revQuads.length} rev quads (${allFwd.length - fwdQuads.length} concept buckets filtered). Click a page node for details.`);
+        }
+
+        window.selectPageFromBreadcrumb = function(pageId) {
+            showOverview();
+            // After overview builds, select the page
+            setTimeout(() => {
+                const node = cy.getElementById(`page-${pageId}`);
+                if (node.length) {
+                    selectPageNode(pageId, node);
+                    cy.animate({ center: { eles: node }, zoom: cy.zoom() }, { duration: 300 });
+                }
+            }, 100);
+        };
+
+        function buildResourceGraph(uri, pageId, fwdQuads, revQuads) {
+            initCy();
+            const elements = [];
+
+            // Center node
+            elements.push({
+                data: {
+                    id: 'center',
+                    label: shortUri(uri),
+                    type: 'center',
+                    uri: uri,
+                    pageId: pageId,
+                },
+                position: { x: 0, y: 0 },
+            });
+
+            // Aggregate by (page_id, direction)
+            const pageNodes = new Map();
+
+            for (const q of fwdQuads) {
+                if (q.page_o === pageId) continue;
+                const key = `fwd-${q.page_o}`;
+                if (!pageNodes.has(key)) pageNodes.set(key, { pageId: q.page_o, direction: 'forward', totalEdges: 0, predicates: [] });
+                const pn = pageNodes.get(key);
+                pn.totalEdges += q.edge_count;
+                pn.predicates.push(q);
+            }
+
+            for (const q of revQuads) {
+                if (q.page_s === pageId) continue;
+                const key = `rev-${q.page_s}`;
+                if (!pageNodes.has(key)) pageNodes.set(key, { pageId: q.page_s, direction: 'reverse', totalEdges: 0, predicates: [] });
+                const pn = pageNodes.get(key);
+                pn.totalEdges += q.edge_count;
+                pn.predicates.push(q);
+            }
+
+            const entries = Array.from(pageNodes.entries());
+            const radius = 200 + entries.length * 10;
+
+            for (let i = 0; i < entries.length; i++) {
+                const [key, pn] = entries[i];
+                const angle = (2 * Math.PI * i) / entries.length - Math.PI / 2;
+                const x = radius * Math.cos(angle);
+                const y = radius * Math.sin(angle);
+
+                const meta = pageMeta.find(m => m.page_id === pn.pageId);
+                const graphId = meta ? meta.graph_id : '';
+                const gName = graphNames[graphId] || graphId;
+                const nodeSize = 25 + Math.min(Math.log2(pn.totalEdges + 1) * 8, 40);
+
+                const nodeId = `page-${pn.pageId}-${pn.direction}`;
+                elements.push({
+                    data: {
+                        id: nodeId,
+                        label: `${gName ? shortUri(gName) : 'P' + pn.pageId}\n${pn.totalEdges} edges`,
+                        type: 'page-connected',
+                        pageId: pn.pageId,
+                        edgeCount: pn.totalEdges,
+                        color: colorForGraph(graphId),
+                        size: nodeSize,
+                        direction: pn.direction,
+                        predicatesJson: JSON.stringify(pn.predicates),
+                    },
+                    position: { x, y },
+                });
+
+                for (const q of pn.predicates) {
+                    const predLabel = shortUri(q.pred_uri);
+                    elements.push({
+                        data: {
+                            source: pn.direction === 'forward' ? 'center' : nodeId,
+                            target: pn.direction === 'forward' ? nodeId : 'center',
+                            label: `${predLabel} (${q.edge_count})`,
+                            width: 1 + Math.min(Math.log2(q.edge_count + 1) * 1.5, 6),
+                            direction: pn.direction,
+                            predUri: q.pred_uri,
+                        },
+                    });
+                }
+            }
+
+            cy.add(elements);
+            cy.fit(undefined, 40);
+            cy.getElementById('center').lock();
+
+            // Reset semantic zoom state
+            initialZoom = cy.zoom();
+            pageExpansionData.clear();
+            expandedPages.clear();
+            // Enable semantic zoom after a tick (skip any zoom events from layout)
+            setTimeout(() => { semanticZoomEnabled = true; }, 200);
+        }
+
+        // ---- Semantic zoom: expand/collapse page nodes ----
+
+        function handleSemanticZoom() {
+            if (!semanticZoomEnabled || currentMode !== 'resource' || !cy) return;
+            const zoom = cy.zoom();
+            const threshold = initialZoom * EXPAND_ZOOM_FACTOR;
+            const shouldExpand = zoom > threshold;
+            const ext = cy.extent(); // visible model-coordinate box
+
+            // Build node list with priority node first (if set)
+            const nodes = cy.nodes('[type="page-connected"]').toArray();
+            if (priorityExpandNode) {
+                const idx = nodes.findIndex(n => n.id() === priorityExpandNode);
+                if (idx > 0) {
+                    const [priority] = nodes.splice(idx, 1);
+                    nodes.unshift(priority);
+                }
+            }
+
+            for (const node of nodes) {
+                const nodeId = node.id();
+                const isExpanded = expandedPages.has(nodeId);
+                const pos = node.position();
+                const inViewport = pos.x >= ext.x1 && pos.x <= ext.x2
+                                && pos.y >= ext.y1 && pos.y <= ext.y2;
+
+                if (shouldExpand && !isExpanded && !storeCallInFlight && inViewport) {
+                    triggerExpand(node);
+                    // Clear priority after first use
+                    if (nodeId === priorityExpandNode) priorityExpandNode = null;
+                } else if (!shouldExpand && isExpanded) {
+                    collapsePageNode(node);
+                }
+            }
+        }
+
+        async function triggerExpand(pageNode) {
+            const nodeId = pageNode.id();
+            let cache = pageExpansionData.get(nodeId);
+
+            if (!cache) {
+                cache = { resources: null, loading: false };
+                pageExpansionData.set(nodeId, cache);
+            }
+
+            if (cache.resources) {
+                showExpandedResources(pageNode, cache.resources);
+                return;
+            }
+
+            if (cache.loading || storeCallInFlight) return;
+
+            cache.loading = true;
+            storeCallInFlight = true;
+            setStatus(`Loading resources for page ${pageNode.data('pageId')}...`);
+
+            try {
+                const resources = await fetchPageResources(pageNode.data());
+                cache.resources = resources;
+                cache.loading = false;
+                storeCallInFlight = false;
+
+                // Still zoomed in? Still in resource mode?
+                const zoom = cy.zoom();
+                const threshold = initialZoom * EXPAND_ZOOM_FACTOR;
+                if (zoom > threshold && currentMode === 'resource') {
+                    showExpandedResources(pageNode, resources);
+                }
+
+                // Re-trigger to expand other visible nodes now that lock is free
+                clearTimeout(semanticZoomTimer);
+                semanticZoomTimer = setTimeout(handleSemanticZoom, 50);
+            } catch (e) {
+                cache.loading = false;
+                storeCallInFlight = false;
+                console.error('Failed to load page resources:', e);
+                setStatus(`Error loading resources: ${e}`);
+            }
+        }
+
+        async function fetchPageResources(nodeData) {
+            const targetPageId = nodeData.pageId;
+            const predicates = JSON.parse(nodeData.predicatesJson || '[]');
+            const direction = nodeData.direction;
+            const connected = new Map(); // uri → Set of predUris
+
+            for (const q of predicates) {
+                if (direction === 'forward') {
+                    const recsStr = await store.load_predicate_records(centerPageId, q.pred_uri);
+                    const recs = JSON.parse(recsStr);
+                    for (const r of recs) {
+                        if (r.subject === centerUri && r.object) {
+                            const objPage = store.page_for_resource(r.object);
+                            if (objPage === targetPageId) {
+                                if (!connected.has(r.object)) connected.set(r.object, new Set());
+                                connected.get(r.object).add(q.pred_uri);
+                            }
+                        }
+                    }
+                } else {
+                    const recsStr = await store.load_predicate_records(targetPageId, q.pred_uri);
+                    const recs = JSON.parse(recsStr);
+                    for (const r of recs) {
+                        if (r.object === centerUri) {
+                            if (!connected.has(r.subject)) connected.set(r.subject, new Set());
+                            connected.get(r.subject).add(q.pred_uri);
+                        }
+                    }
+                }
+            }
+
+            return Array.from(connected.entries()).map(([uri, predUris]) => ({
+                uri,
+                predUris: Array.from(predUris),
+            }));
+        }
+
+        function showExpandedResources(pageNode, resources) {
+            const nodeId = pageNode.id();
+            if (expandedPages.has(nodeId)) return; // already showing
+            expandedPages.add(nodeId);
+
+            // Shrink page node to a dot — modify data so the data(size) mapper picks it up
+            pageNode.data('_origSize', pageNode.data('size'));
+            pageNode.data('_origLabel', pageNode.data('label'));
+            pageNode.data('size', 4);
+            pageNode.data('label', '');
+            pageNode.style({ 'opacity': 0.4, 'border-width': 0 });
+            pageNode.connectedEdges().addClass('page-expanded');
+
+            if (resources.length === 0) return; // nothing to show
+
+            const pos = pageNode.position();
+            const centerPos = cy.getElementById('center').position();
+            const direction = pageNode.data('direction');
+            const color = pageNode.data('color') || '#457b9d';
+
+            const maxShow = 30;
+            const shown = resources.slice(0, maxShow);
+
+            // Find nearest neighbour distance to cap the ring radius
+            let minNeighbourDist = Infinity;
+            cy.nodes().forEach(n => {
+                if (n.id() === nodeId) return;
+                const np = n.position();
+                const d = Math.sqrt((pos.x - np.x) ** 2 + (pos.y - np.y) ** 2);
+                if (d > 0 && d < minNeighbourDist) minNeighbourDist = d;
+            });
+            if (!isFinite(minNeighbourDist)) minNeighbourDist = 200;
+
+            // Circle radius: small enough to stay clear of neighbours,
+            // large enough that nodes don't pile on top of each other
+            const idealRadius = (shown.length * 12) / (2 * Math.PI);
+            const maxRadius = minNeighbourDist * 0.35;
+            const radius = Math.max(20, Math.min(idealRadius, maxRadius));
+            // Start the circle pointing away from center
+            const baseAngle = Math.atan2(pos.y - centerPos.y, pos.x - centerPos.x);
+
+            for (let i = 0; i < shown.length; i++) {
+                const { uri, predUris } = shown[i];
+                const angle = baseAngle + (2 * Math.PI * i) / shown.length;
+                const x = pos.x + radius * Math.cos(angle);
+                const y = pos.y + radius * Math.sin(angle);
+
+                const safeId = `res-${nodeId}-${i}`;
+
+                cy.add({
+                    data: {
+                        id: safeId,
+                        label: shortLabel(uri),
+                        type: 'expanded-resource',
+                        uri: uri,
+                        color: color,
+                        ownerPage: nodeId,
+                    },
+                    position: { x, y },
+                });
+
+                // Connect resource to the page hub node (no label — predicate shown on hub→center edge)
+                cy.add({
+                    data: {
+                        source: direction === 'forward' ? nodeId : safeId,
+                        target: direction === 'forward' ? safeId : nodeId,
+                        label: '',
+                        width: 0.5,
+                        direction: direction,
+                        ownerPage: nodeId,
+                    },
+                });
+            }
+
+            if (shown.length < resources.length) {
+                setStatus(`Showing ${shown.length} of ${resources.length} connected resources. Click one to explore.`);
+            } else {
+                setStatus(`${shown.length} connected resource(s). Click one to explore.`);
+            }
+        }
+
+        function collapsePageNode(pageNode) {
+            const nodeId = pageNode.id();
+            if (!expandedPages.has(nodeId)) return;
+            expandedPages.delete(nodeId);
+
+            // Remove expanded resource nodes and their edges
+            cy.elements(`[ownerPage="${nodeId}"]`).remove();
+
+            // Restore page node data + remove inline styles
+            pageNode.data('size', pageNode.data('_origSize'));
+            pageNode.data('label', pageNode.data('_origLabel'));
+            pageNode.removeStyle('opacity border-width');
+            pageNode.connectedEdges().removeClass('page-expanded');
+        }
+
+        function showInfo(data) {
+            const panel = document.getElementById('info-panel');
+            const title = document.getElementById('info-title');
+            const body = document.getElementById('info-body');
+            panel.classList.add('visible');
+            setTimeout(() => cy && cy.resize(), 50);
+
+            if (data.type === 'center') {
+                title.textContent = 'Center Resource';
+                body.innerHTML = `
+                    <div class="field"><span class="field-label">URI:</span><br><span class="field-value">${data.uri || ''}</span></div>
+                    <div class="field"><span class="field-label">Page:</span> <span class="field-value">${data.pageId}</span></div>
+                `;
+            } else if (data.type === 'page-connected') {
+                title.textContent = `Page ${data.pageId}`;
+                const meta = pageMeta.find(m => m.page_id === data.pageId);
+                const gName = meta ? (graphNames[meta.graph_id] || meta.graph_id) : '?';
+                body.innerHTML = `
+                    <div class="field"><span class="field-label">Graph:</span> <span class="field-value">${gName}</span></div>
+                    <div class="field"><span class="field-label">Resources:</span> <span class="field-value">${meta ? meta.resource_count : '?'}</span></div>
+                    <div class="field"><span class="field-label">Direction:</span> <span class="field-value">${data.direction}</span></div>
+                    <div class="field"><span class="field-label">Edges:</span> <span class="field-value">${data.edgeCount || '?'}</span></div>
+                    <button onclick="showOverviewAndSelect(${data.pageId})">Go to page</button>
+                `;
+            }
+        }
+
+        window.showOverviewAndSelect = function(pageId) {
+            showOverview();
+            setTimeout(() => {
+                const node = cy.getElementById(`page-${pageId}`);
+                if (node.length) {
+                    selectPageNode(pageId, node);
+                    cy.animate({ center: { eles: node }, zoom: cy.zoom() }, { duration: 300 });
+                }
+            }, 100);
+        };
+
+        // ---- Auto-init ----
+        if (location.hash) {
+            document.getElementById('base-url').value = location.hash.slice(1);
+        }
+        initStore();
+    </script>
+</body>
+</html>

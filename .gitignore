@@ -1,0 +1,15 @@
+# Local Node.js environment
+.nenv/
+
+# Built index data (including public datasets — large binary files)
+example/static/
+
+# WASM build output
+example/pkg/
+pkg/
+
+# Rust build
+target/
+
+# MkDocs build output
+site/

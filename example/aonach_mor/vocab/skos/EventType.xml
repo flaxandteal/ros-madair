@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rdf:RDF
+  xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+  xmlns:rdfs="http://www.w3.org/2000/01/rdf-schema#"
+  xmlns:skos="http://www.w3.org/2004/02/skos/core#"
+  xmlns:dcterms="http://purl.org/dc/terms/">
+  <!-- Aonach Mór controlled vocabulary: EventType. Generated on 2026-04-11 by example/aonach_mor/build/20_skos_collections.py. Do not hand-edit. -->
+  <skos:ConceptScheme rdf:about="https://rosmadair.example.org/aonach_mor/vocab/EventType">
+    <skos:prefLabel xml:lang="en">Scenario event type</skos:prefLabel>
+    <dcterms:description xml:lang="en">Scenario-rehearsal event category. Ties a named rehearsal to its hazard family for cross-scenario aggregation.</dcterms:description>
+  </skos:ConceptScheme>
+  <skos:Concept rdf:about="https://rosmadair.example.org/aonach_mor/vocab/EventType/cyclone_landfall">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/aonach_mor/vocab/EventType"/>
+    <skos:prefLabel xml:lang="en">Cyclone landfall</skos:prefLabel>
+    <skos:notation>1</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/aonach_mor/vocab/EventType/pluvial_flood">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/aonach_mor/vocab/EventType"/>
+    <skos:prefLabel xml:lang="en">Pluvial flood</skos:prefLabel>
+    <skos:notation>2</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/aonach_mor/vocab/EventType/coastal_flood">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/aonach_mor/vocab/EventType"/>
+    <skos:prefLabel xml:lang="en">Coastal flood</skos:prefLabel>
+    <skos:notation>3</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/aonach_mor/vocab/EventType/earthquake_event">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/aonach_mor/vocab/EventType"/>
+    <skos:prefLabel xml:lang="en">Earthquake</skos:prefLabel>
+    <skos:notation>4</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/aonach_mor/vocab/EventType/heatwave">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/aonach_mor/vocab/EventType"/>
+    <skos:prefLabel xml:lang="en">Heatwave</skos:prefLabel>
+    <skos:notation>5</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/aonach_mor/vocab/EventType/mass_gathering">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/aonach_mor/vocab/EventType"/>
+    <skos:prefLabel xml:lang="en">Mass-gathering incident</skos:prefLabel>
+    <skos:notation>6</skos:notation>
+  </skos:Concept>
+</rdf:RDF>

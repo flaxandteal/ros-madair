@@ -1,0 +1,201 @@
+# Build the Rós Madair docs site + Sparnatural / Alizarin example and
+# publish to GitHub Pages as a single artifact.
+#
+# Layout on Pages:
+#   /              → mkdocs Material docs (from docs/)
+#   /example/      → Sparnatural demo + Arches index (from example/)
+#
+# Manual trigger only by default — flip the `push` block on once you trust it.
+# Requires two repository secrets:
+#
+#   ALIZARIN_REPO          e.g. flaxandteal/alizarin   (public, no auth needed)
+#   CORAL_REPO_DEPLOY_KEY  SSH private key with read access to the (private)
+#                          prebuild dataset repo.
+#
+# And one repository variable:
+#
+#   CORAL_REPO             e.g. flaxandteal/coral-public-data (the Arches prebuild source)
+#
+# The heritage business data is ~150 MB; check the licence before publishing it
+# to a public Pages site. If the dataset can't be made public, scope the
+# Heritage Asset business_data files to a permitted subset in
+# build_sparnatural_assets.py before deploying.
+
+name: Deploy docs + example to GitHub Pages
+
+on:
+  workflow_dispatch:
+  # Uncomment after the first successful manual run:
+  # push:
+  #   branches: [main]
+  #   paths:
+  #     - 'crates/**'
+  #     - 'docs/**'
+  #     - 'example/**'
+  #     - 'mkdocs.yml'
+  #     - 'requirements-docs.txt'
+  #     - '.github/workflows/deploy-pages.yml'
+
+# Pages deploys need write permission for the deployment, plus id-token for OIDC.
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# One in-flight deploy at a time; cancel older runs so the latest commit wins.
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout RosMadair
+        uses: actions/checkout@v4
+        with:
+          path: rosmadair
+
+      - name: Checkout Alizarin (sibling JS/WASM SDK)
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ vars.ALIZARIN_REPO || 'flaxandteal/alizarin' }}
+          path: alizarin
+          # Pin via vars.ALIZARIN_REF if you want a specific tag/branch.
+          ref: ${{ vars.ALIZARIN_REF || 'main' }}
+
+      - name: Checkout Arches prebuild dataset (private)
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ vars.CORAL_REPO }}
+          path: coral_public
+          ssh-key: ${{ secrets.CORAL_REPO_DEPLOY_KEY }}
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Cache cargo registry & build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            rosmadair/target
+            alizarin/target
+          key: cargo-${{ runner.os }}-${{ hashFiles('rosmadair/Cargo.lock', 'alizarin/Cargo.lock') }}
+          restore-keys: cargo-${{ runner.os }}-
+
+      - name: Install wasm-pack
+        run: curl -sSf https://rustwasm.github.io/wasm-pack/installer/init.sh | sh
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: alizarin/package-lock.json
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: rosmadair/requirements-docs.txt
+
+      # ------------------------------------------------------------------ #
+      # Build the docs site (Zensical — successor to Material for MkDocs)
+      # ------------------------------------------------------------------ #
+      - name: Install docs dependencies
+        working-directory: rosmadair
+        run: pip install -r requirements-docs.txt
+
+      - name: Build docs site
+        working-directory: rosmadair
+        run: zensical build --clean
+
+      # ------------------------------------------------------------------ #
+      # Build Alizarin (TypeScript SDK + WASM core)
+      # ------------------------------------------------------------------ #
+      - name: Build Alizarin
+        working-directory: alizarin
+        run: |
+          npm ci
+          npm run build
+
+      # ------------------------------------------------------------------ #
+      # Build the Rós Madair WASM client
+      # ------------------------------------------------------------------ #
+      - name: Build ros-madair-client (wasm-pack)
+        working-directory: rosmadair
+        run: |
+          wasm-pack build crates/ros-madair-client \
+            --target web \
+            --release \
+            --out-dir ../../example/pkg
+
+      # ------------------------------------------------------------------ #
+      # Build the static index from the Arches prebuild
+      # ------------------------------------------------------------------ #
+      - name: Build index (cargo run --example build_from_prebuild)
+        working-directory: rosmadair
+        run: |
+          cargo run --release --example build_from_prebuild -- \
+            "$GITHUB_WORKSPACE/coral_public/pkg" \
+            example/static/index
+
+      # ------------------------------------------------------------------ #
+      # Build Sparnatural assets (config.ttl, concept JSON, aliz/ tree)
+      # ------------------------------------------------------------------ #
+      - name: Build Sparnatural assets
+        working-directory: rosmadair
+        env:
+          PREBUILD_PKG: ${{ github.workspace }}/coral_public/pkg
+          ALIZARIN_DIST: ${{ github.workspace }}/alizarin/dist
+        run: python3 example/build_sparnatural_assets.py
+
+      # ------------------------------------------------------------------ #
+      # Strip files that mustn't ship to Pages:
+      #   - all.nt is ~277 MB raw triples and is only used by build tooling.
+      #     It's both above GitHub's 100 MB per-file limit and pointless to
+      #     download in the browser.
+      # ------------------------------------------------------------------ #
+      - name: Prune example tree
+        working-directory: rosmadair
+        run: |
+          rm -f example/static/index/all.nt
+          du -sh example
+          find example -name 'all.nt' -size +50M -print -exec false {} +
+
+      # ------------------------------------------------------------------ #
+      # Compose the deploy tree:
+      #   site/           ← mkdocs output (docs at root)
+      #   site/example/   ← Sparnatural demo + Arches index
+      #   site/.nojekyll  ← stop Jekyll eating _resource_index.json etc.
+      # ------------------------------------------------------------------ #
+      - name: Compose deploy tree
+        working-directory: rosmadair
+        run: |
+          cp -a example site/example
+          touch site/.nojekyll
+          du -sh site
+          du -sh site/example
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: rosmadair/site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

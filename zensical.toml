@@ -1,0 +1,88 @@
+# Zensical configuration for the Rós Madair docs site.
+#
+# Ported from mkdocs.yml on the strength of Squidfunk's 2026-02-18 announcement
+# that Material for MkDocs is entering maintenance mode ahead of MkDocs 2.0.
+# Zensical is the drop-in replacement from the same team, Rust-cored and
+# MIT-licensed. It's currently at 0.0.x (alpha) so we pin narrowly in
+# requirements-docs.txt; most Material features map across unchanged because
+# Zensical preserves the same HTML structure and data-md-color-scheme hooks.
+
+[project]
+
+site_name = "Rós Madair"
+site_description = "Browser-side SPARQL over static page files — query heritage graph data from a CDN"
+site_url = "https://flaxandteal.github.io/ros-madair/"
+
+# Repository link in the header; powers the "edit this page" feature too.
+repo_url = "https://github.com/flaxandteal/ros-madair"
+repo_name = "flaxandteal/ros-madair"
+
+copyright = """
+Copyright &copy; 2026 Flax &amp; Teal Limited
+"""
+
+# Explicit navigation tree. Same shape as mkdocs.yml `nav`, expressed as a
+# TOML array of single-key tables (or nested arrays for sections).
+nav = [
+  { "Home" = "index.md" },
+  { "Getting Started" = [
+    { "Installation" = "getting-started/installation.md" },
+    { "Quick Start" = "getting-started/quickstart.md" },
+  ] },
+  { "How It Works" = [
+    { "Overview" = "how-it-works/overview.md" },
+    { "Data Structures" = "how-it-works/data-structures.md" },
+    { "Query Execution" = "how-it-works/query-execution.md" },
+    { "Optimisations" = "how-it-works/optimisations.md" },
+  ] },
+  { "Reference" = [
+    { "Binary Formats" = "reference/binary-formats.md" },
+    { "Builder API" = "reference/builder-api.md" },
+  ] },
+]
+
+# Brand stylesheet — defines the rosmadair/slate palette overrides and the
+# .rm-hero / .rm-features classes used on the landing page.
+extra_css = ["stylesheets/extra.css"]
+
+# ----------------------------------------------------------------------------
+# Theme
+# ----------------------------------------------------------------------------
+[project.theme]
+
+language = "en"
+
+features = [
+  "content.code.annotate",
+  "content.code.copy",
+  "navigation.instant",
+  "navigation.instant.prefetch",
+  "navigation.sections",
+  "navigation.tabs",
+  "navigation.top",
+  "navigation.tracking",
+  "search.highlight",
+]
+
+[project.theme.font]
+text = "Inter"
+code = "JetBrains Mono"
+
+# ----------------------------------------------------------------------------
+# Palette — two schemes, both driven by our extra.css.
+# "primary = custom" / "accent = custom" tells Zensical not to apply its
+# built-in colour variables so our [data-md-color-scheme="..."] rules win.
+# ----------------------------------------------------------------------------
+[[project.theme.palette]]
+scheme = "rosmadair"
+primary = "custom"
+accent = "custom"
+toggle.icon = "lucide/sun"
+toggle.name = "Switch to dark mode"
+
+[[project.theme.palette]]
+scheme = "slate"
+primary = "custom"
+accent = "custom"
+toggle.icon = "lucide/moon"
+toggle.name = "Switch to light mode"

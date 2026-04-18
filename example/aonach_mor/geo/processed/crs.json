@@ -1,0 +1,15 @@
+{
+  "name": "Aonach Mór local TM",
+  "proj4": "+proj=tmerc +lat_0=13.0 +lon_0=80.25 +k=0.9996 +x_0=500000 +y_0=1000000 +ellps=WGS84 +datum=WGS84 +units=m +no_defs",
+  "wkt_note": "Not registered with EPSG. Project-internal transverse-Mercator CRS centred on the source geography's central meridian. Downstream area / distance computations use this; stored GeoJSON remains in EPSG:4326 until the CRS-rebranding stage.",
+  "center_lon_lat": [
+    80.25,
+    13.0
+  ],
+  "lon_of_origin": 80.25,
+  "lat_of_origin": 13.0,
+  "scale_factor": 0.9996,
+  "false_easting_m": 500000,
+  "false_northing_m": 1000000,
+  "ellipsoid": "WGS84"
+}

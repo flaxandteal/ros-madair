@@ -1,0 +1,40 @@
+{
+  "type": "FeatureCollection",
+  "features": [
+    {
+      "type": "Feature",
+      "properties": {
+        "name": "Aonach M\u00f3r study area bbox",
+        "description": "Axis-aligned bounding box of the 13 iconic Chennai wards, padded by ~0.04 degrees. Used as the spatial filter for all Stage 1 Overpass queries.",
+        "source": "computed from ICONIC_WARDS in 01_geography.py"
+      },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              80.17999999999999,
+              12.894
+            ],
+            [
+              80.36200000000001,
+              12.894
+            ],
+            [
+              80.36200000000001,
+              13.254999999999999
+            ],
+            [
+              80.17999999999999,
+              13.254999999999999
+            ],
+            [
+              80.17999999999999,
+              12.894
+            ]
+          ]
+        ]
+      }
+    }
+  ]
+}

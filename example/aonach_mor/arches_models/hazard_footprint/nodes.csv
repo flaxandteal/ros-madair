@@ -1,0 +1,12 @@
+parent_alias,alias,name,datatype,cardinality,ontology_class,parent_property,description,collection_name,required,searchable,exportable,sortorder
+,name,Name,string,1,http://www.cidoc-crm.org/cidoc-crm/E41_Appellation,http://www.cidoc-crm.org/cidoc-crm/P1_is_identified_by,Human-readable footprint name.,,true,true,true,1
+,hazard_type,Hazard type,concept,1,http://www.cidoc-crm.org/cidoc-crm/E55_Type,http://www.cidoc-crm.org/cidoc-crm/P2_has_type,Hazard family this footprint describes.,HazardType,false,true,true,2
+,intensity_band,Intensity band,concept,1,http://www.cidoc-crm.org/cidoc-crm/E55_Type,http://www.cidoc-crm.org/cidoc-crm/P2_has_type,Hazard-family-prefixed intensity band (from the IntensityBand collection).,IntensityBand,false,true,true,3
+,severity_band,Severity band,concept,1,http://www.cidoc-crm.org/cidoc-crm/E55_Type,http://www.cidoc-crm.org/cidoc-crm/P2_has_type,Overall severity classification.,SeverityBand,false,true,true,4
+,geometry,Geometry,geojson-feature-collection,1,http://www.opengis.net/ont/geosparql#Geometry,http://www.opengis.net/ont/geosparql#hasGeometry,GeoSPARQL geometry for the footprint polygon (or polygon set).,,false,false,true,5
+,phenomenon_span,Phenomenon time-span,semantic,1,http://www.cidoc-crm.org/cidoc-crm/E52_Time-Span,http://www.w3.org/ns/sosa/phenomenonTime,Time-span during which the modelled phenomenon occurs.,,false,false,true,6
+phenomenon_span,phenomenon_start,Phenomenon start,date,1,http://www.cidoc-crm.org/cidoc-crm/E61_Time_Primitive,http://www.cidoc-crm.org/cidoc-crm/P82a_begin_of_the_begin,Earliest time the modelled phenomenon begins.,,false,false,true,7
+phenomenon_span,phenomenon_end,Phenomenon end,date,1,http://www.cidoc-crm.org/cidoc-crm/E61_Time_Primitive,http://www.cidoc-crm.org/cidoc-crm/P82b_end_of_the_end,Latest time the modelled phenomenon ends.,,false,false,true,8
+,produced_by_model,Produced by model,resource-instance,1,http://www.w3.org/ns/sosa/Procedure,http://www.w3.org/ns/sosa/usedProcedure,HazardModel (sosa:Procedure) that produced this footprint.,,false,true,true,9
+,confidence,Confidence,concept,1,http://www.cidoc-crm.org/cidoc-crm/E55_Type,http://www.cidoc-crm.org/cidoc-crm/P2_has_type,Confidence band for this footprint.,ConfidenceBand,false,true,true,10
+,notes,Notes,string,1,http://www.cidoc-crm.org/cidoc-crm/E62_String,http://www.cidoc-crm.org/cidoc-crm/P3_has_note,Free-text reviewer notes.,,false,false,true,11

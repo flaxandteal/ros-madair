@@ -1,0 +1,2 @@
+name,ontology_class,author,description,is_resource
+Exposure,http://www.w3.org/ns/prov#Entity,Flax & Teal Limited,"Per-asset exposure record in the Aonach Mór resilience demo. Ties a Building (about_building via P67_refers_to) to a HazardFootprint (from_footprint via prov:wasDerivedFrom) and carries affected-count and affected-value dimensions plus severity and confidence bands.",true

@@ -1,0 +1,43 @@
+{
+  "type": "FeatureCollection",
+  "metadata": {
+    "source": "bbox.geojson",
+    "license_note": "Derived via the Aonach Mór rename pipeline; all upstream labels substituted or stripped."
+  },
+  "features": [
+    {
+      "type": "Feature",
+      "properties": {
+        "name": "Droichead Ard 17",
+        "feature_id": "435d6184fb"
+      },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              80.17999999999999,
+              12.894
+            ],
+            [
+              80.36200000000001,
+              12.894
+            ],
+            [
+              80.36200000000001,
+              13.254999999999999
+            ],
+            [
+              80.17999999999999,
+              13.254999999999999
+            ],
+            [
+              80.17999999999999,
+              12.894
+            ]
+          ]
+        ]
+      }
+    }
+  ]
+}

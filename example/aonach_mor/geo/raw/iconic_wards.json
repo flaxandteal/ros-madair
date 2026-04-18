@@ -1,0 +1,96 @@
+{
+  "description": "The 13 'iconic' Chennai wards the Aonach M\u00f3r demo focuses on, each with a representative seed point used in Stage 2 to look up the containing ward polygon. Cluster tags refer to the ClusterType concept collection in vocab/skos/ClusterType.xml.",
+  "wards": [
+    {
+      "key": "marina",
+      "chennai_label": "Marina Beach",
+      "cluster": "coastal",
+      "seed_lon": 80.283,
+      "seed_lat": 13.05
+    },
+    {
+      "key": "besant_nagar",
+      "chennai_label": "Besant Nagar",
+      "cluster": "coastal",
+      "seed_lon": 80.267,
+      "seed_lat": 12.9985
+    },
+    {
+      "key": "foreshore_estate",
+      "chennai_label": "Foreshore Estate",
+      "cluster": "coastal",
+      "seed_lon": 80.28,
+      "seed_lat": 13.038
+    },
+    {
+      "key": "kotturpuram",
+      "chennai_label": "Kotturpuram",
+      "cluster": "riverine",
+      "seed_lon": 80.244,
+      "seed_lat": 13.0175
+    },
+    {
+      "key": "saidapet",
+      "chennai_label": "Saidapet",
+      "cluster": "riverine",
+      "seed_lon": 80.227,
+      "seed_lat": 13.022
+    },
+    {
+      "key": "t_nagar",
+      "chennai_label": "T. Nagar",
+      "cluster": "commercial",
+      "seed_lon": 80.234,
+      "seed_lat": 13.041
+    },
+    {
+      "key": "nungambakkam",
+      "chennai_label": "Nungambakkam",
+      "cluster": "commercial",
+      "seed_lon": 80.241,
+      "seed_lat": 13.058
+    },
+    {
+      "key": "royapuram",
+      "chennai_label": "Royapuram",
+      "cluster": "port",
+      "seed_lon": 80.294,
+      "seed_lat": 13.101
+    },
+    {
+      "key": "ennore_fringe",
+      "chennai_label": "Ennore fringe",
+      "cluster": "port",
+      "seed_lon": 80.322,
+      "seed_lat": 13.215
+    },
+    {
+      "key": "triplicane",
+      "chennai_label": "Triplicane",
+      "cluster": "heritage",
+      "seed_lon": 80.276,
+      "seed_lat": 13.057
+    },
+    {
+      "key": "mylapore",
+      "chennai_label": "Mylapore",
+      "cluster": "heritage",
+      "seed_lon": 80.268,
+      "seed_lat": 13.033
+    },
+    {
+      "key": "velachery",
+      "chennai_label": "Velachery",
+      "cluster": "peri-urban",
+      "seed_lon": 80.22,
+      "seed_lat": 12.977
+    },
+    {
+      "key": "omr_edge",
+      "chennai_label": "OMR corridor edge",
+      "cluster": "peri-urban",
+      "seed_lon": 80.241,
+      "seed_lat": 12.934
+    }
+  ]
+}

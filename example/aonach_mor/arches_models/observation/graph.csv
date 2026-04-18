@@ -1,0 +1,2 @@
+name,ontology_class,author,description,is_resource
+Observation,http://www.w3.org/ns/sosa/Observation,Flax & Teal Limited,"SOSA observation record in the Aonach Mór resilience demo. Links a Sensor (sosa:madeBySensor) to a Site feature-of-interest (sosa:hasFeatureOfInterest) and an ObservableProperty, with a scalar result value plus intensity and confidence bands.",true

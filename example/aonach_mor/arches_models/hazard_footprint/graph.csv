@@ -1,0 +1,2 @@
+name,ontology_class,author,description,is_resource
+HazardFootprint,http://www.w3.org/ns/prov#Entity,Flax & Teal Limited,"A spatialised hazard output in the Aonach Mór resilience demo. Carries a GeoSPARQL geometry, an intensity band, a phenomenon time-span, and a sosa:usedProcedure link back to the HazardModel that produced it. Rooted at prov:Entity so provenance relationships (wasDerivedFrom, wasAttributedTo) are first-class.",true

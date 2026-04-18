@@ -1,0 +1,2 @@
+name,ontology_class,author,description,is_resource
+InsuranceCoverage,https://rosmadair.example.org/aonach_mor/ins#InsuranceCoverage,Flax & Teal Limited,"A coverage line item in the Aonach Mór resilience demo. Each coverage attaches to an InsurancePolicy (via part_of_policy) and a list of covered Building resources, carrying a coverage type and a limit band drawn from local SKOS.",true

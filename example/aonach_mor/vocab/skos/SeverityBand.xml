@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rdf:RDF
+  xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+  xmlns:rdfs="http://www.w3.org/2000/01/rdf-schema#"
+  xmlns:skos="http://www.w3.org/2004/02/skos/core#"
+  xmlns:dcterms="http://purl.org/dc/terms/">
+  <!-- Aonach Mór controlled vocabulary: SeverityBand. Generated on 2026-04-11 by example/aonach_mor/build/20_skos_collections.py. Do not hand-edit. -->
+  <skos:ConceptScheme rdf:about="https://rosmadair.example.org/aonach_mor/vocab/SeverityBand">
+    <skos:prefLabel xml:lang="en">Severity band</skos:prefLabel>
+    <dcterms:description xml:lang="en">Generic severity/impact banding shared across hazard types.</dcterms:description>
+  </skos:ConceptScheme>
+  <skos:Concept rdf:about="https://rosmadair.example.org/aonach_mor/vocab/SeverityBand/low">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/aonach_mor/vocab/SeverityBand"/>
+    <skos:prefLabel xml:lang="en">Low</skos:prefLabel>
+    <skos:notation>1</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/aonach_mor/vocab/SeverityBand/medium">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/aonach_mor/vocab/SeverityBand"/>
+    <skos:prefLabel xml:lang="en">Medium</skos:prefLabel>
+    <skos:notation>2</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/aonach_mor/vocab/SeverityBand/high">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/aonach_mor/vocab/SeverityBand"/>
+    <skos:prefLabel xml:lang="en">High</skos:prefLabel>
+    <skos:notation>3</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/aonach_mor/vocab/SeverityBand/very_high">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/aonach_mor/vocab/SeverityBand"/>
+    <skos:prefLabel xml:lang="en">Very high</skos:prefLabel>
+    <skos:notation>4</skos:notation>
+  </skos:Concept>
+</rdf:RDF>

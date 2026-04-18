@@ -1,0 +1,179 @@
+/*
+ * Rós Madair / Rose Madder / Alizarin brand theme
+ *
+ * Primary:  #e32636  (Alizarin crimson)
+ * Accent:   #27c7bd  (teal)
+ * Dark bg:  #1a1017  (deep rose-black)
+ * Muted:    #b5838d  (dusty rose)
+ */
+
+:root {
+  --rm-red: #e32636;
+  --rm-red-dark: #b91c2a;
+  --rm-teal: #27c7bd;
+  --rm-teal-dark: #1fa89f;
+  --rm-rose-black: #1a1017;
+  --rm-rose-muted: #b5838d;
+  --rm-parchment: #faf5f0;
+}
+
+/* Light scheme overrides */
+[data-md-color-scheme="rosmadair"] {
+  --md-primary-fg-color: #e32636;
+  --md-primary-bg-color: #ffffff;
+  --md-accent-fg-color: #27c7bd;
+  --md-default-bg-color: #faf5f0;
+  --md-typeset-a-color: #b91c2a;
+}
+
+/* Dark scheme overrides */
+[data-md-color-scheme="slate"] {
+  --md-primary-fg-color: #e32636;
+  --md-primary-bg-color: #1a1017;
+  --md-accent-fg-color: #27c7bd;
+  --md-default-bg-color: #1e1218;
+}
+
+/* Hero / splash section on the landing page */
+.rm-hero {
+  padding: 4rem 1rem 3rem;
+  text-align: center;
+  background: linear-gradient(135deg, #e32636 0%, #b91c2a 60%, #1a1017 100%);
+  color: #fff;
+  border-radius: 0 0 1.5rem 1.5rem;
+  margin: -1rem -0.8rem 2rem;
+}
+
+.rm-hero h1 {
+  font-size: 3.2rem;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  margin: 0 0 0.25rem;
+  line-height: 1.1;
+}
+
+.rm-hero .rm-subtitle {
+  font-size: 1.15rem;
+  color: #27c7bd;
+  font-weight: 600;
+  margin: 0 0 1.5rem;
+  letter-spacing: 0.02em;
+}
+
+.rm-hero .rm-tagline {
+  font-size: 1rem;
+  color: rgba(255, 255, 255, 0.85);
+  max-width: 38rem;
+  margin: 0 auto 2rem;
+  line-height: 1.6;
+}
+
+.rm-hero .rm-actions {
+  display: flex;
+  gap: 1rem;
+  justify-content: center;
+  flex-wrap: wrap;
+}
+
+.rm-hero .rm-actions a {
+  display: inline-block;
+  padding: 0.7rem 1.6rem;
+  border-radius: 0.5rem;
+  font-weight: 600;
+  text-decoration: none;
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+
+.rm-hero .rm-actions a:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+}
+
+.rm-hero .rm-btn-primary {
+  background: #27c7bd;
+  color: #1a1017;
+}
+
+.rm-hero .rm-btn-secondary {
+  background: rgba(255, 255, 255, 0.15);
+  color: #fff;
+  border: 1px solid rgba(255, 255, 255, 0.3);
+}
+
+/* Feature cards on landing page */
+.rm-features {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr));
+  gap: 1.5rem;
+  margin: 2rem 0;
+}
+
+.rm-feature {
+  padding: 1.5rem;
+  border-radius: 0.75rem;
+  border: 1px solid rgba(181, 131, 141, 0.2);
+  transition: border-color 0.2s;
+}
+
+.rm-feature:hover {
+  border-color: #27c7bd;
+}
+
+.rm-feature h3 {
+  margin-top: 0;
+  color: #e32636;
+}
+
+[data-md-color-scheme="slate"] .rm-feature h3 {
+  color: #27c7bd;
+}
+
+/* Stat highlight boxes */
+.rm-stats {
+  display: flex;
+  gap: 1.5rem;
+  justify-content: center;
+  flex-wrap: wrap;
+  margin: 2rem 0;
+}
+
+.rm-stat {
+  text-align: center;
+  padding: 1rem;
+}
+
+.rm-stat .rm-stat-value {
+  font-size: 2rem;
+  font-weight: 800;
+  color: #e32636;
+  line-height: 1;
+}
+
+[data-md-color-scheme="slate"] .rm-stat .rm-stat-value {
+  color: #27c7bd;
+}
+
+.rm-stat .rm-stat-label {
+  font-size: 0.85rem;
+  color: #b5838d;
+  margin-top: 0.25rem;
+}
+
+/* Accent line (matching the Alizarin banner) */
+.rm-accent-line {
+  width: 6rem;
+  height: 3px;
+  background: #27c7bd;
+  margin: 1.5rem auto;
+  border-radius: 2px;
+}
+
+/* Code block accent */
+.md-typeset code {
+  border-radius: 0.25rem;
+}
+
+/* Nav tab highlight */
+.md-tabs__link--active {
+  border-bottom: 2px solid #27c7bd;
+}

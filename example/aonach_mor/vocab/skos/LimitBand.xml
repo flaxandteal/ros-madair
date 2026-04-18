@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rdf:RDF
+  xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+  xmlns:rdfs="http://www.w3.org/2000/01/rdf-schema#"
+  xmlns:skos="http://www.w3.org/2004/02/skos/core#"
+  xmlns:dcterms="http://purl.org/dc/terms/">
+  <!-- Aonach Mór controlled vocabulary: LimitBand. Generated on 2026-04-11 by example/aonach_mor/build/20_skos_collections.py. Do not hand-edit. -->
+  <skos:ConceptScheme rdf:about="https://rosmadair.example.org/aonach_mor/vocab/LimitBand">
+    <skos:prefLabel xml:lang="en">Policy limit band</skos:prefLabel>
+    <dcterms:description xml:lang="en">Log-banded policy / coverage limit ranges, stored as concepts so the insurer view can aggregate without de-anonymising individual policies.</dcterms:description>
+  </skos:ConceptScheme>
+  <skos:Concept rdf:about="https://rosmadair.example.org/aonach_mor/vocab/LimitBand/band_under_10k">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/aonach_mor/vocab/LimitBand"/>
+    <skos:prefLabel xml:lang="en">Under 10 k</skos:prefLabel>
+    <skos:notation>1</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/aonach_mor/vocab/LimitBand/band_10k_100k">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/aonach_mor/vocab/LimitBand"/>
+    <skos:prefLabel xml:lang="en">10 k – 100 k</skos:prefLabel>
+    <skos:notation>2</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/aonach_mor/vocab/LimitBand/band_100k_1m">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/aonach_mor/vocab/LimitBand"/>
+    <skos:prefLabel xml:lang="en">100 k – 1 m</skos:prefLabel>
+    <skos:notation>3</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/aonach_mor/vocab/LimitBand/band_1m_10m">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/aonach_mor/vocab/LimitBand"/>
+    <skos:prefLabel xml:lang="en">1 m – 10 m</skos:prefLabel>
+    <skos:notation>4</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/aonach_mor/vocab/LimitBand/band_10m_100m">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/aonach_mor/vocab/LimitBand"/>
+    <skos:prefLabel xml:lang="en">10 m – 100 m</skos:prefLabel>
+    <skos:notation>5</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/aonach_mor/vocab/LimitBand/band_over_100m">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/aonach_mor/vocab/LimitBand"/>
+    <skos:prefLabel xml:lang="en">Over 100 m</skos:prefLabel>
+    <skos:notation>6</skos:notation>
+  </skos:Concept>
+</rdf:RDF>

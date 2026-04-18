@@ -1,0 +1,2 @@
+name,ontology_class,author,description,is_resource
+Sensor,http://www.w3.org/ns/sosa/Sensor,Flax & Teal Limited,"SOSA sensor in the Aonach Mór resilience demo. Deployed at a Site, observes one or more ObservableProperty concepts, and feeds into Observation records. Naming / location / deployment-time patterns reuse CIDOC-CRM; sensor-specific relationships use SOSA.",true

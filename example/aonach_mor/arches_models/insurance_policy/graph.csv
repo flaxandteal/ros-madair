@@ -1,0 +1,2 @@
+name,ontology_class,author,description,is_resource
+InsurancePolicy,https://rosmadair.example.org/aonach_mor/ins#InsurancePolicy,Flax & Teal Limited,"An insurance policy instance in the Aonach Mór resilience demo. Uses a local insurance ontology (because FIBO has no insurance module, Riskine is JSON Schema, and ACORD is member-restricted). Holds insurer/insured_party references to Organisation resources plus an effective-period time-span.",true

@@ -1,0 +1,18 @@
+# Zensical docs site dependencies.
+#
+# We deliberately moved off mkdocs + Material for MkDocs here. Squidfunk's
+# 2026-02-18 blog post put mkdocs 2.0 (which removes the plugin system and
+# rewrites the theming layer) on a collision course with Material and every
+# third-party plugin. Zensical is the same team's Rust-cored drop-in
+# replacement, MIT licensed, and preserves Material's HTML structure so our
+# existing docs/stylesheets/extra.css (data-md-color-scheme hooks, .rm-hero,
+# .rm-features) keeps working.
+#
+#   https://squidfunk.github.io/mkdocs-material/blog/2026/02/18/mkdocs-2.0/
+#   https://zensical.org/
+#
+# Zensical is currently 0.0.x — feature work is ongoing and the CLI/config
+# surface can still shift. Pin narrowly so a stray `pip install -U` can't
+# break the docs build between releases.
+
+zensical>=0.0.32,<0.1

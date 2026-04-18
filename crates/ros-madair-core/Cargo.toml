@@ -1,0 +1,21 @@
+[package]
+name = "ros-madair-core"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
+description = "Core logic for RosMadair: RDF export, page-based indexing, and summary quads"
+
+[dependencies]
+alizarin-core = { path = "../../../alizarin/crates/alizarin-core" }
+spargebra = "0.3"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+geojson = "0.24"
+thiserror = "2"
+
+[dev-dependencies]
+pretty_assertions = "1"

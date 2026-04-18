@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rdf:RDF
+  xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+  xmlns:rdfs="http://www.w3.org/2000/01/rdf-schema#"
+  xmlns:skos="http://www.w3.org/2004/02/skos/core#"
+  xmlns:dcterms="http://purl.org/dc/terms/">
+  <!-- Aonach Mór controlled vocabulary: ObservableProperty. Generated on 2026-04-11 by example/aonach_mor/build/20_skos_collections.py. Do not hand-edit. -->
+  <skos:ConceptScheme rdf:about="https://rosmadair.example.org/aonach_mor/vocab/ObservableProperty">
+    <skos:prefLabel xml:lang="en">Observable property</skos:prefLabel>
+    <dcterms:description xml:lang="en">SOSA observable-property classifier — what a given observation actually measures. Paired one-to-many with SensorType.</dcterms:description>
+  </skos:ConceptScheme>
+  <skos:Concept rdf:about="https://rosmadair.example.org/aonach_mor/vocab/ObservableProperty/water_level">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/aonach_mor/vocab/ObservableProperty"/>
+    <skos:prefLabel xml:lang="en">Water level (m)</skos:prefLabel>
+    <skos:notation>1</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/aonach_mor/vocab/ObservableProperty/wind_speed">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/aonach_mor/vocab/ObservableProperty"/>
+    <skos:prefLabel xml:lang="en">Wind speed (m/s)</skos:prefLabel>
+    <skos:notation>2</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/aonach_mor/vocab/ObservableProperty/peak_ground_acceleration">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/aonach_mor/vocab/ObservableProperty"/>
+    <skos:prefLabel xml:lang="en">Peak ground acceleration (g)</skos:prefLabel>
+    <skos:notation>3</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/aonach_mor/vocab/ObservableProperty/temperature">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/aonach_mor/vocab/ObservableProperty"/>
+    <skos:prefLabel xml:lang="en">Temperature (°C)</skos:prefLabel>
+    <skos:notation>4</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/aonach_mor/vocab/ObservableProperty/pm2_5">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/aonach_mor/vocab/ObservableProperty"/>
+    <skos:prefLabel xml:lang="en">PM2.5 concentration (µg/m³)</skos:prefLabel>
+    <skos:notation>5</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/aonach_mor/vocab/ObservableProperty/head_count">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/aonach_mor/vocab/ObservableProperty"/>
+    <skos:prefLabel xml:lang="en">Head count (persons)</skos:prefLabel>
+    <skos:notation>6</skos:notation>
+  </skos:Concept>
+</rdf:RDF>

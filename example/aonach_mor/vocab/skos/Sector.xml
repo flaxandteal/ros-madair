@@ -1,0 +1,107 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rdf:RDF
+  xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+  xmlns:rdfs="http://www.w3.org/2000/01/rdf-schema#"
+  xmlns:skos="http://www.w3.org/2004/02/skos/core#"
+  xmlns:dcterms="http://purl.org/dc/terms/">
+  <!-- Aonach Mór controlled vocabulary: Sector. Generated on 2026-04-11 by example/aonach_mor/build/20_skos_collections.py. Do not hand-edit. -->
+  <skos:ConceptScheme rdf:about="https://rosmadair.example.org/aonach_mor/vocab/Sector">
+    <skos:prefLabel xml:lang="en">Economic sector</skos:prefLabel>
+    <dcterms:description xml:lang="en">Economic sector — ISIC rev 4 section/division subset relevant to urban coverage. Not a full ISIC import; the demo ships only enough entries to give Organisation resources a plausible mix.</dcterms:description>
+  </skos:ConceptScheme>
+  <skos:Concept rdf:about="https://rosmadair.example.org/aonach_mor/vocab/Sector/agri">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/aonach_mor/vocab/Sector"/>
+    <skos:prefLabel xml:lang="en">A — Agriculture, forestry and fishing</skos:prefLabel>
+    <skos:notation>1</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/aonach_mor/vocab/Sector/mining">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/aonach_mor/vocab/Sector"/>
+    <skos:prefLabel xml:lang="en">B — Mining and quarrying</skos:prefLabel>
+    <skos:notation>2</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/aonach_mor/vocab/Sector/manufacturing">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/aonach_mor/vocab/Sector"/>
+    <skos:prefLabel xml:lang="en">C — Manufacturing</skos:prefLabel>
+    <skos:notation>3</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/aonach_mor/vocab/Sector/utilities">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/aonach_mor/vocab/Sector"/>
+    <skos:prefLabel xml:lang="en">D — Electricity, gas, steam, air-conditioning</skos:prefLabel>
+    <skos:notation>4</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/aonach_mor/vocab/Sector/water">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/aonach_mor/vocab/Sector"/>
+    <skos:prefLabel xml:lang="en">E — Water supply, sewerage, waste</skos:prefLabel>
+    <skos:notation>5</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/aonach_mor/vocab/Sector/construction">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/aonach_mor/vocab/Sector"/>
+    <skos:prefLabel xml:lang="en">F — Construction</skos:prefLabel>
+    <skos:notation>6</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/aonach_mor/vocab/Sector/wholesale_retail">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/aonach_mor/vocab/Sector"/>
+    <skos:prefLabel xml:lang="en">G — Wholesale and retail trade</skos:prefLabel>
+    <skos:notation>7</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/aonach_mor/vocab/Sector/transport">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/aonach_mor/vocab/Sector"/>
+    <skos:prefLabel xml:lang="en">H — Transportation and storage</skos:prefLabel>
+    <skos:notation>8</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/aonach_mor/vocab/Sector/hospitality">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/aonach_mor/vocab/Sector"/>
+    <skos:prefLabel xml:lang="en">I — Accommodation and food service</skos:prefLabel>
+    <skos:notation>9</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/aonach_mor/vocab/Sector/ict">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/aonach_mor/vocab/Sector"/>
+    <skos:prefLabel xml:lang="en">J — Information and communication</skos:prefLabel>
+    <skos:notation>10</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/aonach_mor/vocab/Sector/finance">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/aonach_mor/vocab/Sector"/>
+    <skos:prefLabel xml:lang="en">K — Financial and insurance activities</skos:prefLabel>
+    <skos:notation>11</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/aonach_mor/vocab/Sector/real_estate">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/aonach_mor/vocab/Sector"/>
+    <skos:prefLabel xml:lang="en">L — Real estate activities</skos:prefLabel>
+    <skos:notation>12</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/aonach_mor/vocab/Sector/professional">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/aonach_mor/vocab/Sector"/>
+    <skos:prefLabel xml:lang="en">M — Professional, scientific, technical</skos:prefLabel>
+    <skos:notation>13</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/aonach_mor/vocab/Sector/admin">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/aonach_mor/vocab/Sector"/>
+    <skos:prefLabel xml:lang="en">N — Administrative and support service</skos:prefLabel>
+    <skos:notation>14</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/aonach_mor/vocab/Sector/public_admin">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/aonach_mor/vocab/Sector"/>
+    <skos:prefLabel xml:lang="en">O — Public administration and defence</skos:prefLabel>
+    <skos:notation>15</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/aonach_mor/vocab/Sector/education">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/aonach_mor/vocab/Sector"/>
+    <skos:prefLabel xml:lang="en">P — Education</skos:prefLabel>
+    <skos:notation>16</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/aonach_mor/vocab/Sector/health">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/aonach_mor/vocab/Sector"/>
+    <skos:prefLabel xml:lang="en">Q — Human health and social work</skos:prefLabel>
+    <skos:notation>17</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/aonach_mor/vocab/Sector/arts">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/aonach_mor/vocab/Sector"/>
+    <skos:prefLabel xml:lang="en">R — Arts, entertainment and recreation</skos:prefLabel>
+    <skos:notation>18</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/aonach_mor/vocab/Sector/other_services">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/aonach_mor/vocab/Sector"/>
+    <skos:prefLabel xml:lang="en">S — Other service activities</skos:prefLabel>
+    <skos:notation>19</skos:notation>
+  </skos:Concept>
+</rdf:RDF>

@@ -1,0 +1,8 @@
+parent_alias,alias,name,datatype,cardinality,ontology_class,parent_property,description,collection_name,required,searchable,exportable,sortorder
+,name,Name,string,1,http://www.cidoc-crm.org/cidoc-crm/E41_Appellation,http://www.cidoc-crm.org/cidoc-crm/P1_is_identified_by,Human-readable name of the hazard model.,,true,true,true,1
+,version,Version,string,1,http://www.cidoc-crm.org/cidoc-crm/E42_Identifier,http://www.cidoc-crm.org/cidoc-crm/P48_has_preferred_identifier,Version identifier for this model revision.,,false,true,true,2
+,hazard_type,Hazard type,concept,1,http://www.cidoc-crm.org/cidoc-crm/E55_Type,http://www.cidoc-crm.org/cidoc-crm/P2_has_type,Hazard family the model targets.,HazardType,false,true,true,3
+,method,Method,concept,1,http://www.cidoc-crm.org/cidoc-crm/E55_Type,http://www.cidoc-crm.org/cidoc-crm/P2_has_type,"Computation method drawn from the Method collection (hydraulic, wind-field, seismic, thermal, crowd).",Method,false,true,true,4
+,parameters_note,Parameters note,string,1,http://www.cidoc-crm.org/cidoc-crm/E62_String,http://www.cidoc-crm.org/cidoc-crm/P3_has_note,"Free-text summary of configuration parameters (resolution, boundary conditions, return period, calibration notes).",,false,false,true,5
+,maintained_by,Maintained by,resource-instance,1,http://www.cidoc-crm.org/cidoc-crm/E74_Group,http://www.w3.org/ns/prov#wasAttributedTo,Organisation responsible for maintaining the model.,,false,true,true,6
+,notes,Notes,string,1,http://www.cidoc-crm.org/cidoc-crm/E62_String,http://www.cidoc-crm.org/cidoc-crm/P3_has_note,Free-text reviewer notes.,,false,false,true,7

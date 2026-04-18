@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rdf:RDF
+  xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+  xmlns:rdfs="http://www.w3.org/2000/01/rdf-schema#"
+  xmlns:skos="http://www.w3.org/2004/02/skos/core#"
+  xmlns:dcterms="http://purl.org/dc/terms/">
+  <!-- Aonach Mór controlled vocabulary: Method. Generated on 2026-04-11 by example/aonach_mor/build/20_skos_collections.py. Do not hand-edit. -->
+  <skos:ConceptScheme rdf:about="https://rosmadair.example.org/aonach_mor/vocab/Method">
+    <skos:prefLabel xml:lang="en">Hazard-model method</skos:prefLabel>
+    <dcterms:description xml:lang="en">Modelling technique used by a HazardModel activity. Bound to the HazardModel resource via `crm:P2_has_type`.</dcterms:description>
+  </skos:ConceptScheme>
+  <skos:Concept rdf:about="https://rosmadair.example.org/aonach_mor/vocab/Method/hydraulic">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/aonach_mor/vocab/Method"/>
+    <skos:prefLabel xml:lang="en">Hydraulic / hydrodynamic</skos:prefLabel>
+    <skos:notation>1</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/aonach_mor/vocab/Method/wind_field">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/aonach_mor/vocab/Method"/>
+    <skos:prefLabel xml:lang="en">Wind field</skos:prefLabel>
+    <skos:notation>2</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/aonach_mor/vocab/Method/seismic">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/aonach_mor/vocab/Method"/>
+    <skos:prefLabel xml:lang="en">Seismic ground-motion</skos:prefLabel>
+    <skos:notation>3</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/aonach_mor/vocab/Method/thermal">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/aonach_mor/vocab/Method"/>
+    <skos:prefLabel xml:lang="en">Thermal / heat-exposure</skos:prefLabel>
+    <skos:notation>4</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/aonach_mor/vocab/Method/crowd">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/aonach_mor/vocab/Method"/>
+    <skos:prefLabel xml:lang="en">Crowd dynamics</skos:prefLabel>
+    <skos:notation>5</skos:notation>
+  </skos:Concept>
+</rdf:RDF>

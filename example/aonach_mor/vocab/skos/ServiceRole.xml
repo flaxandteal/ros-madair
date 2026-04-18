@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rdf:RDF
+  xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+  xmlns:rdfs="http://www.w3.org/2000/01/rdf-schema#"
+  xmlns:skos="http://www.w3.org/2004/02/skos/core#"
+  xmlns:dcterms="http://purl.org/dc/terms/">
+  <!-- Aonach Mór controlled vocabulary: ServiceRole. Generated on 2026-04-11 by example/aonach_mor/build/20_skos_collections.py. Do not hand-edit. -->
+  <skos:ConceptScheme rdf:about="https://rosmadair.example.org/aonach_mor/vocab/ServiceRole">
+    <skos:prefLabel xml:lang="en">Service role</skos:prefLabel>
+    <dcterms:description xml:lang="en">Critical-service role a building fills during a rehearsal — emergency-coordinator view lights these up by type.</dcterms:description>
+  </skos:ConceptScheme>
+  <skos:Concept rdf:about="https://rosmadair.example.org/aonach_mor/vocab/ServiceRole/shelter">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/aonach_mor/vocab/ServiceRole"/>
+    <skos:prefLabel xml:lang="en">Shelter</skos:prefLabel>
+    <skos:notation>1</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/aonach_mor/vocab/ServiceRole/hospital">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/aonach_mor/vocab/ServiceRole"/>
+    <skos:prefLabel xml:lang="en">Hospital</skos:prefLabel>
+    <skos:notation>2</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/aonach_mor/vocab/ServiceRole/school">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/aonach_mor/vocab/ServiceRole"/>
+    <skos:prefLabel xml:lang="en">School</skos:prefLabel>
+    <skos:notation>3</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/aonach_mor/vocab/ServiceRole/fire">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/aonach_mor/vocab/ServiceRole"/>
+    <skos:prefLabel xml:lang="en">Fire station</skos:prefLabel>
+    <skos:notation>4</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/aonach_mor/vocab/ServiceRole/police">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/aonach_mor/vocab/ServiceRole"/>
+    <skos:prefLabel xml:lang="en">Police station</skos:prefLabel>
+    <skos:notation>5</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/aonach_mor/vocab/ServiceRole/eoc">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/aonach_mor/vocab/ServiceRole"/>
+    <skos:prefLabel xml:lang="en">Emergency operations centre</skos:prefLabel>
+    <skos:notation>6</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/aonach_mor/vocab/ServiceRole/muster">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/aonach_mor/vocab/ServiceRole"/>
+    <skos:prefLabel xml:lang="en">Muster point</skos:prefLabel>
+    <skos:notation>7</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/aonach_mor/vocab/ServiceRole/substation">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/aonach_mor/vocab/ServiceRole"/>
+    <skos:prefLabel xml:lang="en">Electrical substation</skos:prefLabel>
+    <skos:notation>8</skos:notation>
+  </skos:Concept>
+  <skos:Concept rdf:about="https://rosmadair.example.org/aonach_mor/vocab/ServiceRole/water">
+    <skos:inScheme rdf:resource="https://rosmadair.example.org/aonach_mor/vocab/ServiceRole"/>
+    <skos:prefLabel xml:lang="en">Water / pumping station</skos:prefLabel>
+    <skos:notation>9</skos:notation>
+  </skos:Concept>
+</rdf:RDF>
