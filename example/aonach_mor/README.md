@@ -59,7 +59,8 @@ aonach_mor/
 ├── renaming/            # Chennai → Aonach Mór label dictionary
 ├── build/               # offline build pipeline (01..15_*.py)
 ├── vocab/               # staged ontologies (CIDOC-CRM, FIBO, SOSA, …)
-├── arches_models/       # generated Arches resource model CSVs
+├── graphs/              # generated Arches resource models (alizarin-compatible)
+│   └── resource_models/ # per-model CSVs
 ├── business_data/       # generated Arches business data CSVs
 ├── crosswalks/          # FIBO ↔ CIDOC ↔ SOSA ↔ PROV crosswalk table
 ├── fragility/           # GEM + Huizinga + Holland curves

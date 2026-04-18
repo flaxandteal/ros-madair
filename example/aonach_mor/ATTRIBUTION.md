@@ -139,7 +139,7 @@ referenced by the demo.
 ## Build scripts and generated data
 
 Build scripts (`build/*.py`), generated Arches resource model CSVs
-(`arches_models/`), generated business data (`business_data/`,
+(`graphs/resource_models/`), generated business data (`business_data/`,
 `static/aliz/business_data/`), and the Rós Madair index (`static/index/`)
 are:
 

@@ -141,7 +141,7 @@ jobs:
         working-directory: rosmadair
         run: |
           cargo run --release --example build_from_prebuild -- \
-            "$GITHUB_WORKSPACE/arches_prebuild/pkg" \
+            "$GITHUB_WORKSPACE/arches_prebuild" \
             example/static/index
 
       # ------------------------------------------------------------------ #
@@ -150,7 +150,7 @@ jobs:
       - name: Build Sparnatural assets
         working-directory: rosmadair
         env:
-          PREBUILD_PKG: ${{ github.workspace }}/arches_prebuild/pkg
+          PREBUILD_PKG: ${{ github.workspace }}/arches_prebuild
           ALIZARIN_DIST: ${{ github.workspace }}/alizarin/dist
         run: python3 example/build_sparnatural_assets.py
 
