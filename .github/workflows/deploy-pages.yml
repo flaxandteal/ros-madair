@@ -67,7 +67,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: ${{ vars.CORAL_REPO }}
-          path: coral_public
+          path: arches_prebuild
           ssh-key: ${{ secrets.CORAL_REPO_DEPLOY_KEY }}
 
       - name: Install Rust toolchain
@@ -141,7 +141,7 @@ jobs:
         working-directory: rosmadair
         run: |
           cargo run --release --example build_from_prebuild -- \
-            "$GITHUB_WORKSPACE/coral_public/pkg" \
+            "$GITHUB_WORKSPACE/arches_prebuild/pkg" \
             example/static/index
 
       # ------------------------------------------------------------------ #
@@ -150,7 +150,7 @@ jobs:
       - name: Build Sparnatural assets
         working-directory: rosmadair
         env:
-          PREBUILD_PKG: ${{ github.workspace }}/coral_public/pkg
+          PREBUILD_PKG: ${{ github.workspace }}/arches_prebuild/pkg
           ALIZARIN_DIST: ${{ github.workspace }}/alizarin/dist
         run: python3 example/build_sparnatural_assets.py
 
