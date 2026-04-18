@@ -6,14 +6,6 @@
 #   /example/      → Sparnatural demo + Arches index (from example/)
 #
 # Manual trigger only by default — flip the `push` block on once you trust it.
-# Requires one repository secret:
-#
-#   CORAL_REPO_DEPLOY_KEY  SSH private key with read access to the (private)
-#                          prebuild dataset repo.
-#
-# And one repository variable:
-#
-#   CORAL_REPO             e.g. flaxandteal/coral-public-data (the Arches prebuild source)
 #
 # The heritage business data is ~150 MB; check the licence before publishing it
 # to a public Pages site. If the dataset can't be made public, scope the
@@ -56,19 +48,12 @@ jobs:
         with:
           path: rosmadair
 
-      - name: Checkout Alizarin (sibling JS/WASM SDK)
+      - name: Checkout Alizarin
         uses: actions/checkout@v4
         with:
           repository: flaxandteal/alizarin
           path: alizarin
           ref: v0.2.1-alpha.59
-
-      - name: Checkout Arches prebuild dataset (private)
-        uses: actions/checkout@v4
-        with:
-          repository: ${{ vars.CORAL_REPO }}
-          path: arches_prebuild
-          ssh-key: ${{ secrets.CORAL_REPO_DEPLOY_KEY }}
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -124,6 +109,24 @@ jobs:
           npm run build
 
       # ------------------------------------------------------------------ #
+      # Build alizarin-napi (native Node.js bindings for CSV conversion)
+      # ------------------------------------------------------------------ #
+      - name: Build alizarin-napi
+        working-directory: alizarin/crates/alizarin-napi
+        run: |
+          npm install
+          npm run build
+
+      # ------------------------------------------------------------------ #
+      # Convert CSV model definitions to PrebuildLoader-compatible JSON
+      # ------------------------------------------------------------------ #
+      - name: Convert aonach_mor CSVs to prebuild JSON
+        run: |
+          node alizarin/crates/alizarin-napi/bin/csv-to-prebuild.mjs \
+            rosmadair/example/aonach_mor \
+            "$GITHUB_WORKSPACE/arches_prebuild"
+
+      # ------------------------------------------------------------------ #
       # Build the Rós Madair WASM client
       # ------------------------------------------------------------------ #
       - name: Build ros-madair-client (wasm-pack)
@@ -135,7 +138,7 @@ jobs:
             --out-dir ../../example/pkg
 
       # ------------------------------------------------------------------ #
-      # Build the static index from the Arches prebuild
+      # Build the static index from the converted prebuild
       # ------------------------------------------------------------------ #
       - name: Build index (cargo run --example build_from_prebuild)
         working-directory: rosmadair
