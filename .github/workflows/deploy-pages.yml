@@ -51,9 +51,9 @@ jobs:
       - name: Checkout Alizarin
         uses: actions/checkout@v4
         with:
-          repository: flaxandteal/alizarin
+          repository: ${{ vars.ALIZARIN_REPO || 'flaxandteal/alizarin' }}
           path: alizarin
-          ref: v0.2.1-alpha.59
+          ref: ${{ vars.ALIZARIN_REF || 'v0.2.1-alpha.63' }}
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
