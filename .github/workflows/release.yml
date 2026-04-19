@@ -20,15 +20,6 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-        with:
-          path: rosmadair
-
-      - name: Checkout Alizarin (Rust dependency)
-        uses: actions/checkout@v4
-        with:
-          repository: ${{ vars.ALIZARIN_REPO || 'flaxandteal/alizarin' }}
-          path: alizarin
-          ref: ${{ vars.ALIZARIN_REF || 'v0.2.1-alpha.60' }}
 
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
@@ -51,25 +42,22 @@ jobs:
             ~/.cargo/registry/index/
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
-            rosmadair/target/
-          key: ${{ runner.os }}-cargo-${{ hashFiles('rosmadair/Cargo.lock') }}
+            target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('Cargo.lock') }}
 
       - name: Cache Node dependencies
         uses: actions/cache@v4
         with:
-          path: rosmadair/node_modules
-          key: ${{ runner.os }}-node-${{ hashFiles('rosmadair/package-lock.json') }}
+          path: node_modules
+          key: ${{ runner.os }}-node-${{ hashFiles('package-lock.json') }}
 
       - name: Install Node dependencies
-        working-directory: rosmadair
         run: npm install
 
       - name: Build WASM + JS bundle
-        working-directory: rosmadair
         run: npm run build
 
       - name: Verify build artifacts
-        working-directory: rosmadair
         run: |
           echo "dist/:"
           ls -lh dist/
@@ -78,14 +66,12 @@ jobs:
           ls -lh pkg/
 
       - name: Prepare package for npm
-        working-directory: rosmadair
         run: |
           # Remove pkg/.gitignore created by wasm-pack so pkg/ contents are included in tarball
           rm -f pkg/.gitignore
           echo "Removed pkg/.gitignore to ensure WASM files are included in package"
 
       - name: Create tarball
-        working-directory: rosmadair
         run: |
           npm pack
           echo ""
@@ -109,7 +95,7 @@ jobs:
           draft: false
           prerelease: ${{ contains(steps.get_version.outputs.version, 'alpha') || contains(steps.get_version.outputs.version, 'beta') }}
           files: |
-            rosmadair/*.tgz
+            *.tgz
           body: |
             ## Installation
 

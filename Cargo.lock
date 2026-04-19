@@ -16,7 +16,9 @@ dependencies = [
 
 [[package]]
 name = "alizarin-core"
-version = "0.2.1-alpha.59"
+version = "0.2.1-alpha.61"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "52e7deb6ee06315562c73e8385d7f18863b8fb2f8f2c076aa05fefc3c885c067"
 dependencies = [
  "chrono",
  "csv",

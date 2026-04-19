@@ -15,7 +15,7 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 ros-madair-core = { path = "../ros-madair-core" }
-alizarin-core = { path = "../../../alizarin/crates/alizarin-core" }
+alizarin-core = "0.2.1-alpha.2"
 pyo3 = { version = "0.22", features = ["extension-module"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

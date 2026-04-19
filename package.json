@@ -24,7 +24,7 @@
     "prepublishOnly": "npm run build"
   },
   "dependencies": {
-    "alizarin": "https://github.com/flaxandteal/alizarin/releases/download/v0.2.1-alpha.60/alizarin-0.2.1-alpha.60.tgz"
+    "alizarin": "https://github.com/flaxandteal/alizarin/releases/download/v0.2.1-alpha.61/alizarin-0.2.1-alpha.61.tgz"
   },
   "devDependencies": {
     "typescript": "~5.6.3",
