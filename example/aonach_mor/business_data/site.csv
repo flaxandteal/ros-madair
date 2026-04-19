@@ -1,0 +1,14 @@
+ResourceID,name,admin_division,cluster_type
+site-001,Trá Bealtaine,Ward,Coastal
+site-002,Baile an Iarthair,Ward,Residential
+site-003,Trá Theas,Ward,Coastal
+site-004,Cnoc an Chaisil,Ward,Heritage
+site-005,Seandún,Ward,Central business district
+site-006,Baile Thoir,Ward,Residential
+site-007,Cluain Mór,Ward,Central business district
+site-008,Cé an Rí,Ward,Port
+site-009,Imeall Eanach,Ward,Peri-urban
+site-010,Trí Chuain,Ward,Heritage
+site-011,Mí Locha,Ward,Residential
+site-012,Baile na Cíoraí,Ward,Industrial
+site-013,Ciumhais an Óir,Ward,Peri-urban

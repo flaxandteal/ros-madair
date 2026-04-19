@@ -1,0 +1,9 @@
+ResourceID,name,sensor_type,observes,deployment_start,manufacturer_note
+sens-001,Leibhéal Uisce Trá Bealtaine,Water-level gauge,Water level (m),2023-06-01,OTT HydroMet PLS-C v2 — pressure-based level sensor
+sens-002,Gaothaire Cé an Rí,Anemometer,Wind speed (m/s),2023-03-15,Gill WindSonic 75 2D ultrasonic
+sens-003,Creathánmhéadar Seandún,Seismometer,Peak ground acceleration (g),2022-11-01,Güralp 6TD broadband
+sens-004,Teirmiméadar Cluain Mór,Thermometer,Temperature (°C),2024-01-10,Campbell Scientific CS215 with radiation shield
+sens-005,Braiteoir Aeir Bhaile na Cíoraí,Air-quality monitor,PM2.5 concentration (µg/m³)|Temperature (°C),2023-09-20,Alphasense OPC-N3 + Sensirion SHT31
+sens-006,Áiritheoir Daoine Trí Chuain,People counter,Head count (persons),2024-04-01,Xovis PC2SE stereoscopic overhead
+sens-007,Leibhéal Uisce Imeall Eanach,Water-level gauge,Water level (m),2023-06-01,OTT HydroMet Orpheus Mini radar
+sens-008,Taise-mhéadar Mí Locha,Hygrometer,Temperature (°C),2024-02-15,Vaisala HMP155 with aspirated shield

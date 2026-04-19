@@ -1,1 +1,11 @@
 collection_name,concept_label,parent_label,sort_order
+CoverageType,Property / buildings,,1
+CoverageType,Business interruption,,2
+CoverageType,Contents / inventory,,3
+CoverageType,Public / third-party liability,,4
+LimitBand,Under 10 k,,1
+LimitBand,10 k – 100 k,,2
+LimitBand,100 k – 1 m,,3
+LimitBand,1 m – 10 m,,4
+LimitBand,10 m – 100 m,,5
+LimitBand,Over 100 m,,6

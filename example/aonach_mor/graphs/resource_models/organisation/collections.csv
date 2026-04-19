@@ -1,1 +1,34 @@
 collection_name,concept_label,parent_label,sort_order
+Sector,"A — Agriculture, forestry and fishing",,1
+Sector,B — Mining and quarrying,,2
+Sector,C — Manufacturing,,3
+Sector,"D — Electricity, gas, steam, air-conditioning",,4
+Sector,"E — Water supply, sewerage, waste",,5
+Sector,F — Construction,,6
+Sector,G — Wholesale and retail trade,,7
+Sector,H — Transportation and storage,,8
+Sector,I — Accommodation and food service,,9
+Sector,J — Information and communication,,10
+Sector,K — Financial and insurance activities,,11
+Sector,L — Real estate activities,,12
+Sector,"M — Professional, scientific, technical",,13
+Sector,N — Administrative and support service,,14
+Sector,O — Public administration and defence,,15
+Sector,P — Education,,16
+Sector,Q — Human health and social work,,17
+Sector,"R — Arts, entertainment and recreation",,18
+Sector,S — Other service activities,,19
+SizeBand,Micro (1–9),,1
+SizeBand,Small (10–49),,2
+SizeBand,Medium (50–249),,3
+SizeBand,Large (250–999),,4
+SizeBand,Very large (1000+),,5
+ServiceRole,Shelter,,1
+ServiceRole,Hospital,,2
+ServiceRole,School,,3
+ServiceRole,Fire station,,4
+ServiceRole,Police station,,5
+ServiceRole,Emergency operations centre,,6
+ServiceRole,Muster point,,7
+ServiceRole,Electrical substation,,8
+ServiceRole,Water / pumping station,,9

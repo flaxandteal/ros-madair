@@ -1,0 +1,21 @@
+ResourceID,name,gem_taxonomy,heritage_status,service_roles,cluster_type,height_m,age_band_years,notes
+bldg-001,Halla an Chósta,"CR/LFINF — Reinforced concrete, infilled frame",Listed,Shelter,Coastal,12,pre-1900,Historic coastal assembly hall repurposed as emergency shelter.
+bldg-002,Ospidéal Trá Bealtaine,"CR/LFM — Reinforced concrete, moment frame",Non-listed,Hospital,Coastal,28,1980-2000,Main coastal hospital serving three wards.
+bldg-003,Scoil Bhaile an Iarthair,"MUR+CLBRS — Unreinforced masonry, clay brick",Candidate,School,Residential,9,1950-1980,Primary school in Baile an Iarthair ward.
+bldg-004,Stáisiún Dóiteáin Seandún,"CR/LWAL — Reinforced concrete, shear wall",Non-listed,Fire station,Central business district,14,1980-2000,Central fire station with three appliance bays.
+bldg-005,Stáisiún Gardaí Cluain Mór,"MCF+CLBRS — Confined masonry, clay brick",Non-listed,Police station,Central business district,11,1950-1980,District police headquarters.
+bldg-006,Ionad Éigeandála Aonach Mór,"S/LFM — Steel, moment frame",Non-listed,Emergency operations centre,Central business district,18,post-2000,City-wide emergency coordination facility.
+bldg-007,Ionad Cruinnithe Cé an Rí,"MUR+STDRE — Unreinforced masonry, stone dressed",Listed,,Port,8,pre-1900,Heritage warehouse converted to muster point.
+bldg-008,Fo-stáisiún Leictreach Theas,"CR/LPB — Reinforced concrete, precast",Non-listed,Electrical substation,Industrial,6,1980-2000,33 kV distribution substation.
+bldg-009,Stáisiún Uisce Imeall Eanach,"CR/LFINF — Reinforced concrete, infilled frame",Non-listed,Water / pumping station,Peri-urban,5,post-2000,Raw-water intake and pumping station.
+bldg-010,Teach Oidhreachta Trí Chuain,"MUR+STDRE — Unreinforced masonry, stone dressed",Listed,,Heritage,10,pre-1900,18th-century stone townhouse museum.
+bldg-011,Árasán Mí Locha,"CR/LFM — Reinforced concrete, moment frame",Non-listed,,Residential,32,post-2000,12-storey residential tower block.
+bldg-012,Monarcha Bhaile na Cíoraí,"S/LFBR — Steel, braced frame",Non-listed,,Industrial,15,1950-1980,Textile manufacturing warehouse.
+bldg-013,Séipéal Chnoc an Chaisil,"MUR+CLBRS — Unreinforced masonry, clay brick",Listed,,Heritage,14,pre-1900,Colonial-era church with bell tower.
+bldg-014,Margadh Bhaile Thoir,"W/LPB — Wood, post and beam",Candidate,,Residential,7,1900-1950,Traditional timber market hall.
+bldg-015,Leabharlann Chluain Mór,"CR/LWAL — Reinforced concrete, shear wall",Non-listed,School,Central business district,16,post-2000,Public library doubling as school resource centre.
+bldg-016,Lóistín Trá Theas,"W/LWAL — Wood, shear wall",Non-listed,Shelter,Coastal,8,1900-1950,Beachfront guest house designated as secondary shelter.
+bldg-017,Tithe Ealáine Seandún,"MR+CLBRS — Reinforced masonry, clay brick",Candidate,,Central business district,12,1950-1980,Art gallery and civic events space.
+bldg-018,Ionad Siopadóireachta Cluain Mór,"CR/LFINF — Reinforced concrete, infilled frame",Non-listed,,Central business district,22,1980-2000,Multi-storey shopping centre.
+bldg-019,Teach Cré Imeall Eanach,"E/LWAL — Earthen, load-bearing wall",Candidate,,Peri-urban,4,pre-1900,Traditional earthen dwelling under conservation review.
+bldg-020,Halla Spóirt Ciumhais an Óir,"MIX — Mixed / hybrid structural system",Non-listed,Muster point,Peri-urban,10,post-2000,Community sports hall designated as muster point.

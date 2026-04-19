@@ -1,1 +1,10 @@
 collection_name,concept_label,parent_label,sort_order
+ServiceRole,Shelter,,1
+ServiceRole,Hospital,,2
+ServiceRole,School,,3
+ServiceRole,Fire station,,4
+ServiceRole,Police station,,5
+ServiceRole,Emergency operations centre,,6
+ServiceRole,Muster point,,7
+ServiceRole,Electrical substation,,8
+ServiceRole,Water / pumping station,,9

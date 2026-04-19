@@ -1,1 +1,14 @@
 collection_name,concept_label,parent_label,sort_order
+HazardType,Flood,,1
+HazardType,Cyclone,,2
+HazardType,Earthquake,,3
+HazardType,Wind,,4
+HazardType,Heat,,5
+HazardType,Crowding,,6
+HazardType,Storm surge,,7
+HazardType,Landslide,,8
+Method,Hydraulic / hydrodynamic,,1
+Method,Wind field,,2
+Method,Seismic ground-motion,,3
+Method,Thermal / heat-exposure,,4
+Method,Crowd dynamics,,5

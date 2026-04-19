@@ -200,7 +200,6 @@
     // ------------------------------------------------------------------ //
     // 3. Initialise Rós Madair + Alizarin in parallel                    //
     // ------------------------------------------------------------------ //
-    const HA_GRAPH_ID = '076f9381-7b00-11e9-8d6b-80000b44d1d9';
     let store = null;
     let gm = null;
     let resourceFileIndex = null; // resource_id -> file basename
@@ -231,9 +230,17 @@
 
       gm = new alizarin.GraphManager(client);
       await gm.initialize();
-      // Eagerly load the Heritage Asset graph definition so it's ready
+
+      // Eagerly load all available graph definitions so they're ready
       // when we need to render results.
-      await gm.loadGraph(HA_GRAPH_ID);
+      setStatus('Loading graph definitions…');
+      const allResp = await fetch('./static/index/aliz/resource_models/_all.json');
+      const allData = await allResp.json();
+      const graphIds = Object.keys(allData.models || {});
+      for (const gid of graphIds) {
+        try { await gm.loadGraph(gid); }
+        catch (e) { console.warn('Could not load graph', gid, e); }
+      }
 
       setStatus('Loading resource index…');
       const idxResp = await fetch('./static/index/aliz/business_data/_resource_index.json');

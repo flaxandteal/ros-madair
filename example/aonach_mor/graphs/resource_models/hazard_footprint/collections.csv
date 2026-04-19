@@ -1,1 +1,38 @@
 collection_name,concept_label,parent_label,sort_order
+HazardType,Flood,,1
+HazardType,Cyclone,,2
+HazardType,Earthquake,,3
+HazardType,Wind,,4
+HazardType,Heat,,5
+HazardType,Crowding,,6
+HazardType,Storm surge,,7
+HazardType,Landslide,,8
+IntensityBand,Flood — nuisance (<0.3 m),,1
+IntensityBand,Flood — shallow (0.3–1.0 m),,2
+IntensityBand,Flood — deep (1.0–3.0 m),,3
+IntensityBand,Flood — extreme (>3.0 m),,4
+IntensityBand,Wind — tropical storm,,10
+IntensityBand,Wind — Cat 1 cyclone,,11
+IntensityBand,Wind — Cat 2 cyclone,,12
+IntensityBand,Wind — Cat 3 cyclone,,13
+IntensityBand,Wind — Cat 4 cyclone,,14
+IntensityBand,Wind — Cat 5 cyclone,,15
+IntensityBand,Earthquake — weak (PGA <0.05 g),,20
+IntensityBand,Earthquake — moderate (0.05–0.15 g),,21
+IntensityBand,Earthquake — strong (0.15–0.3 g),,22
+IntensityBand,Earthquake — severe (>0.3 g),,23
+IntensityBand,Heat — warm (<35 °C),,30
+IntensityBand,Heat — hot (35–40 °C),,31
+IntensityBand,Heat — very hot (40–45 °C),,32
+IntensityBand,Heat — extreme (>45 °C),,33
+IntensityBand,Crowd — sparse (<2 p/m²),,40
+IntensityBand,Crowd — moderate (2–4 p/m²),,41
+IntensityBand,Crowd — dense (4–6 p/m²),,42
+IntensityBand,Crowd — critical (>6 p/m²),,43
+SeverityBand,Low,,1
+SeverityBand,Medium,,2
+SeverityBand,High,,3
+SeverityBand,Very high,,4
+ConfidenceBand,Low,,1
+ConfidenceBand,Medium,,2
+ConfidenceBand,High,,3

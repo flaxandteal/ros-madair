@@ -1,1 +1,7 @@
 collection_name,concept_label,parent_label,sort_order
+EventType,Cyclone landfall,,1
+EventType,Pluvial flood,,2
+EventType,Coastal flood,,3
+EventType,Earthquake,,4
+EventType,Heatwave,,5
+EventType,Mass-gathering incident,,6

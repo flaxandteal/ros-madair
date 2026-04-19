@@ -1,1 +1,36 @@
 collection_name,concept_label,parent_label,sort_order
+GEMTaxonomy,"CR/LFINF — Reinforced concrete, infilled frame",,1
+GEMTaxonomy,"CR/LFM — Reinforced concrete, moment frame",,2
+GEMTaxonomy,"CR/LWAL — Reinforced concrete, shear wall",,3
+GEMTaxonomy,"CR/LPB — Reinforced concrete, precast",,4
+GEMTaxonomy,"MUR+ADO — Unreinforced masonry, adobe block",,5
+GEMTaxonomy,"MUR+CLBRS — Unreinforced masonry, clay brick",,6
+GEMTaxonomy,"MUR+STDRE — Unreinforced masonry, stone dressed",,7
+GEMTaxonomy,"MCF+CLBRS — Confined masonry, clay brick",,8
+GEMTaxonomy,"MR+CLBRS — Reinforced masonry, clay brick",,9
+GEMTaxonomy,"S/LFM — Steel, moment frame",,10
+GEMTaxonomy,"S/LFBR — Steel, braced frame",,11
+GEMTaxonomy,"W/LWAL — Wood, shear wall",,12
+GEMTaxonomy,"W/LPB — Wood, post and beam",,13
+GEMTaxonomy,"E/LWAL — Earthen, load-bearing wall",,14
+GEMTaxonomy,"MIX — Mixed / hybrid structural system",,15
+GEMTaxonomy,"UNK — Unknown / not assessed",,99
+HeritageStatus,Listed,,1
+HeritageStatus,Candidate,,2
+HeritageStatus,Non-listed,,3
+ServiceRole,Shelter,,1
+ServiceRole,Hospital,,2
+ServiceRole,School,,3
+ServiceRole,Fire station,,4
+ServiceRole,Police station,,5
+ServiceRole,Emergency operations centre,,6
+ServiceRole,Muster point,,7
+ServiceRole,Electrical substation,,8
+ServiceRole,Water / pumping station,,9
+ClusterType,Central business district,,1
+ClusterType,Residential,,2
+ClusterType,Industrial,,3
+ClusterType,Heritage,,4
+ClusterType,Coastal,,5
+ClusterType,Port,,6
+ClusterType,Peri-urban,,7

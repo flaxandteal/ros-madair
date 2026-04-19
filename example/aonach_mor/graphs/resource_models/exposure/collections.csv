@@ -1,0 +1,8 @@
+collection_name,concept_label,parent_label,sort_order
+SeverityBand,Low,,1
+SeverityBand,Medium,,2
+SeverityBand,High,,3
+SeverityBand,Very high,,4
+ConfidenceBand,Low,,1
+ConfidenceBand,Medium,,2
+ConfidenceBand,High,,3

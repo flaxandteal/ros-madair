@@ -8,7 +8,7 @@ Generates:
   - example/static/index/sparnatural/concepts/{collection_id}.json
   - example/static/index/aliz/resource_models/_all.json
   - example/static/index/aliz/resource_models/{graph_id}.json    (copy or symlink)
-  - example/static/index/aliz/business_data/HeritageAsset_*.json (copy or symlink)
+  - example/static/index/aliz/business_data/{graph_id}.json       (copy or symlink)
   - example/static/index/aliz/business_data/_index.json
   - example/pkg/alizarin/{alizarin.js, alizarin_bg.wasm}         (copy or symlink)
 
@@ -96,14 +96,73 @@ AUTOCOMPLETE_THRESHOLD = 1000
 # --------------------------------------------------------------------------- #
 
 
-def load_graph(name: str) -> dict[str, Any]:
-    path = PREBUILD_PKG / "graphs" / "resource_models" / f"{name}.json"
+def load_graph_from_path(path: Path) -> dict[str, Any]:
     with open(path) as fh:
         raw = json.load(fh)
-    graph_obj = raw["graph"]
+    graph_obj = raw.get("graph", raw)
     if isinstance(graph_obj, list):
         graph_obj = graph_obj[0]
     return graph_obj
+
+
+def load_graph(name: str) -> dict[str, Any]:
+    path = PREBUILD_PKG / "graphs" / "resource_models" / f"{name}.json"
+    return load_graph_from_path(path)
+
+
+def graph_display_name(graph: dict[str, Any], fallback: str) -> str:
+    name_field = graph.get("name")
+    if isinstance(name_field, dict):
+        return name_field.get("en", fallback)
+    return str(name_field) if name_field else fallback
+
+
+def auto_discover_graphs() -> tuple[
+    "list[tuple[str, dict[str, Any], Path]]",
+    "dict[str, list[dict[str, Any]]]",
+    "dict[str, str]",
+]:
+    """Auto-discover all graphs and select nodes with indexed datatypes."""
+    rm_dir = PREBUILD_PKG / "graphs" / "resource_models"
+    if not rm_dir.exists():
+        print(f"  warning: {rm_dir} not found", file=sys.stderr)
+        return [], {}, {}
+
+    graph_specs: list[tuple[str, dict[str, Any], Path]] = []
+    selected: dict[str, list[dict[str, Any]]] = {}
+    used_collections: dict[str, str] = {}
+
+    for graph_path in sorted(rm_dir.glob("*.json")):
+        if graph_path.name.startswith("_"):
+            continue
+        try:
+            graph = load_graph_from_path(graph_path)
+        except (json.JSONDecodeError, KeyError, OSError) as e:
+            print(f"  warning: skipping {graph_path.name}: {e}")
+            continue
+
+        display_name = graph_display_name(graph, graph_path.stem)
+        graph_specs.append((display_name, graph, graph_path))
+
+        nodes_for_graph: list[dict[str, Any]] = []
+        for node in graph.get("nodes", []):
+            dt = node.get("datatype")
+            if dt not in INDEXED_DATATYPES:
+                continue
+            nodes_for_graph.append(node)
+            if dt in ("concept", "concept-list"):
+                cfg = node.get("config") or {}
+                col_id = cfg.get("rdmCollection")
+                if col_id:
+                    used_collections[col_id] = node.get("name") or node.get("alias", "")
+
+        if nodes_for_graph:
+            selected[display_name] = nodes_for_graph
+            print(f"  {display_name}: {len(nodes_for_graph)} indexed nodes")
+        else:
+            print(f"  {display_name}: no indexed nodes (skipped from config)")
+
+    return graph_specs, selected, used_collections
 
 
 def find_node(graph: dict[str, Any], alias: str) -> dict[str, Any] | None:
@@ -370,12 +429,14 @@ def force_link_or_copy(src: Path, dst: Path, use_symlink: bool) -> None:
 
 
 def build_alizarin_layout(
-    graph_specs: list[tuple[str, dict[str, Any]]],
+    graph_specs: list[tuple[str, dict[str, Any], Path]],
     use_symlink: bool,
 ) -> None:
     """Materialize the resource_models/ and business_data/ trees expected by
     ArchesClientRemoteStatic. Files are copied by default (deploy-safe) or
     symlinked into the Arches pkg directory when --symlink is passed.
+
+    graph_specs is a list of (display_name, graph_obj, source_path) tuples.
     """
     rm_dir = OUT_ALIZ / "resource_models"
     bd_dir = OUT_ALIZ / "business_data"
@@ -386,13 +447,29 @@ def build_alizarin_layout(
     file_index: dict[str, list[str]] = {}
     resource_index: dict[str, str] = {}  # resource_id -> file basename
 
-    for graph_name, graph in graph_specs:
+    def _index_bd_file(src_bd: Path, bd_files: list[str]) -> None:
+        dst_bd = bd_dir / src_bd.name
+        force_link_or_copy(src_bd.resolve(), dst_bd, use_symlink)
+        bd_files.append(f"business_data/{src_bd.name}")
+        try:
+            with open(src_bd) as fh:
+                bd_data = json.load(fh)
+            for r in bd_data.get("business_data", {}).get("resources", []):
+                rid = (
+                    r.get("resourceinstance", {}).get("resourceinstanceid")
+                    or r.get("resourceinstanceid")
+                )
+                if rid:
+                    resource_index[rid] = src_bd.name
+        except (json.JSONDecodeError, OSError) as e:
+            print(f"  warning: indexing {src_bd.name}: {e}")
+
+    for graph_name, graph, src_path in graph_specs:
         graph_id = graph["graphid"]
 
-        # Materialize the graph file
-        src = (PREBUILD_PKG / "graphs" / "resource_models" / f"{graph_name}.json").resolve()
+        # Materialize the graph file from its actual source path
         dst = rm_dir / f"{graph_id}.json"
-        force_link_or_copy(src, dst, use_symlink)
+        force_link_or_copy(src_path.resolve(), dst, use_symlink)
 
         # Add to _all.json
         name_field = graph.get("name")
@@ -406,27 +483,18 @@ def build_alizarin_layout(
             "isresource": True,
         }
 
-        # Materialize business_data files for this graph and build resource index
-        bd_glob_name = graph_name.replace(" ", "")  # HeritageAsset etc.
+        # Materialize business_data files for this graph
         bd_files: list[str] = []
-        for src_bd in sorted((PREBUILD_PKG / "business_data").glob(f"{bd_glob_name}_*.json")):
-            dst_bd = bd_dir / src_bd.name
-            force_link_or_copy(src_bd.resolve(), dst_bd, use_symlink)
-            bd_files.append(f"business_data/{src_bd.name}")
-
-            # Index resources in this file
-            try:
-                with open(src_bd) as fh:
-                    bd_data = json.load(fh)
-                for r in bd_data.get("business_data", {}).get("resources", []):
-                    rid = (
-                        r.get("resourceinstance", {}).get("resourceinstanceid")
-                        or r.get("resourceinstanceid")
-                    )
-                    if rid:
-                        resource_index[rid] = src_bd.name
-            except (json.JSONDecodeError, OSError) as e:
-                print(f"  warning: indexing {src_bd.name}: {e}")
+        bd_src_dir = PREBUILD_PKG / "business_data"
+        if bd_src_dir.exists():
+            # csv-to-prebuild uses {graph_id}.json
+            bd_by_id = bd_src_dir / f"{graph_id}.json"
+            if bd_by_id.exists():
+                _index_bd_file(bd_by_id, bd_files)
+            # Arches prebuild uses {GraphName}_N.json
+            bd_glob_name = graph_name.replace(" ", "")
+            for src_bd in sorted(bd_src_dir.glob(f"{bd_glob_name}_*.json")):
+                _index_bd_file(src_bd, bd_files)
 
         file_index[graph_id] = bd_files
         print(
@@ -489,31 +557,45 @@ def main() -> int:
     OUT_SPARNATURAL.mkdir(parents=True, exist_ok=True)
     (OUT_SPARNATURAL / "concepts").mkdir(exist_ok=True)
 
-    # 1. Load whitelisted graphs and select nodes
-    graph_specs: list[tuple[str, dict[str, Any]]] = []
+    # 1. Load graphs and select nodes — auto-discover or use whitelist
+    graph_specs: list[tuple[str, dict[str, Any], Path]] = []
     selected: dict[str, list[dict[str, Any]]] = {}
     used_collections: dict[str, str] = {}  # collection_id -> label
 
-    for graph_name, aliases in NODE_WHITELIST.items():
-        graph = load_graph(graph_name)
-        graph_specs.append((graph_name, graph))
-        nodes_for_graph: list[dict[str, Any]] = []
-        for alias in aliases:
-            node = find_node(graph, alias)
-            if not node:
-                print(f"  warning: {graph_name}/{alias} not found in graph")
+    # Try whitelist first; fall back to auto-discovery if no whitelisted
+    # graphs are found in the prebuild directory.
+    whitelist_ok = False
+    if NODE_WHITELIST:
+        rm_dir = PREBUILD_PKG / "graphs" / "resource_models"
+        for graph_name, aliases in NODE_WHITELIST.items():
+            # Try name-based path (Arches prebuild) first
+            path = rm_dir / f"{graph_name}.json"
+            if not path.exists():
                 continue
-            dt = node.get("datatype")
-            if dt not in INDEXED_DATATYPES:
-                print(f"  warning: {graph_name}/{alias} datatype '{dt}' is not indexed")
-                continue
-            nodes_for_graph.append(node)
-            if dt in ("concept", "concept-list"):
-                cfg = node.get("config") or {}
-                col_id = cfg.get("rdmCollection")
-                if col_id:
-                    used_collections[col_id] = node.get("name") or alias
-        selected[graph_name] = nodes_for_graph
+            whitelist_ok = True
+            graph = load_graph_from_path(path)
+            graph_specs.append((graph_name, graph, path))
+            nodes_for_graph: list[dict[str, Any]] = []
+            for alias in aliases:
+                node = find_node(graph, alias)
+                if not node:
+                    print(f"  warning: {graph_name}/{alias} not found in graph")
+                    continue
+                dt = node.get("datatype")
+                if dt not in INDEXED_DATATYPES:
+                    print(f"  warning: {graph_name}/{alias} datatype '{dt}' is not indexed")
+                    continue
+                nodes_for_graph.append(node)
+                if dt in ("concept", "concept-list"):
+                    cfg = node.get("config") or {}
+                    col_id = cfg.get("rdmCollection")
+                    if col_id:
+                        used_collections[col_id] = node.get("name") or alias
+            selected[graph_name] = nodes_for_graph
+
+    if not whitelist_ok:
+        print("Auto-discovering graphs from prebuild directory ...")
+        graph_specs, selected, used_collections = auto_discover_graphs()
 
     # 2. Generate concept JSON files (need sizes before SHACL config)
     print("Generating concept value lists ...")

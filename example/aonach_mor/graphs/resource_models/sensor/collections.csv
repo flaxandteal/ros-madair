@@ -1,1 +1,14 @@
 collection_name,concept_label,parent_label,sort_order
+SensorType,Water-level gauge,,1
+SensorType,Anemometer,,2
+SensorType,Seismometer,,3
+SensorType,Thermometer,,4
+SensorType,Hygrometer,,5
+SensorType,Air-quality monitor,,6
+SensorType,People counter,,7
+ObservableProperty,Water level (m),,1
+ObservableProperty,Wind speed (m/s),,2
+ObservableProperty,Peak ground acceleration (g),,3
+ObservableProperty,Temperature (°C),,4
+ObservableProperty,PM2.5 concentration (µg/m³),,5
+ObservableProperty,Head count (persons),,6
