@@ -15,7 +15,7 @@ crate-type = ["cdylib"]
 [dependencies]
 ros-madair-core = { path = "../ros-madair-core" }
 ros-madair-client = { path = "../ros-madair-client" }
-alizarin-wasm = { git = "https://github.com/flaxandteal/alizarin", tag = "v0.2.1-alpha.63" }
+alizarin-wasm = { git = "https://github.com/flaxandteal/alizarin", tag = "v0.2.1-alpha.64" }
 alizarin-core = "0.2.1-alpha.3"
 
 wasm-bindgen = "0.2"

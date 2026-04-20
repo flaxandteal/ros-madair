@@ -17,6 +17,7 @@ dependencies = [
 [[package]]
 name = "alizarin-core"
 version = "0.2.1-alpha.64"
+source = "git+https://github.com/flaxandteal/alizarin?tag=v0.2.1-alpha.64#515cb6eb0828815eda6fe340474941cb8b127e6d"
 dependencies = [
  "chrono",
  "csv",
@@ -34,6 +35,7 @@ dependencies = [
 [[package]]
 name = "alizarin-wasm"
 version = "0.2.1-alpha.64"
+source = "git+https://github.com/flaxandteal/alizarin?tag=v0.2.1-alpha.64#515cb6eb0828815eda6fe340474941cb8b127e6d"
 dependencies = [
  "alizarin-core",
  "console_error_panic_hook",
@@ -1302,6 +1304,7 @@ checksum = "23cda5ecc67248c48d3e705d3e03e00af905769b78b9d2a1678b663b8b9d4472"
 [[package]]
 name = "wasm-wrapper-derive"
 version = "0.2.1-alpha.64"
+source = "git+https://github.com/flaxandteal/alizarin?tag=v0.2.1-alpha.64#515cb6eb0828815eda6fe340474941cb8b127e6d"
 dependencies = [
  "darling",
  "proc-macro2",
