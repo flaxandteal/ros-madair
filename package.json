@@ -18,7 +18,7 @@
     }
   },
   "scripts": {
-    "build:wasm": "wasm-pack build crates/ros-madair-client --target web --out-dir ../../pkg --out-name ros_madair --release",
+    "build:wasm": "wasm-pack build crates/ros-madair-alizarin --target web --out-dir ../../pkg --out-name ros_madair --release",
     "build:js": "vite build && tsc -p tsconfig.build.json",
     "build": "npm run build:wasm && npm run build:js",
     "prepublishOnly": "npm run build"

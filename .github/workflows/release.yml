@@ -21,6 +21,13 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Checkout Alizarin
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ vars.ALIZARIN_REPO || 'flaxandteal/alizarin' }}
+          path: ../alizarin
+          ref: ${{ vars.ALIZARIN_REF || 'v0.2.1-alpha.63' }}
+
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
         with:

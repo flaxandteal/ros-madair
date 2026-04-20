@@ -129,10 +129,10 @@ jobs:
       # ------------------------------------------------------------------ #
       # Build the Rós Madair WASM client
       # ------------------------------------------------------------------ #
-      - name: Build ros-madair-client (wasm-pack)
+      - name: Build ros-madair-alizarin (wasm-pack)
         working-directory: rosmadair
         run: |
-          wasm-pack build crates/ros-madair-client \
+          wasm-pack build crates/ros-madair-alizarin \
             --target web \
             --release \
             --out-dir ../../example/pkg
