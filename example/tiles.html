@@ -135,7 +135,7 @@
 
             try {
                 status.textContent = 'Loading WASM module...';
-                const wasm = await import('./pkg/ros_madair_client.js');
+                const wasm = await import('./pkg/ros_madair.js');
                 await wasm.default();
 
                 status.textContent = 'Loading summary index...';

@@ -146,7 +146,7 @@
         window.initStore = async function() {
             try {
                 setStatus('Loading WASM module...');
-                const wasm = await import('./pkg/ros_madair_client.js');
+                const wasm = await import('./pkg/ros_madair.js');
                 await wasm.default();
 
                 setStatus('Loading index...');
