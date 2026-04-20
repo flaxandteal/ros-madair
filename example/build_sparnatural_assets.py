@@ -609,6 +609,16 @@ def main() -> int:
         kind = "autocomplete" if len(values) > AUTOCOMPLETE_THRESHOLD else "list"
         print(f"  {label}: {len(values)} values -> {out_path.name} ({kind})")
 
+    # 2b. Write collection index for the UI's "Browse Collections" feature
+    index_entries = [
+        {"id": col_id, "label": label, "count": collection_sizes.get(col_id, 0)}
+        for col_id, label in sorted(used_collections.items(), key=lambda x: x[1])
+    ]
+    index_path = OUT_SPARNATURAL / "concepts" / "_index.json"
+    with open(index_path, "w") as fh:
+        json.dump(index_entries, fh, indent=2)
+    print(f"  collection index: {len(index_entries)} entries -> {index_path.name}")
+
     # 3. Generate SHACL config (uses collection_sizes to pick widget)
     print("Generating Sparnatural config.ttl ...")
     ttl = build_shacl_config(selected, collection_sizes)

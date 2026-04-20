@@ -1,0 +1,392 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Rós Madair — Tile Content Browser</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { font-family: system-ui, sans-serif; max-width: 960px; margin: 0 auto; padding: 1rem; }
+        h1 { margin-bottom: 1rem; }
+        .section { margin-bottom: 1.5rem; }
+        label { display: block; font-weight: 600; margin-bottom: 0.25rem; }
+        textarea { width: 100%; height: 120px; font-family: monospace; font-size: 14px; padding: 0.5rem; }
+        button { padding: 0.5rem 1rem; font-size: 14px; cursor: pointer; margin-right: 0.5rem; margin-top: 0.5rem; }
+        #status { color: #666; font-style: italic; }
+        .error { color: #c00; }
+        .tab-bar { display: flex; gap: 0; margin-bottom: 1rem; border-bottom: 2px solid #ddd; }
+        .tab-bar button { border: 1px solid #ddd; border-bottom: none; background: #f5f5f5; padding: 0.5rem 1.5rem; margin: 0; border-radius: 4px 4px 0 0; cursor: pointer; font-size: 14px; }
+        .tab-bar button.active { background: #fff; border-bottom: 2px solid #fff; margin-bottom: -2px; font-weight: 600; }
+        .tab-content { display: none; }
+        .tab-content.active { display: block; }
+        .result-list { background: #f5f5f5; padding: 0.75rem; max-height: 300px; overflow-y: auto; font-family: monospace; font-size: 13px; }
+        .result-list .item { padding: 0.25rem 0.5rem; cursor: pointer; border-bottom: 1px solid #eee; }
+        .result-list .item:hover { background: #e0e8f0; }
+        .page-item { padding: 0.4rem 0.5rem; cursor: pointer; border-bottom: 1px solid #eee; display: flex; justify-content: space-between; }
+        .page-item:hover { background: #e0e8f0; }
+        .page-item .count { color: #666; font-size: 0.85em; }
+        #tile-detail { background: #f9f9f9; border: 1px solid #ddd; padding: 1rem; font-size: 14px; }
+        #tile-detail h3 { margin-bottom: 0.75rem; }
+        .tile-group { margin-bottom: 1rem; border: 1px solid #e0e0e0; border-radius: 4px; background: #fff; }
+        .tile-group-header { padding: 0.5rem 0.75rem; background: #eee; font-weight: 600; font-size: 13px; border-bottom: 1px solid #ddd; border-radius: 4px 4px 0 0; }
+        .tile-field { padding: 0.4rem 0.75rem; border-bottom: 1px solid #f0f0f0; font-size: 13px; }
+        .tile-field:last-child { border-bottom: none; }
+        .field-name { font-weight: 600; color: #333; }
+        .field-alias { color: #888; font-size: 0.85em; margin-left: 0.5rem; }
+        .field-badge { display: inline-block; background: #e0e8f0; color: #345; padding: 0.1rem 0.4rem; border-radius: 3px; font-size: 0.75em; margin-left: 0.5rem; font-family: monospace; }
+        .field-value { margin-top: 0.2rem; font-family: monospace; color: #222; word-break: break-all; }
+        .timing { font-size: 12px; color: #888; margin-top: 0.25rem; }
+        .back-link { cursor: pointer; color: #457b9d; text-decoration: underline; font-size: 13px; margin-bottom: 0.75rem; display: inline-block; }
+    </style>
+</head>
+<body>
+    <h1>Rós Madair Tile Browser</h1>
+
+    <div class="section" style="font-size: 0.9rem;">
+        <a href="./index.html">query demo</a>
+        &nbsp;|&nbsp;
+        <a href="./sparnatural.html">sparnatural</a>
+        &nbsp;|&nbsp;
+        <a href="./graph.html">graph explorer</a>
+    </div>
+
+    <div class="section">
+        <div id="status">Loading WASM module...</div>
+    </div>
+
+    <div class="section">
+        <label for="base-url">Index URL:</label>
+        <input type="text" id="base-url" value="./static/ros-madair/" style="width: 100%; padding: 0.25rem; font-family: monospace;">
+        <button onclick="initStore()">Load Index</button>
+    </div>
+
+    <div class="tab-bar">
+        <button class="active" onclick="switchTab('query')">Query &rarr; Drill-down</button>
+        <button onclick="switchTab('browse')">Browse Resources</button>
+    </div>
+
+    <!-- Tab A: Query → Drill-down -->
+    <div id="tab-query" class="tab-content active">
+        <div class="section">
+            <label for="query-input">Triple Patterns (JSON):</label>
+            <textarea id="query-input">[
+  {"s": "?place", "p": "https://example.org/node/monument_type", "o": "https://example.org/concept/church"}
+]</textarea>
+            <div style="margin-top: 0.5rem;">
+                <button onclick="loadQueryExample('churches')">All Churches</button>
+                <button onclick="loadQueryExample('castles')">All Castles</button>
+                <button onclick="loadQueryExample('all')">All Places</button>
+            </div>
+            <button onclick="runQuery()" style="margin-top: 0.5rem;">Run Query</button>
+        </div>
+        <div class="section">
+            <label>Results:</label>
+            <div id="query-results" class="result-list">No query run yet.</div>
+        </div>
+    </div>
+
+    <!-- Tab B: Browse Resources -->
+    <div id="tab-browse" class="tab-content">
+        <div class="section">
+            <label>Pages:</label>
+            <div id="page-list" class="result-list">Load index first.</div>
+        </div>
+        <div class="section">
+            <label>Resources on page:</label>
+            <div id="browse-resources" class="result-list" style="display:none;"></div>
+        </div>
+    </div>
+
+    <!-- Shared: Tile Detail View -->
+    <div class="section" id="tile-section" style="display: none;">
+        <div id="tile-detail">
+            <span class="back-link" onclick="hideTileDetail()">&larr; back to results</span>
+            <h3 id="tile-uri"></h3>
+            <div class="timing" id="tile-timing"></div>
+            <div id="tile-content"></div>
+        </div>
+    </div>
+
+    <script type="module">
+        let store = null;
+        let graphDef = null; // parsed graph.json
+        let nodeMap = {};    // node_id → {name, alias, datatype}
+
+        const N = 'https://example.org/node/';
+        const C = 'https://example.org/concept/';
+
+        const queryExamples = {
+            churches: [
+                {s: '?place', p: `${N}monument_type`, o: `${C}church`},
+            ],
+            castles: [
+                {s: '?place', p: `${N}monument_type`, o: `${C}castle`},
+            ],
+            all: [
+                {s: '?place', p: `${N}monument_type`, o: '?type'},
+            ],
+        };
+
+        // --- Init ---
+
+        window.initStore = async function() {
+            const status = document.getElementById('status');
+            const baseUrl = document.getElementById('base-url').value;
+
+            try {
+                status.textContent = 'Loading WASM module...';
+                const wasm = await import('./pkg/ros_madair_client.js');
+                await wasm.default();
+
+                status.textContent = 'Loading summary index...';
+                store = new wasm.SparqlStore(baseUrl);
+                await store.load_summary();
+
+                // Load graph definition
+                try {
+                    const resp = await fetch(`${baseUrl}graph.json`);
+                    if (resp.ok) {
+                        graphDef = await resp.json();
+                        nodeMap = {};
+                        if (graphDef.nodes) {
+                            for (const node of graphDef.nodes) {
+                                nodeMap[node.nodeid] = {
+                                    name: node.name || node.nodeid,
+                                    alias: node.alias || null,
+                                    datatype: node.datatype || 'unknown',
+                                };
+                            }
+                        }
+                    }
+                } catch (_) {
+                    // graph.json is optional
+                }
+
+                status.textContent = 'Ready. Summary loaded.';
+                populatePageList();
+            } catch (e) {
+                status.innerHTML = `<span class="error">Error: ${e}</span>`;
+                console.error(e);
+            }
+        };
+
+        // --- Tabs ---
+
+        window.switchTab = function(tab) {
+            document.querySelectorAll('.tab-bar button').forEach((btn, i) => {
+                btn.classList.toggle('active', (tab === 'query' && i === 0) || (tab === 'browse' && i === 1));
+            });
+            document.getElementById('tab-query').classList.toggle('active', tab === 'query');
+            document.getElementById('tab-browse').classList.toggle('active', tab === 'browse');
+        };
+
+        // --- Query mode ---
+
+        window.loadQueryExample = function(name) {
+            const input = document.getElementById('query-input');
+            const ex = queryExamples[name];
+            input.value = ex ? JSON.stringify(ex, null, 2) : '[]';
+        };
+
+        window.runQuery = async function() {
+            const resultsEl = document.getElementById('query-results');
+            if (!store) {
+                resultsEl.innerHTML = '<span class="error">Store not initialized. Click "Load Index" first.</span>';
+                return;
+            }
+
+            const patternsJson = document.getElementById('query-input').value;
+            try {
+                const startTime = performance.now();
+                const results = await store.query_patterns(patternsJson);
+                const elapsed = (performance.now() - startTime).toFixed(1);
+
+                if (!Array.isArray(results) || results.length === 0) {
+                    resultsEl.textContent = `0 results (${elapsed}ms)`;
+                    return;
+                }
+
+                resultsEl.innerHTML = `<div style="margin-bottom:0.5rem; font-weight:600;">${results.length} results (${elapsed}ms):</div>`;
+                for (const uri of results) {
+                    const div = document.createElement('div');
+                    div.className = 'item';
+                    div.textContent = uri;
+                    div.onclick = () => loadTiles(uri);
+                    resultsEl.appendChild(div);
+                }
+            } catch (e) {
+                resultsEl.innerHTML = `<span class="error">Query error: ${e}</span>`;
+                console.error(e);
+            }
+        };
+
+        // --- Browse mode ---
+
+        function populatePageList() {
+            const el = document.getElementById('page-list');
+            if (!store) { el.textContent = 'Load index first.'; return; }
+
+            const metaJson = store.page_meta_json();
+            if (!metaJson) { el.textContent = 'No page metadata.'; return; }
+
+            const meta = JSON.parse(metaJson);
+            el.innerHTML = '';
+            for (const pm of meta) {
+                const div = document.createElement('div');
+                div.className = 'page-item';
+                div.innerHTML = `<span>Page ${pm.page_id}</span><span class="count">${pm.resource_count} resources</span>`;
+                div.onclick = () => showPageResources(pm.page_id);
+                el.appendChild(div);
+            }
+        }
+
+        async function showPageResources(pageId) {
+            const el = document.getElementById('browse-resources');
+            el.style.display = 'block';
+            el.innerHTML = '<div style="color:#666;">Loading...</div>';
+
+            const resJson = store.resources_on_page(pageId);
+            const resources = JSON.parse(resJson);
+
+            el.innerHTML = `<div style="margin-bottom:0.5rem; font-weight:600;">Page ${pageId} — ${resources.length} resources:</div>`;
+            for (const uri of resources) {
+                const div = document.createElement('div');
+                div.className = 'item';
+                div.textContent = uri;
+                div.onclick = () => loadTiles(uri);
+                el.appendChild(div);
+            }
+        }
+
+        // --- Tile detail ---
+
+        async function loadTiles(uri) {
+            const section = document.getElementById('tile-section');
+            const uriEl = document.getElementById('tile-uri');
+            const timingEl = document.getElementById('tile-timing');
+            const contentEl = document.getElementById('tile-content');
+
+            section.style.display = 'block';
+            uriEl.textContent = uri;
+            contentEl.innerHTML = '<div style="color:#666;">Loading tiles...</div>';
+            timingEl.textContent = '';
+
+            try {
+                const t0 = performance.now();
+                const tiles = await store.load_tiles_for_resource(uri, null);
+                const elapsed = (performance.now() - t0).toFixed(1);
+                timingEl.textContent = `Loaded in ${elapsed}ms`;
+
+                if (!tiles || tiles.length === 0) {
+                    contentEl.innerHTML = '<div style="color:#888;">No tile data for this resource.</div>';
+                    return;
+                }
+
+                renderTiles(tiles, contentEl);
+            } catch (e) {
+                contentEl.innerHTML = `<span class="error">Error loading tiles: ${e}</span>`;
+                console.error(e);
+            }
+
+            // Scroll to detail
+            section.scrollIntoView({ behavior: 'smooth' });
+        }
+
+        function renderTiles(tiles, container) {
+            // Group by nodegroup_id
+            const groups = {};
+            for (const tile of tiles) {
+                const ng = tile.nodegroup_id || 'unknown';
+                if (!groups[ng]) groups[ng] = [];
+                groups[ng].push(tile);
+            }
+
+            container.innerHTML = '';
+            for (const [ngId, ngTiles] of Object.entries(groups)) {
+                const group = document.createElement('div');
+                group.className = 'tile-group';
+
+                const header = document.createElement('div');
+                header.className = 'tile-group-header';
+                header.textContent = `Nodegroup: ${ngId}`;
+                group.appendChild(header);
+
+                for (const tile of ngTiles) {
+                    if (!tile.data) continue;
+                    for (const [nodeId, value] of Object.entries(tile.data)) {
+                        const field = document.createElement('div');
+                        field.className = 'tile-field';
+
+                        const nodeDef = nodeMap[nodeId];
+                        const name = nodeDef ? nodeDef.name : nodeId;
+                        const alias = nodeDef ? nodeDef.alias : null;
+                        const datatype = nodeDef ? nodeDef.datatype : 'unknown';
+
+                        let label = `<span class="field-name">${esc(name)}</span>`;
+                        if (alias) label += `<span class="field-alias">${esc(alias)}</span>`;
+                        label += `<span class="field-badge">${esc(datatype)}</span>`;
+
+                        const formatted = formatValue(value, datatype);
+
+                        field.innerHTML = `${label}<div class="field-value">${esc(formatted)}</div>`;
+                        group.appendChild(field);
+                    }
+                }
+
+                container.appendChild(group);
+            }
+        }
+
+        function formatValue(value, datatype) {
+            if (value === null || value === undefined) return '(null)';
+
+            switch (datatype) {
+                case 'string': {
+                    // value is typically {"en": "Belfast Castle"} or similar
+                    if (typeof value === 'object' && !Array.isArray(value)) {
+                        return Object.entries(value)
+                            .map(([lang, text]) => `${lang}: "${text}"`)
+                            .join(', ');
+                    }
+                    return String(value);
+                }
+                case 'concept': {
+                    return String(value);
+                }
+                case 'geojson-feature-collection': {
+                    if (typeof value === 'object' && value.type === 'Point' && Array.isArray(value.coordinates)) {
+                        const [lng, lat] = value.coordinates;
+                        return `Point: (${lng}, ${lat})`;
+                    }
+                    if (typeof value === 'object') {
+                        return `${value.type || 'Geometry'}: ${JSON.stringify(value.coordinates || value)}`;
+                    }
+                    return JSON.stringify(value);
+                }
+                case 'date': {
+                    return String(value);
+                }
+                default: {
+                    if (typeof value === 'object') return JSON.stringify(value);
+                    return String(value);
+                }
+            }
+        }
+
+        function esc(str) {
+            const d = document.createElement('div');
+            d.textContent = str;
+            return d.innerHTML;
+        }
+
+        window.hideTileDetail = function() {
+            document.getElementById('tile-section').style.display = 'none';
+        };
+
+        // Auto-init if hash has base URL
+        if (location.hash) {
+            document.getElementById('base-url').value = location.hash.slice(1);
+        }
+    </script>
+</body>
+</html>

@@ -20,6 +20,7 @@ const MAGIC: &[u8; 4] = b"RMRM";
 const NOT_A_RESOURCE: u16 = 0xFFFF;
 
 /// Maps dictionary IDs to page IDs for resource terms.
+#[derive(Clone)]
 pub struct ResourceMap {
     entries: Vec<u16>, // dict_id → page_id (NOT_A_RESOURCE if not a resource)
 }

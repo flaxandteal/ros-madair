@@ -18,6 +18,7 @@
 //! - [`page_assignment`] — Hilbert-based resource → page mapping
 //! - [`page_file`] — per-page binary file format with predicate-partitioned records
 //! - [`summary_quads`] — page-level quad index for query planning
+//! - [`tile_content_file`] — per-page tile content file for full-fidelity tile serving
 //! - [`hilbert`] — 3D Hilbert curve for page sub-sorting
 //! - [`geo_convert`] — GeoJSON → WKT + centroid extraction
 //! - [`datatype_class`] — shared Arches datatype classification
@@ -34,6 +35,8 @@ pub mod quantize;
 pub mod rdf_export;
 pub mod resource_map;
 pub mod summary_quads;
+pub mod tile_content_file;
+pub mod tile_source_impl;
 pub mod uri;
 pub mod value_extract;
 
@@ -58,3 +61,8 @@ pub use resource_map::ResourceMap;
 pub use summary_quads::{
     serialize_summary, SummaryBuilder, SummaryIndex, SummaryQuad,
 };
+pub use tile_content_file::{
+    parse_tile_content_header, tile_full_header_size, write_tile_content_file,
+    TileContentEntry, TileContentHeader,
+};
+pub use tile_source_impl::{DiskTileSource, GrowableTileSource, InMemoryTileSource};

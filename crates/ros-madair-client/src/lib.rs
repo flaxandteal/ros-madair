@@ -29,9 +29,10 @@ use std::collections::HashMap;
 use ros_madair_core::{
     binary_search_object, parse_records, parse_resource_meta,
     Dictionary, PageMeta, PageRecord, ResourceMap, ResourceMeta, SummaryIndex,
+    TileContentHeader,
 };
 
-use crate::fetch::{fetch_full, fetch_page_header, fetch_predicate_blocks, fetch_resource_meta};
+use crate::fetch::{fetch_full, fetch_page_header, fetch_predicate_blocks, fetch_resource_meta, fetch_tile_header, fetch_tile_blob};
 use crate::page_cache::PageCache;
 use crate::planner::{plan_from_patterns, PatternTerm, TriplePattern};
 
@@ -47,6 +48,8 @@ pub struct SparqlStore {
     cache: PageCache,
     /// Loaded records indexed by (page_id, pred_id) → sorted records.
     records: HashMap<(u32, u32), Vec<PageRecord>>,
+    /// Cached tile content headers indexed by page_id.
+    tile_headers: HashMap<u32, TileContentHeader>,
 }
 
 #[wasm_bindgen]
@@ -67,6 +70,7 @@ impl SparqlStore {
             resource_meta: HashMap::new(),
             cache: PageCache::new(),
             records: HashMap::new(),
+            tile_headers: HashMap::new(),
         }
     }
 
@@ -528,6 +532,94 @@ impl SparqlStore {
 
         let json = serde_json::to_string(&result).unwrap_or_else(|_| "[]".to_string());
         JsValue::from_str(&json)
+    }
+
+    // --- Tile content methods ---
+
+    /// Load full-fidelity tiles for a resource, returning JSON (StaticTile array).
+    ///
+    /// If `nodegroup_id` is provided, filters to tiles matching that nodegroup.
+    /// Uses resource_map for O(1) page lookup, then Range requests to tile content file.
+    pub async fn load_tiles_for_resource(
+        &mut self,
+        resource_uri: &str,
+        nodegroup_id: Option<String>,
+    ) -> Result<JsValue, JsValue> {
+        let dict = self
+            .dictionary
+            .as_ref()
+            .ok_or_else(|| JsValue::from_str("Dictionary not loaded"))?;
+        let rmap = self
+            .resource_map
+            .as_ref()
+            .ok_or_else(|| JsValue::from_str("Resource map not loaded"))?;
+
+        let subject_id = dict
+            .lookup(resource_uri)
+            .ok_or_else(|| JsValue::from_str(&format!("Unknown resource URI: {}", resource_uri)))?;
+
+        let page_id = rmap
+            .page_for(subject_id)
+            .ok_or_else(|| JsValue::from_str(&format!("No page for subject_id {}", subject_id)))?;
+
+        // Fetch and cache tile header if needed
+        if !self.tile_headers.contains_key(&page_id) {
+            let tile_url = format!("{}tiles/tile_{:04}.dat", self.base_url, page_id);
+            let header = fetch_tile_header(&tile_url)
+                .await
+                .map_err(|e| JsValue::from_str(&e))?;
+            self.tile_headers.insert(page_id, header);
+        }
+
+        let header = self.tile_headers.get(&page_id).unwrap();
+        let entry = header
+            .entry_for_subject(subject_id)
+            .ok_or_else(|| JsValue::from_str(&format!(
+                "No tile entry for subject_id {} in page {}",
+                subject_id, page_id
+            )))?;
+
+        // Fetch the blob
+        let tile_url = format!("{}tiles/tile_{:04}.dat", self.base_url, page_id);
+        let blob = fetch_tile_blob(&tile_url, entry.blob_offset, entry.blob_size)
+            .await
+            .map_err(|e| JsValue::from_str(&e))?;
+
+        // Deserialize MessagePack → Vec<serde_json::Value>
+        // We use Value rather than StaticTile to avoid pulling alizarin-core into WASM.
+        let tiles: Vec<serde_json::Value> = rmp_serde::from_slice(&blob)
+            .map_err(|e| JsValue::from_str(&format!("Failed to deserialize tile data: {}", e)))?;
+
+        // Optionally filter by nodegroup_id
+        let filtered: Vec<&serde_json::Value> = match &nodegroup_id {
+            Some(ng_id) => tiles
+                .iter()
+                .filter(|t| t.get("nodegroup_id").and_then(|v| v.as_str()) == Some(ng_id.as_str()))
+                .collect(),
+            None => tiles.iter().collect(),
+        };
+
+        serde_wasm_bindgen::to_value(&filtered)
+            .map_err(|e| JsValue::from_str(&format!("Serialization error: {}", e)))
+    }
+}
+
+// --- Rust-only accessors (not exposed to JS) ---
+
+impl SparqlStore {
+    /// Borrow the loaded dictionary, if any.
+    pub fn dictionary(&self) -> Option<&Dictionary> {
+        self.dictionary.as_ref()
+    }
+
+    /// Borrow the loaded resource map, if any.
+    pub fn resource_map(&self) -> Option<&ResourceMap> {
+        self.resource_map.as_ref()
+    }
+
+    /// The base URL this store fetches from.
+    pub fn base_url(&self) -> &str {
+        &self.base_url
     }
 }
 

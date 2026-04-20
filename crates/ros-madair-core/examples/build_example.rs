@@ -15,8 +15,8 @@ use std::path::Path;
 use ros_madair_core::{
     assign_pages, extract_centroid, graph_schema_to_triples, quantize_type_for_datatype,
     quantize_tile_value, resource_to_triples, serialize_summary, triples_to_ntriples,
-    write_page_file, Dictionary, PageConfig, PageRecord, PredicateBlock, ResourceMap,
-    SummaryBuilder, page_assignment::ResourceSummary,
+    write_page_file, write_tile_content_file, Dictionary, PageConfig, PageRecord,
+    PredicateBlock, ResourceMap, SummaryBuilder, page_assignment::ResourceSummary,
 };
 use ros_madair_core::uri::{resource_uri, node_uri};
 
@@ -246,6 +246,31 @@ fn main() {
         }
     }
     fs::write(output_dir.join("all.nt"), triples_to_ntriples(&all_triples)).unwrap();
+
+    // Tile content files
+    fs::create_dir_all(output_dir.join("tiles")).expect("Failed to create tiles dir");
+
+    // Group resources by page, serialize tiles as MessagePack
+    let mut page_tile_entries: HashMap<u32, Vec<(u32, Vec<u8>)>> = HashMap::new();
+    for (resource_id, tiles) in &resources {
+        let page_id = page_index.resource_to_page[resource_id.as_str()];
+        let subject_id = dict.lookup(&resource_uri(base_uri, resource_id)).unwrap();
+        let blob = rmp_serde::to_vec_named(tiles).expect("Failed to serialize tiles");
+        page_tile_entries.entry(page_id).or_default().push((subject_id, blob));
+    }
+
+    for (page_id, mut entries) in page_tile_entries {
+        entries.sort_by_key(|(sid, _)| *sid);
+        let tile_bytes = write_tile_content_file(&entries);
+        fs::write(
+            output_dir.join(format!("tiles/tile_{:04}.dat", page_id)),
+            &tile_bytes,
+        )
+        .unwrap();
+    }
+
+    // Write graph definition for the HTML demo
+    fs::write(output_dir.join("graph.json"), graph_json).unwrap();
 
     println!("Built index with {} resources, {} pages", resources.len(), page_index.page_meta.len());
     println!("Dictionary: {} terms", dict.len());

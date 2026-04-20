@@ -152,6 +152,36 @@
     .card .desc { font-size: 13px; color: #333; margin-top: 0.5rem; }
     .meta { font-size: 12px; color: #666; margin: 0.5rem 0; }
     pre.error { color: #c00; background: #fee; padding: 0.5rem; white-space: pre-wrap; font-size: 12px; }
+
+    /* Collection browser modal */
+    .modal-overlay {
+      display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.4);
+      z-index: 1000; justify-content: center; align-items: center;
+    }
+    .modal-overlay.open { display: flex; }
+    .modal {
+      background: #fff; border-radius: 8px; width: min(720px, 90vw);
+      max-height: 80vh; display: flex; flex-direction: column;
+      box-shadow: 0 8px 32px rgba(0,0,0,0.2);
+    }
+    .modal-header {
+      display: flex; justify-content: space-between; align-items: center;
+      padding: 0.75rem 1rem; border-bottom: 1px solid #ddd;
+    }
+    .modal-header h2 { margin: 0; font-size: 1.1rem; }
+    .modal-header button { background: none; border: none; font-size: 1.4rem; cursor: pointer; padding: 0 0.25rem; }
+    .modal-body { padding: 1rem; overflow-y: auto; flex: 1; }
+    .modal-body select { width: 100%; padding: 0.4rem; font-size: 14px; margin-bottom: 0.75rem; }
+    .modal-body input[type="text"] {
+      width: 100%; padding: 0.4rem; font-size: 14px;
+      margin-bottom: 0.5rem; border: 1px solid #ccc; border-radius: 3px;
+    }
+    .coll-info { font-size: 12px; color: #666; margin-bottom: 0.5rem; }
+    .coll-list { list-style: none; padding: 0; margin: 0; max-height: 50vh; overflow-y: auto; }
+    .coll-list li {
+      padding: 0.3rem 0.5rem; font-size: 13px; border-bottom: 1px solid #f0f0f0;
+    }
+    .coll-list li:hover { background: #f5f5ff; }
   </style>
 </head>
 <body>
@@ -172,10 +202,27 @@
 
   <div class="controls">
     <button id="run-btn" disabled>Run Query</button>
+    <button id="browse-btn" type="button">Browse Collections</button>
     <span id="meta" class="meta"></span>
   </div>
 
   <div id="results"></div>
+
+  <!-- Collection browser modal -->
+  <div id="coll-modal" class="modal-overlay">
+    <div class="modal">
+      <div class="modal-header">
+        <h2>Browse Collections</h2>
+        <button id="coll-close" title="Close">&times;</button>
+      </div>
+      <div class="modal-body">
+        <select id="coll-select"><option value="">Select a collection...</option></select>
+        <input type="text" id="coll-filter" placeholder="Filter values..." style="display:none">
+        <div id="coll-info" class="coll-info"></div>
+        <ul id="coll-list" class="coll-list"></ul>
+      </div>
+    </div>
+  </div>
 
   <script type="module">
     import init, { SparqlStore } from './pkg/ros_madair_client.js';
@@ -419,7 +466,101 @@
     });
 
     // ------------------------------------------------------------------ //
-    // 8. Kick off init                                                   //
+    // 8. Collection browser                                              //
+    // ------------------------------------------------------------------ //
+    const collModal = document.getElementById('coll-modal');
+    const collSelect = document.getElementById('coll-select');
+    const collFilter = document.getElementById('coll-filter');
+    const collInfo = document.getElementById('coll-info');
+    const collList = document.getElementById('coll-list');
+    const collCache = new Map();
+    let collIndex = null;
+
+    document.getElementById('browse-btn').addEventListener('click', async () => {
+      collModal.classList.add('open');
+      if (!collIndex) {
+        try {
+          const resp = await fetch('./static/index/sparnatural/concepts/_index.json');
+          collIndex = await resp.json();
+          for (const entry of collIndex) {
+            const opt = document.createElement('option');
+            opt.value = entry.id;
+            opt.textContent = `${entry.label} (${entry.count} values)`;
+            collSelect.appendChild(opt);
+          }
+        } catch (e) {
+          collInfo.textContent = 'Could not load collection index.';
+          console.error(e);
+        }
+      }
+    });
+
+    document.getElementById('coll-close').addEventListener('click', () => {
+      collModal.classList.remove('open');
+    });
+    collModal.addEventListener('click', (e) => {
+      if (e.target === collModal) collModal.classList.remove('open');
+    });
+
+    collSelect.addEventListener('change', async () => {
+      const id = collSelect.value;
+      collList.innerHTML = '';
+      collFilter.value = '';
+      if (!id) {
+        collFilter.style.display = 'none';
+        collInfo.textContent = '';
+        return;
+      }
+      collFilter.style.display = '';
+
+      let values = collCache.get(id);
+      if (!values) {
+        collInfo.textContent = 'Loading...';
+        try {
+          const resp = await fetch(`./static/index/sparnatural/concepts/${id}.json`);
+          const data = await resp.json();
+          values = data.values || [];
+          collCache.set(id, values);
+        } catch (e) {
+          collInfo.textContent = 'Failed to load collection.';
+          console.error(e);
+          return;
+        }
+      }
+      collInfo.textContent = `${values.length} values`;
+      renderCollValues(values);
+    });
+
+    collFilter.addEventListener('input', () => {
+      const id = collSelect.value;
+      const values = collCache.get(id) || [];
+      const q = collFilter.value.toLowerCase();
+      const filtered = q ? values.filter(v => v.label.toLowerCase().includes(q)) : values;
+      collInfo.textContent = q
+        ? `${filtered.length} / ${values.length} values`
+        : `${values.length} values`;
+      renderCollValues(filtered);
+    });
+
+    function renderCollValues(values) {
+      collList.innerHTML = '';
+      const show = values.slice(0, 500);
+      for (const v of show) {
+        const li = document.createElement('li');
+        li.textContent = v.label;
+        collList.appendChild(li);
+      }
+      if (values.length > 500) {
+        const li = document.createElement('li');
+        li.style.fontStyle = 'italic';
+        li.style.color = '#999';
+        li.textContent = `... and ${values.length - 500} more (use filter to narrow)`;
+        collList.appendChild(li);
+      }
+    }
+
+    // ------------------------------------------------------------------ //
+    // 9. Kick off init                                                   //
     // ------------------------------------------------------------------ //
     initAll().catch(e => {
       console.error(e);

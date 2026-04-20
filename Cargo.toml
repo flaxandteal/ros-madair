@@ -3,6 +3,7 @@ members = [
     "crates/ros-madair-core",
     "crates/ros-madair-builder",
     "crates/ros-madair-client",
+    "crates/ros-madair-alizarin",
 ]
 resolver = "2"
 
@@ -22,3 +23,6 @@ debug = true
 
 [profile.dev]
 debug = true
+
+[patch.crates-io]
+alizarin-core = { path = "../alizarin/crates/alizarin-core" }

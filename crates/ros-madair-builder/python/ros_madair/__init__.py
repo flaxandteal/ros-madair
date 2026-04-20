@@ -3,9 +3,9 @@
 
 """RosMadair — page-based static SPARQL query engine for alizarin data."""
 
-from ros_madair.ros_madair import IndexBuilder
+from ros_madair.ros_madair import IndexBuilder, IndexReader
 
-__all__ = ["IndexBuilder"]
+__all__ = ["IndexBuilder", "IndexReader"]
 
 # Optional: register as alizarin query provider if available
 try:

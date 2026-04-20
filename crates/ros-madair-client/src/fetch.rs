@@ -9,7 +9,10 @@ use wasm_bindgen::JsCast;
 use wasm_bindgen_futures::JsFuture;
 use web_sys::{Request, RequestInit, Response};
 
-use ros_madair_core::{full_header_size, parse_page_header, PageHeader};
+use ros_madair_core::{
+    full_header_size, parse_page_header, parse_tile_content_header, tile_full_header_size,
+    PageHeader, TileContentHeader,
+};
 
 /// Fetch a byte range from a URL.
 async fn fetch_range(url: &str, start: u32, end: u32) -> Result<Vec<u8>, String> {
@@ -167,4 +170,32 @@ pub async fn fetch_predicate_blocks(
     }
 
     Ok(results)
+}
+
+// --- Tile content fetching ---
+
+/// Probe size for tile content headers. Covers up to ~84 resources per page
+/// in a single request (9 + 12*84 = 1017).
+const TILE_HEADER_PROBE: u32 = 1024;
+
+/// Fetch a tile content file header in a single range request.
+///
+/// Probes 1024 bytes upfront. Falls back to a second request if the header
+/// is unusually large (pages with >84 resources).
+pub async fn fetch_tile_header(tile_url: &str) -> Result<TileContentHeader, String> {
+    let probe = fetch_range(tile_url, 0, TILE_HEADER_PROBE).await?;
+    let header_size = tile_full_header_size(&probe)? as u32;
+
+    if probe.len() >= header_size as usize {
+        return parse_tile_content_header(&probe[..header_size as usize]);
+    }
+
+    // Rare fallback: header larger than probe
+    let header_bytes = fetch_range(tile_url, 0, header_size).await?;
+    parse_tile_content_header(&header_bytes)
+}
+
+/// Fetch a tile blob from a tile content file via a range request.
+pub async fn fetch_tile_blob(tile_url: &str, offset: u32, size: u32) -> Result<Vec<u8>, String> {
+    fetch_range(tile_url, offset, offset + size).await
 }
