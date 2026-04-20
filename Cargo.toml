@@ -25,4 +25,4 @@ debug = true
 debug = true
 
 [patch.crates-io]
-alizarin-core = { path = "../alizarin/crates/alizarin-core" }
+alizarin-core = { git = "https://github.com/flaxandteal/alizarin", tag = "v0.2.1-alpha.63" }
