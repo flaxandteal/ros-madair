@@ -25,6 +25,9 @@ debug = true
 debug = true
 
 
+[workspace.dependencies]
+alizarin-core = "0.2.1-alpha.68"
+
 # For local development with a sibling alizarin checkout, add to .cargo/config.toml:
 #   [patch.crates-io]
 #   alizarin-core = { path = "../alizarin/crates/alizarin-core" }

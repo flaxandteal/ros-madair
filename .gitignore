@@ -8,6 +8,9 @@ example/static/
 example/pkg/
 pkg/
 
+# Cargo local config (path patches for development)
+.cargo/
+
 # Rust build
 target/
 
