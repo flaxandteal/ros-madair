@@ -24,13 +24,14 @@ use alizarin_core::graph::{IndexedGraph, StaticResource};
 use alizarin_core::loader::PrebuildLoader;
 
 use ros_madair_core::{
-    assign_pages, extract_centroid, graph_schema_to_triples, quantize_tile_value,
-    quantize_type_for_datatype, serialize_summary, triples_to_ntriples, write_page_file,
-    Dictionary, PageConfig, PageRecord, PredicateBlock, QuantizeType, ResourceMap, ResourceMeta,
-    SummaryBuilder, page_assignment::ResourceSummary,
+    assign_pages, build_concept_indexes, extract_centroid, graph_schema_to_triples,
+    quantize_tile_value, quantize_type_for_datatype, serialize_summary, triples_to_ntriples,
+    write_page_file, write_tile_content_file, ConceptIntervalIndex, Dictionary, PageConfig,
+    PageRecord, PredicateBlock, QuantizeType, ResourceMap, ResourceMeta, SummaryBuilder,
+    page_assignment::ResourceSummary,
 };
 use ros_madair_core::datatype_class::{classify_datatype, DatatypeClass};
-use ros_madair_core::uri::resource_prefix;
+use ros_madair_core::uri::{concept_prefix, resource_prefix};
 use ros_madair_core::value_extract;
 
 fn main() {
@@ -220,8 +221,117 @@ fn main() {
     );
     println!("Assigned to {} pages (target size: {})", page_index.page_meta.len(), page_size);
 
+    // Load reference_data (SKOS vocabularies) early so we can build the
+    // concept interval index before processing page records.
+    let ref_data_dir = Path::new(prebuild_dir).join("reference_data");
+    let mut all_collections: Vec<alizarin_core::skos::SkosCollection> = Vec::new();
+    let mut vocab_file_count = 0usize;
+    let mut vocab_files_to_process: Vec<std::path::PathBuf> = Vec::new();
+
+    if ref_data_dir.is_dir() {
+        for dir in [
+            ref_data_dir.clone(),
+            ref_data_dir.join("collections"),
+            ref_data_dir.join("concepts"),
+        ] {
+            if dir.is_dir() {
+                if let Ok(entries) = fs::read_dir(&dir) {
+                    for entry in entries.flatten() {
+                        let path = entry.path();
+                        if path.is_file() {
+                            vocab_files_to_process.push(path);
+                        }
+                    }
+                }
+            }
+        }
+
+        for path in &vocab_files_to_process {
+            let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+            match ext {
+                "xml" => {
+                    vocab_file_count += 1;
+                    match fs::read_to_string(path) {
+                        Ok(xml_content) => {
+                            match alizarin_core::skos::parse_skos_to_collections(
+                                &xml_content, base_uri,
+                            ) {
+                                Ok(collections) => {
+                                    all_collections.extend(collections);
+                                }
+                                Err(e) => {
+                                    eprintln!(
+                                        "  Warning: Failed to parse SKOS XML from {}: {}",
+                                        path.display(), e
+                                    );
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            eprintln!("  Warning: Failed to read {}: {}", path.display(), e);
+                        }
+                    }
+                }
+                "json" => {
+                    vocab_file_count += 1;
+                    match fs::read_to_string(path) {
+                        Ok(json_content) => {
+                            if let Ok(coll) = serde_json::from_str::<alizarin_core::skos::SkosCollection>(&json_content) {
+                                all_collections.push(coll);
+                            } else if let Ok(colls) = serde_json::from_str::<Vec<alizarin_core::skos::SkosCollection>>(&json_content) {
+                                all_collections.extend(colls);
+                            }
+                        }
+                        Err(e) => {
+                            eprintln!("  Warning: Failed to read {}: {}", path.display(), e);
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
     // Build page records + summary quads
     let mut dict = Dictionary::new();
+
+    // Build concept indexes from vocabulary data (shared DFS walk)
+    let (concept_interval_index, concept_tree) = if !all_collections.is_empty() {
+        // Pre-intern concept URIs
+        let prefix = concept_prefix(base_uri);
+        fn intern_concept_uris_recursive(
+            concepts: &HashMap<String, alizarin_core::skos::SkosConcept>,
+            prefix: &str,
+            dict: &mut Dictionary,
+        ) {
+            for concept in concepts.values() {
+                for value in concept.pref_labels.values() {
+                    if !value.id.is_empty() {
+                        dict.intern(&format!("{prefix}{}", value.id));
+                    }
+                }
+                if let Some(children) = &concept.children {
+                    let child_map: HashMap<String, alizarin_core::skos::SkosConcept> =
+                        children.iter().map(|c| (c.id.clone(), c.clone())).collect();
+                    intern_concept_uris_recursive(&child_map, prefix, dict);
+                }
+            }
+        }
+        for coll in &all_collections {
+            intern_concept_uris_recursive(&coll.concepts, &prefix, &mut dict);
+        }
+        let (ci, ct) = build_concept_indexes(
+            &all_collections,
+            &dict,
+            base_uri,
+        );
+        println!("  Concept intervals: {} entries", ci.len());
+        println!("  Concept tree: {} entries", ct.len());
+        (Some(ci), Some(ct))
+    } else {
+        (None, None)
+    };
+
     let mut summary_builder = SummaryBuilder::new();
     let mut page_records: HashMap<u32, Vec<(u32, PageRecord)>> = HashMap::new();
     let mut resource_names: HashMap<String, String> = HashMap::new();
@@ -266,7 +376,10 @@ fn main() {
                 };
                 let pred_id = dict.intern(&ros_madair_core::uri::node_uri(base_uri, alias));
 
-                let object_vals = quantize_tile_value(value, qtype, &node.datatype, &mut dict, base_uri);
+                let object_vals = quantize_tile_value(
+                    value, qtype, &node.datatype, &mut dict, base_uri,
+                    concept_interval_index.as_ref(),
+                );
 
                 for object_val in object_vals {
                     let record = PageRecord {
@@ -279,10 +392,13 @@ fn main() {
                         .push((pred_id, record));
 
                     // For resource-instance links, resolve to the target's
-                    // page. Concepts/literals use a high sentinel so they
-                    // never collide with real page IDs in the overview.
+                    // page. For concept DFS: page_o = dfs_enter | DFS_OFFSET.
+                    // Literals use the quantized value as bucket key.
                     const NON_PAGE_SENTINEL: u32 = u32::MAX;
                     let page_o = match qtype {
+                        QuantizeType::ConceptDfs => {
+                            ConceptIntervalIndex::encode_for_summary(object_val)
+                        }
                         QuantizeType::DictionaryId => {
                             if let Some(term) = dict.resolve(object_val) {
                                 if let Some(rid) = term.strip_prefix(&resource_prefix(base_uri)) {
@@ -292,7 +408,6 @@ fn main() {
                                         .copied()
                                         .unwrap_or(NON_PAGE_SENTINEL)
                                 } else {
-                                    // Concept or other non-resource dict entry
                                     NON_PAGE_SENTINEL
                                 }
                             } else {
@@ -443,12 +558,113 @@ fn main() {
     fs::write(output_path.join("all.nt"), &nt_output).unwrap();
     println!("  N-Triples: {} triples ({} bytes)", triple_count, nt_output.len());
 
+    // Tile content files — lossless MessagePack-encoded tiles for each resource,
+    // grouped by page. These enable alizarin's build_tree_from_tiles() via IndexReader.
+    fs::create_dir_all(output_path.join("tiles")).expect("Failed to create tiles dir");
+
+    let mut page_tile_entries: HashMap<u32, Vec<(u32, Vec<u8>)>> = HashMap::new();
+    for resource in &all_resources {
+        let resource_id = &resource.resourceinstance.resourceinstanceid;
+        let tiles = resource.tiles.as_deref().unwrap_or_default();
+        if tiles.is_empty() {
+            continue;
+        }
+
+        let page_id = match page_index.resource_to_page.get(resource_id.as_str()) {
+            Some(&pid) => pid,
+            None => continue,
+        };
+        let subject_id = match dict.lookup(&ros_madair_core::uri::resource_uri(base_uri, resource_id)) {
+            Some(id) => id,
+            None => continue,
+        };
+
+        let blob = rmp_serde::to_vec_named(tiles).expect("Failed to serialize tiles to msgpack");
+        page_tile_entries.entry(page_id).or_default().push((subject_id, blob));
+    }
+
+    let mut total_tile_bytes = 0u64;
+    let mut tile_file_count = 0usize;
+    for (page_id, mut entries) in page_tile_entries {
+        entries.sort_by_key(|(sid, _)| *sid);
+        let tile_bytes = write_tile_content_file(&entries);
+        total_tile_bytes += tile_bytes.len() as u64;
+        fs::write(
+            output_path.join(format!("tiles/tile_{:04}.dat", page_id)),
+            &tile_bytes,
+        )
+        .unwrap();
+        tile_file_count += 1;
+    }
+    println!("  Tiles: {} files ({} bytes total)", tile_file_count, total_tile_bytes);
+
+    // Copy graph definitions to output for schema registration by downstream consumers
+    let graphs_out = output_path.join("graphs");
+    fs::create_dir_all(&graphs_out).expect("Failed to create graphs dir");
+    let graphs_src = Path::new(prebuild_dir).join("graphs").join("resource_models");
+    if graphs_src.is_dir() {
+        for entry in fs::read_dir(&graphs_src).unwrap() {
+            let entry = entry.unwrap();
+            let path = entry.path();
+            if path.extension().map(|e| e == "json").unwrap_or(false) {
+                let dest = graphs_out.join(entry.file_name());
+                fs::copy(&path, &dest).unwrap();
+            }
+        }
+        println!("  Graphs: copied from {}", graphs_src.display());
+    } else {
+        println!("  Graphs: WARNING — no graphs/resource_models/ found in prebuild");
+    }
+
+    // Write vocabulary data (loaded earlier for concept interval index)
+    if ref_data_dir.is_dir() {
+        let vocabs_out = output_path.join("vocabularies");
+        fs::create_dir_all(&vocabs_out).expect("Failed to create vocabularies dir");
+
+        // Copy XML files to output
+        for path in &vocab_files_to_process {
+            if path.extension().and_then(|e| e.to_str()) == Some("xml") {
+                let dest = vocabs_out.join(path.file_name().unwrap());
+                fs::copy(path, &dest).unwrap_or_default();
+            }
+        }
+
+        if !all_collections.is_empty() {
+            let hierarchy_json = serde_json::to_string_pretty(&all_collections)
+                .expect("Failed to serialize concept hierarchy");
+            fs::write(output_path.join("concept_hierarchy.json"), &hierarchy_json).unwrap();
+            println!(
+                "  Vocabularies: {} files, {} collections -> concept_hierarchy.json ({} bytes)",
+                vocab_file_count, all_collections.len(), hierarchy_json.len()
+            );
+        } else {
+            println!("  Vocabularies: {} files found (no parseable collections)", vocab_file_count);
+        }
+    } else {
+        println!("  Vocabularies: no reference_data/ found in prebuild");
+    }
+
+    // Write concept interval index
+    if let Some(ci) = &concept_interval_index {
+        let ci_bytes = ci.to_bytes();
+        fs::write(output_path.join("concept_intervals.bin"), &ci_bytes).unwrap();
+        println!("  Concept intervals: {} entries ({} bytes)", ci.len(), ci_bytes.len());
+    }
+
+    // Write concept tree (label index + browsing)
+    if let Some(ct) = &concept_tree {
+        let ct_bytes = ct.to_bytes();
+        fs::write(output_path.join("concept_tree.bin"), &ct_bytes).unwrap();
+        println!("  Concept tree: {} entries ({} bytes)", ct.len(), ct_bytes.len());
+    }
+
     println!("\nDone! Output: {}", output_dir);
     println!("  summary.bin       {} bytes", summary_bytes.len());
     println!("  dictionary.bin    {} bytes", dict_bytes.len());
     println!("  resource_map.bin  {} bytes", resource_map_bytes.len());
     println!("  page_meta.json    {} bytes", page_meta_json.len());
     println!("  pages/            {} files, {} bytes total", live_page_meta.len(), total_page_bytes);
+    println!("  tiles/            {} files, {} bytes total", tile_file_count, total_tile_bytes);
     println!("  all.nt            {} bytes", nt_output.len());
 }
 

@@ -162,6 +162,7 @@ pub fn serialize_summary(quads: &[SummaryQuad]) -> Vec<u8> {
 }
 
 /// Deserialized summary index with three sorted views.
+#[derive(Clone)]
 pub struct SummaryIndex {
     spo: Vec<SummaryQuad>,
     pso: Vec<SummaryQuad>,
@@ -298,6 +299,22 @@ impl SummaryIndex {
         self.lookup_sp(subj_page, pred)
             .iter()
             .map(|q| q.page_o)
+            .collect()
+    }
+
+    /// Range lookup on OPS index: all quads where `lo <= page_o <= hi` and
+    /// `predicate == pred`.
+    ///
+    /// Used for DFS interval concept queries: `lo` and `hi` are
+    /// `dfs_enter | DFS_OFFSET` and `dfs_leave | DFS_OFFSET`.
+    pub fn lookup_op_range(&self, lo: u32, hi: u32, pred: u32) -> Vec<&SummaryQuad> {
+        let start = self.ops.partition_point(|q| q.page_o < lo);
+        let end = self.ops[start..]
+            .partition_point(|q| q.page_o <= hi)
+            + start;
+        self.ops[start..end]
+            .iter()
+            .filter(|q| q.predicate == pred)
             .collect()
     }
 

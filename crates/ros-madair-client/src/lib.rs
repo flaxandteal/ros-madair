@@ -27,14 +27,14 @@ use wasm_bindgen::prelude::*;
 use std::collections::HashMap;
 
 use ros_madair_core::{
-    binary_search_object, parse_records, parse_resource_meta,
-    Dictionary, PageMeta, PageRecord, ResourceMap, ResourceMeta, SummaryIndex,
-    TileContentHeader,
+    parse_records, parse_resource_meta,
+    ConceptIntervalIndex, Dictionary, PageMeta, PageRecord, ResourceMap,
+    ResourceMeta, SummaryIndex, TileContentHeader,
 };
 
 use crate::fetch::{fetch_full, fetch_page_header, fetch_predicate_blocks, fetch_resource_meta, fetch_tile_header, fetch_tile_blob};
 use crate::page_cache::PageCache;
-use crate::planner::{plan_from_patterns, PatternTerm, TriplePattern};
+use crate::planner::{plan_from_patterns, execute_patterns, PatternTerm, TriplePattern};
 
 #[wasm_bindgen]
 pub struct SparqlStore {
@@ -43,6 +43,7 @@ pub struct SparqlStore {
     dictionary: Option<Dictionary>,
     page_meta: Option<Vec<PageMeta>>,
     resource_map: Option<ResourceMap>,
+    concept_intervals: Option<ConceptIntervalIndex>,
     /// Loaded resource metadata indexed by dict_id.
     resource_meta: HashMap<u32, ResourceMeta>,
     cache: PageCache,
@@ -67,6 +68,7 @@ impl SparqlStore {
             dictionary: None,
             page_meta: None,
             resource_map: None,
+            concept_intervals: None,
             resource_meta: HashMap::new(),
             cache: PageCache::new(),
             records: HashMap::new(),
@@ -111,9 +113,20 @@ impl SparqlStore {
                 );
             }
             Err(_) => {
-                // resource_map.bin not available — graph explorer won't work
-                // but query functionality is unaffected
                 self.resource_map = None;
+            }
+        }
+
+        // Load concept intervals (optional — may not exist for older indices)
+        match fetch_full(&format!("{}concept_intervals.bin", self.base_url)).await {
+            Ok(ci_bytes) => {
+                self.concept_intervals = Some(
+                    ConceptIntervalIndex::from_bytes(&ci_bytes)
+                        .map_err(|e| JsValue::from_str(&e))?,
+                );
+            }
+            Err(_) => {
+                self.concept_intervals = None;
             }
         }
 
@@ -154,7 +167,10 @@ impl SparqlStore {
             .collect();
 
         // Plan
-        let plan = plan_from_patterns(&patterns, summary, dict, page_meta);
+        let plan = plan_from_patterns(
+            &patterns, summary, dict, page_meta,
+            self.concept_intervals.as_ref(),
+        );
         let reduced = self.cache.reduce_plan(&plan);
 
         // Fetch needed pages
@@ -179,7 +195,10 @@ impl SparqlStore {
         }
 
         // Execute query over all loaded records.
-        let results = execute_patterns(&patterns, &self.records, dict);
+        let results = execute_patterns(
+            &patterns, &self.records, dict,
+            self.concept_intervals.as_ref(),
+        );
 
         // Return as JSON array of URIs
         let result_uris: Vec<String> = results
@@ -638,72 +657,4 @@ fn parse_term(s: &str) -> PatternTerm {
     }
 }
 
-/// Execute triple patterns over all loaded records.
-fn execute_patterns(
-    patterns: &[TriplePattern],
-    records: &HashMap<(u32, u32), Vec<PageRecord>>,
-    dict: &Dictionary,
-) -> Vec<u32> {
-    if patterns.is_empty() {
-        return Vec::new();
-    }
-
-    let mut result_sets: Vec<std::collections::HashSet<u32>> = Vec::new();
-
-    for pattern in patterns {
-        let pred_uri = match &pattern.predicate {
-            PatternTerm::Uri(u) => u.as_str(),
-            PatternTerm::Variable(_) => continue, // TODO: variable predicates
-        };
-
-        let pred_id = match dict.lookup(pred_uri) {
-            Some(id) => id,
-            None => {
-                result_sets.push(std::collections::HashSet::new());
-                continue;
-            }
-        };
-
-        let mut matches = std::collections::HashSet::new();
-
-        // Scan all loaded blocks for this predicate
-        for (&(_, pid), recs) in records {
-            if pid != pred_id {
-                continue;
-            }
-
-            match &pattern.object {
-                PatternTerm::Uri(obj_uri) => {
-                    if let Some(obj_id) = dict.lookup(obj_uri) {
-                        let (lo, hi) = binary_search_object(recs, obj_id);
-                        for rec in &recs[lo..hi] {
-                            matches.insert(rec.subject_id);
-                        }
-                    }
-                }
-                PatternTerm::Variable(_) => {
-                    for rec in recs {
-                        matches.insert(rec.subject_id);
-                    }
-                }
-            }
-        }
-
-        result_sets.push(matches);
-    }
-
-    // Intersect all result sets
-    if result_sets.is_empty() {
-        return Vec::new();
-    }
-
-    let mut iter = result_sets.into_iter();
-    let mut intersection = iter.next().unwrap();
-    for set in iter {
-        intersection = intersection.intersection(&set).copied().collect();
-    }
-
-    let mut results: Vec<u32> = intersection.into_iter().collect();
-    results.sort();
-    results
-}
+// execute_patterns is now in ros-madair-core::query, re-exported via planner module.

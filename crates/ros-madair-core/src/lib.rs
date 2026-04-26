@@ -25,13 +25,17 @@
 //! - [`uri`] — shared URI construction helpers
 //! - [`value_extract`] — shared JSON value extraction
 
+pub mod concept_intervals;
+pub mod concept_tree;
 pub mod datatype_class;
 pub mod dictionary;
 pub mod geo_convert;
 pub mod hilbert;
+pub mod local_engine;
 pub mod page_assignment;
 pub mod page_file;
 pub mod quantize;
+pub mod query;
 pub mod rdf_export;
 pub mod resource_map;
 pub mod summary_quads;
@@ -65,4 +69,11 @@ pub use tile_content_file::{
     parse_tile_content_header, tile_full_header_size, write_tile_content_file,
     TileContentEntry, TileContentHeader,
 };
+pub use local_engine::LocalQueryEngine;
+pub use query::{
+    execute_patterns, plan_from_patterns, FetchPlan, PageFetchSpec, PatternTerm, SummaryResult,
+    TriplePattern,
+};
+pub use concept_intervals::ConceptIntervalIndex;
+pub use concept_tree::{build_concept_indexes, ConceptTree, ConceptInfo};
 pub use tile_source_impl::{DiskTileSource, GrowableTileSource, InMemoryTileSource};

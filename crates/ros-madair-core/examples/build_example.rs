@@ -179,7 +179,7 @@ fn main() {
                 let pred_id = dict.intern(&node_uri(base_uri, alias));
 
                 let object_vals = quantize_tile_value(
-                    value, qtype, &node.datatype, &mut dict, base_uri,
+                    value, qtype, &node.datatype, &mut dict, base_uri, None,
                 );
 
                 for object_val in object_vals {

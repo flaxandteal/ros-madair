@@ -22,8 +22,10 @@ use ros_madair_core::{
     serialize_summary, write_page_file, write_tile_content_file,
     parse_tile_content_header,
     resource_to_triples, graph_schema_to_triples, triples_to_ntriples,
-    Dictionary, PageConfig, PageRecord, PredicateBlock, ResourceMap, ResourceMeta,
-    SummaryBuilder, extract_centroid,
+    build_concept_indexes, ConceptIntervalIndex, ConceptTree,
+    Dictionary, LocalQueryEngine, PageConfig, PageMeta,
+    PageRecord, PredicateBlock, ResourceMap, ResourceMeta, SummaryBuilder,
+    SummaryIndex, extract_centroid,
     page_assignment::ResourceSummary,
 };
 use ros_madair_core::datatype_class::{classify_datatype, DatatypeClass};
@@ -44,6 +46,8 @@ pub struct IndexBuilder {
     resources: Vec<ResourceData>,
     /// resource_id → (name, slug, model) for embedding in page files.
     resource_metadata: HashMap<String, (String, String, String)>,
+    /// Parsed SKOS collections for concept hierarchy export.
+    vocabulary_collections: Vec<alizarin_core::skos::SkosCollection>,
 }
 
 #[pymethods]
@@ -55,6 +59,7 @@ impl IndexBuilder {
             graphs: HashMap::new(),
             resources: Vec::new(),
             resource_metadata: HashMap::new(),
+            vocabulary_collections: Vec::new(),
         }
     }
 
@@ -114,6 +119,31 @@ impl IndexBuilder {
         Ok(())
     }
 
+    /// Add vocabulary data from a SKOS RDF/XML string.
+    ///
+    /// Parsed collections will be written as `concept_hierarchy.json` during build,
+    /// enabling label-based concept resolution without runtime vocabulary loading.
+    fn add_vocabulary_xml(&mut self, xml_content: &str, base_uri: &str) -> PyResult<()> {
+        let collections = alizarin_core::skos::parse_skos_to_collections(xml_content, base_uri)
+            .map_err(|e| PyValueError::new_err(format!("Failed to parse SKOS XML: {e}")))?;
+        self.vocabulary_collections.extend(collections);
+        Ok(())
+    }
+
+    /// Add vocabulary data from a JSON string (serialized SkosCollection or array thereof).
+    ///
+    /// Parsed collections will be written as `concept_hierarchy.json` during build.
+    fn add_vocabulary_json(&mut self, json_content: &str) -> PyResult<()> {
+        if let Ok(coll) = serde_json::from_str::<alizarin_core::skos::SkosCollection>(json_content) {
+            self.vocabulary_collections.push(coll);
+        } else if let Ok(colls) = serde_json::from_str::<Vec<alizarin_core::skos::SkosCollection>>(json_content) {
+            self.vocabulary_collections.extend(colls);
+        } else {
+            return Err(PyValueError::new_err("Failed to parse JSON as SkosCollection or Vec<SkosCollection>"));
+        }
+        Ok(())
+    }
+
     /// Build the index and write output files.
     #[pyo3(signature = (output_dir, page_size=None))]
     fn build(&self, output_dir: &str, page_size: Option<usize>) -> PyResult<()>{
@@ -167,6 +197,25 @@ impl IndexBuilder {
 
         // Assign pages
         let page_index = assign_pages(&summaries, &config);
+
+        // Build concept indexes from vocabulary data.
+        // We need to pre-intern all concept value_id URIs so they have
+        // dict_ids before the interval index is built.
+        let (concept_interval_index, concept_tree) = if !self.vocabulary_collections.is_empty() {
+            // Pre-intern concept URIs
+            let prefix = ros_madair_core::uri::concept_prefix(&self.base_uri);
+            for coll in &self.vocabulary_collections {
+                Self::intern_concept_uris(&coll.concepts, &prefix, &mut dict);
+            }
+            let (ci, ct) = build_concept_indexes(
+                &self.vocabulary_collections,
+                &dict,
+                &self.base_uri,
+            );
+            (Some(ci), Some(ct))
+        } else {
+            (None, None)
+        };
 
         // Build page records and summary quads
         let mut summary_builder = SummaryBuilder::new();
@@ -229,6 +278,7 @@ impl IndexBuilder {
                         &node.datatype,
                         &mut dict,
                         &self.base_uri,
+                        concept_interval_index.as_ref(),
                     );
 
                     for object_val in object_vals {
@@ -244,10 +294,13 @@ impl IndexBuilder {
 
                         // For link types, page_o = page of the target resource.
                         // For literal types, page_o = the quantized value (bucket).
-                        // Only resource-instance links resolve to page IDs.
-                        // Concepts use a high sentinel to avoid page ID collisions.
+                        // For concept DFS: page_o = dfs_enter | DFS_OFFSET.
                         const NON_PAGE_SENTINEL: u32 = u32::MAX;
                         let page_o = match qtype {
+                            ros_madair_core::QuantizeType::ConceptDfs => {
+                                // object_val is already dfs_enter (from quantize_tile_value)
+                                ConceptIntervalIndex::encode_for_summary(object_val)
+                            }
                             ros_madair_core::QuantizeType::DictionaryId => {
                                 if let Some(term) = dict.resolve(object_val) {
                                     if let Some(rid) = term.strip_prefix(&resource_prefix(&self.base_uri)) {
@@ -409,7 +462,54 @@ impl IndexBuilder {
         fs::write(output.join("all.nt"), &ntriples)
             .map_err(|e| PyValueError::new_err(format!("Failed to write N-Triples: {e}")))?;
 
+        // Write concept hierarchy if vocabulary data was provided
+        if !self.vocabulary_collections.is_empty() {
+            let hierarchy_json = serde_json::to_string_pretty(&self.vocabulary_collections)
+                .map_err(|e| PyValueError::new_err(format!("Failed to serialize concept hierarchy: {e}")))?;
+            fs::write(output.join("concept_hierarchy.json"), &hierarchy_json)
+                .map_err(|e| PyValueError::new_err(format!("Failed to write concept_hierarchy.json: {e}")))?;
+        }
+
+        // Write concept interval index
+        if let Some(ci) = &concept_interval_index {
+            let ci_bytes = ci.to_bytes();
+            fs::write(output.join("concept_intervals.bin"), &ci_bytes)
+                .map_err(|e| PyValueError::new_err(format!("Failed to write concept_intervals.bin: {e}")))?;
+        }
+
+        // Write concept tree (label index + browsing, replaces concept_labels.json)
+        if let Some(ct) = &concept_tree {
+            let ct_bytes = ct.to_bytes();
+            fs::write(output.join("concept_tree.bin"), &ct_bytes)
+                .map_err(|e| PyValueError::new_err(format!("Failed to write concept_tree.bin: {e}")))?;
+        }
+
         Ok(())
+    }
+}
+
+impl IndexBuilder {
+    /// Recursively intern all concept value_id URIs into the dictionary.
+    ///
+    /// Must be called before building the ConceptIntervalIndex so that
+    /// all value_ids have dict_ids for the interval lookup.
+    fn intern_concept_uris(
+        concepts: &std::collections::HashMap<String, alizarin_core::skos::SkosConcept>,
+        prefix: &str,
+        dict: &mut Dictionary,
+    ) {
+        for concept in concepts.values() {
+            for value in concept.pref_labels.values() {
+                if !value.id.is_empty() {
+                    dict.intern(&format!("{prefix}{}", value.id));
+                }
+            }
+            if let Some(children) = &concept.children {
+                let child_map: std::collections::HashMap<String, alizarin_core::skos::SkosConcept> =
+                    children.iter().map(|c| (c.id.clone(), c.clone())).collect();
+                Self::intern_concept_uris(&child_map, prefix, dict);
+            }
+        }
     }
 }
 
@@ -419,14 +519,19 @@ impl IndexBuilder {
 
 /// Read-side counterpart to IndexBuilder.
 ///
-/// Loads dictionary, resource_map, and tile content files from a built index
-/// directory using the same Rust parsing code as the WASM client.
+/// Loads dictionary, resource_map, summary, and page metadata from a built
+/// index directory. Supports both tile reading and summary-driven queries
+/// using the same Rust logic as the WASM client.
 #[pyclass]
 pub struct IndexReader {
     base_uri: String,
     dict: Dictionary,
     resource_map: ResourceMap,
+    concept_intervals: Option<ConceptIntervalIndex>,
+    concept_tree: Option<ConceptTree>,
     index_dir: PathBuf,
+    summary: SummaryIndex,
+    page_meta: Vec<PageMeta>,
 }
 
 #[pymethods]
@@ -446,11 +551,53 @@ impl IndexReader {
         let resource_map = ResourceMap::from_bytes(&rmap_bytes)
             .map_err(|e| PyValueError::new_err(format!("Failed to parse resource_map: {e}")))?;
 
+        let summary_bytes = fs::read(index_dir.join("summary.bin"))
+            .map_err(|e| PyValueError::new_err(format!("Failed to read summary.bin: {e}")))?;
+        let summary = SummaryIndex::from_bytes(&summary_bytes)
+            .map_err(|e| PyValueError::new_err(format!("Failed to parse summary: {e}")))?;
+
+        let meta_str = fs::read_to_string(index_dir.join("page_meta.json"))
+            .map_err(|e| PyValueError::new_err(format!("Failed to read page_meta.json: {e}")))?;
+        let page_meta: Vec<PageMeta> = serde_json::from_str(&meta_str)
+            .map_err(|e| PyValueError::new_err(format!("Failed to parse page_meta.json: {e}")))?;
+
+        // Load concept intervals (optional — older indices won't have this)
+        let concept_intervals = match fs::read(index_dir.join("concept_intervals.bin")) {
+            Ok(ci_bytes) => {
+                match ConceptIntervalIndex::from_bytes(&ci_bytes) {
+                    Ok(ci) => Some(ci),
+                    Err(e) => {
+                        eprintln!("Warning: Failed to parse concept_intervals.bin: {e}");
+                        None
+                    }
+                }
+            }
+            Err(_) => None,
+        };
+
+        // Load concept tree (optional — older indices won't have this)
+        let concept_tree = match fs::read(index_dir.join("concept_tree.bin")) {
+            Ok(ct_bytes) => {
+                match ConceptTree::from_bytes(&ct_bytes) {
+                    Ok(ct) => Some(ct),
+                    Err(e) => {
+                        eprintln!("Warning: Failed to parse concept_tree.bin: {e}");
+                        None
+                    }
+                }
+            }
+            Err(_) => None,
+        };
+
         Ok(Self {
             base_uri: base_uri.to_string(),
             dict,
             resource_map,
+            concept_intervals,
+            concept_tree,
             index_dir,
+            summary,
+            page_meta,
         })
     }
 
@@ -559,6 +706,152 @@ impl IndexReader {
             .map_err(|e| PyValueError::new_err(format!("Failed to serialize tiles to JSON: {e}")))?;
 
         Ok(Some(json))
+    }
+
+    // ------------------------------------------------------------------
+    // Query methods (summary-driven, fetch only relevant pages)
+    // ------------------------------------------------------------------
+
+    /// Query by predicate alias and optional object URI.
+    ///
+    /// `pred_alias` is a node alias (e.g. "type", "name"). It is expanded to
+    /// the full predicate URI `{base_uri}node/{alias}`.
+    ///
+    /// `object_uri` is an optional exact object URI to filter on (e.g. a
+    /// concept URI). Pass `None` to match all objects for this predicate.
+    ///
+    /// Returns resource IDs (bare UUIDs, no URI prefix) that match.
+    #[pyo3(signature = (pred_alias, object_uri=None))]
+    fn query(&self, pred_alias: &str, object_uri: Option<&str>) -> PyResult<Vec<String>> {
+        let engine = self.build_engine()
+            .map_err(|e| PyValueError::new_err(format!("Engine error: {e}")))?;
+
+        let subject_ids = engine.query_predicate(pred_alias, object_uri)
+            .map_err(|e| PyValueError::new_err(format!("Query error: {e}")))?;
+
+        Ok(self.dict_ids_to_resource_ids(&subject_ids))
+    }
+
+    /// Multi-pattern query (compound filters, AND logic).
+    ///
+    /// `patterns_json` is a JSON array of objects, each with:
+    /// - `pred_alias` (string): node alias
+    /// - `object_uri` (string|null): optional exact object URI
+    ///
+    /// Returns resource IDs matching ALL patterns.
+    fn query_compound(&self, patterns_json: &str) -> PyResult<Vec<String>> {
+        #[derive(serde::Deserialize)]
+        struct PatternInput {
+            pred_alias: String,
+            object_uri: Option<String>,
+        }
+
+        let inputs: Vec<PatternInput> = serde_json::from_str(patterns_json)
+            .map_err(|e| PyValueError::new_err(format!("Invalid patterns JSON: {e}")))?;
+
+        let patterns: Vec<ros_madair_core::TriplePattern> = inputs
+            .iter()
+            .map(|input| {
+                let pred_full = ros_madair_core::uri::node_uri(&self.base_uri, &input.pred_alias);
+                ros_madair_core::TriplePattern {
+                    subject: ros_madair_core::PatternTerm::Variable("s".into()),
+                    predicate: ros_madair_core::PatternTerm::Uri(pred_full),
+                    object: match &input.object_uri {
+                        Some(u) => ros_madair_core::PatternTerm::Uri(u.clone()),
+                        None => ros_madair_core::PatternTerm::Variable("o".into()),
+                    },
+                }
+            })
+            .collect();
+
+        let engine = self.build_engine()
+            .map_err(|e| PyValueError::new_err(format!("Engine error: {e}")))?;
+
+        let subject_ids = engine.query_patterns(&patterns)
+            .map_err(|e| PyValueError::new_err(format!("Query error: {e}")))?;
+
+        Ok(self.dict_ids_to_resource_ids(&subject_ids))
+    }
+
+    /// Return all page metadata as a JSON string.
+    fn page_meta_json(&self) -> PyResult<String> {
+        serde_json::to_string(&self.page_meta)
+            .map_err(|e| PyValueError::new_err(format!("Serialization error: {e}")))
+    }
+
+    // ------------------------------------------------------------------
+    // Concept tree methods (label lookup + browsing)
+    // ------------------------------------------------------------------
+
+    /// Look up a concept value_id by collection and label (case-insensitive).
+    fn lookup_label(&self, collection_id: &str, label: &str) -> Option<String> {
+        self.concept_tree
+            .as_ref()
+            .and_then(|ct| ct.lookup_label(collection_id, label).map(String::from))
+    }
+
+    /// List concepts in a collection, optionally under a parent.
+    ///
+    /// Returns a JSON array of `{value_id, label, has_children}` objects.
+    #[pyo3(signature = (collection_id, parent_value_id=None))]
+    fn list_concepts(
+        &self,
+        collection_id: &str,
+        parent_value_id: Option<&str>,
+    ) -> PyResult<String> {
+        let ct = match &self.concept_tree {
+            Some(ct) => ct,
+            None => return Ok("[]".to_string()),
+        };
+
+        let concepts = match parent_value_id {
+            None => ct.list_top_level(collection_id),
+            Some(pvid) => ct.list_children(collection_id, pvid),
+        };
+
+        serde_json::to_string(&concepts)
+            .map_err(|e| PyValueError::new_err(format!("Serialization error: {e}")))
+    }
+
+    /// Return all collection IDs known to the concept tree.
+    fn list_collection_ids(&self) -> Vec<String> {
+        match &self.concept_tree {
+            Some(ct) => ct.collection_ids().into_iter().map(String::from).collect(),
+            None => Vec::new(),
+        }
+    }
+}
+
+impl IndexReader {
+    /// Build a LocalQueryEngine from our loaded data.
+    ///
+    /// We clone the data structures — this is fine for one-shot queries.
+    /// For repeated queries, callers should hold a LocalQueryEngine directly
+    /// (not yet exposed to Python; current usage is per-request).
+    fn build_engine(&self) -> Result<LocalQueryEngine, String> {
+        // Re-use the already-loaded structures by cloning into the engine.
+        // This avoids re-reading files from disk.
+        Ok(LocalQueryEngine::from_parts(
+            self.dict.clone(),
+            self.summary.clone(),
+            self.resource_map.clone(),
+            self.concept_intervals.clone(),
+            self.page_meta.clone(),
+            self.index_dir.join("pages"),
+            self.base_uri.clone(),
+        ))
+    }
+
+    /// Convert dict IDs to bare resource IDs (UUID strings).
+    fn dict_ids_to_resource_ids(&self, ids: &[u32]) -> Vec<String> {
+        let prefix = ros_madair_core::uri::resource_prefix(&self.base_uri);
+        ids.iter()
+            .filter_map(|&id| {
+                self.dict.resolve(id).and_then(|term| {
+                    term.strip_prefix(&prefix).map(String::from)
+                })
+            })
+            .collect()
     }
 }
 

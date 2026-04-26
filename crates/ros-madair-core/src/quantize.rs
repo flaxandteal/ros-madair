@@ -20,6 +20,7 @@
 
 use serde_json::Value;
 
+use crate::concept_intervals::ConceptIntervalIndex;
 use crate::datatype_class::{classify_datatype, DatatypeClass};
 use crate::dictionary::Dictionary;
 use crate::geo_convert::extract_centroid;
@@ -59,8 +60,11 @@ impl PageRecord {
 /// The type of quantization applied to a predicate's values.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum QuantizeType {
-    /// Exact dictionary ID (concept, resource-instance, domain-value).
+    /// Exact dictionary ID (resource-instance, domain-value).
     DictionaryId,
+    /// Concept DFS interval encoding (concept, concept-list).
+    /// Falls back to DictionaryId when no ConceptIntervalIndex is available.
+    ConceptDfs,
     /// Boolean (0 or 1).
     Boolean,
     /// Days since Unix epoch (date, edtf).
@@ -73,7 +77,8 @@ pub enum QuantizeType {
 /// Returns None for types we don't index (string, number, etc.).
 pub fn quantize_type_for_datatype(datatype: &str) -> Option<QuantizeType> {
     match classify_datatype(datatype)? {
-        DatatypeClass::Concept | DatatypeClass::ResourceInstance | DatatypeClass::DomainValue => {
+        DatatypeClass::Concept => Some(QuantizeType::ConceptDfs),
+        DatatypeClass::ResourceInstance | DatatypeClass::DomainValue => {
             Some(QuantizeType::DictionaryId)
         }
         DatatypeClass::Boolean => Some(QuantizeType::Boolean),
@@ -88,12 +93,18 @@ pub fn quantize_type_for_datatype(datatype: &str) -> Option<QuantizeType> {
 /// This is the shared implementation used by both `build_from_prebuild` and
 /// `ros-madair-builder`. Handles single values and lists (concept-list,
 /// resource-instance-list, etc.).
+///
+/// When `concept_intervals` is provided and `qtype` is `ConceptDfs`, the
+/// object_val is the DFS enter number from the concept hierarchy instead
+/// of the raw dictionary ID. Falls back to dictionary ID if the concept
+/// is not found in the interval index.
 pub fn quantize_tile_value(
     value: &Value,
     qtype: QuantizeType,
     datatype: &str,
     dict: &mut Dictionary,
     base_uri: &str,
+    concept_intervals: Option<&ConceptIntervalIndex>,
 ) -> Vec<u32> {
     match qtype {
         QuantizeType::DictionaryId => {
@@ -107,6 +118,27 @@ pub fn quantize_tile_value(
                         format!("{prefix}{id}")
                     };
                     dict.intern(&uri)
+                })
+                .collect()
+        }
+        QuantizeType::ConceptDfs => {
+            let prefix = prefix_for_datatype(base_uri, datatype);
+            value_extract::extract_reference_ids(value)
+                .into_iter()
+                .map(|id| {
+                    let uri = if id.contains("://") {
+                        id
+                    } else {
+                        format!("{prefix}{id}")
+                    };
+                    let dict_id = dict.intern(&uri);
+                    // Try DFS encoding; fall back to dict_id
+                    if let Some(ci) = concept_intervals {
+                        if let Some((dfs_enter, _)) = ci.lookup(dict_id) {
+                            return dfs_enter;
+                        }
+                    }
+                    dict_id
                 })
                 .collect()
         }
@@ -516,7 +548,7 @@ mod tests {
 
     #[test]
     fn test_quantize_type_classification() {
-        assert_eq!(quantize_type_for_datatype("concept"), Some(QuantizeType::DictionaryId));
+        assert_eq!(quantize_type_for_datatype("concept"), Some(QuantizeType::ConceptDfs));
         assert_eq!(quantize_type_for_datatype("resource-instance"), Some(QuantizeType::DictionaryId));
         assert_eq!(quantize_type_for_datatype("boolean"), Some(QuantizeType::Boolean));
         assert_eq!(quantize_type_for_datatype("date"), Some(QuantizeType::DaysSinceEpoch));

@@ -8,7 +8,7 @@ members = [
 resolver = "2"
 
 [workspace.package]
-version = "0.1.0"
+version = "0.1.0-alpha.4"
 authors = ["Phil Weir <phil.weir@flaxandteal.co.uk>"]
 edition = "2021"
 license = "AGPL-3.0-or-later"
@@ -24,5 +24,7 @@ debug = true
 [profile.dev]
 debug = true
 
-[patch.crates-io]
-alizarin-core = { git = "https://github.com/flaxandteal/alizarin", tag = "v0.2.1-alpha.64" }
+
+# For local development with a sibling alizarin checkout, add to .cargo/config.toml:
+#   [patch.crates-io]
+#   alizarin-core = { path = "../alizarin/crates/alizarin-core" }
