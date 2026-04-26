@@ -48,13 +48,6 @@ jobs:
         with:
           path: rosmadair
 
-      - name: Checkout Alizarin
-        uses: actions/checkout@v4
-        with:
-          repository: ${{ vars.ALIZARIN_REPO || 'flaxandteal/alizarin' }}
-          path: alizarin
-          ref: ${{ vars.ALIZARIN_REF || 'v0.2.1-alpha.64' }}
-
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -67,8 +60,7 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             rosmadair/target
-            alizarin/target
-          key: cargo-${{ runner.os }}-${{ hashFiles('rosmadair/Cargo.lock', 'alizarin/Cargo.lock') }}
+          key: cargo-${{ runner.os }}-${{ hashFiles('rosmadair/Cargo.lock') }}
           restore-keys: cargo-${{ runner.os }}-
 
       - name: Install wasm-pack
@@ -78,8 +70,6 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '20'
-          cache: npm
-          cache-dependency-path: alizarin/package-lock.json
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -100,29 +90,28 @@ jobs:
         run: zensical build --clean
 
       # ------------------------------------------------------------------ #
-      # Build Alizarin (TypeScript SDK + WASM core)
+      # Download pre-built Alizarin packages from release
       # ------------------------------------------------------------------ #
-      - name: Build Alizarin
-        working-directory: alizarin
+      - name: Download alizarin packages
+        env:
+          ALIZARIN_VERSION: ${{ vars.ALIZARIN_REF || 'v0.2.1-alpha.68' }}
+          ALIZARIN_REPO: ${{ vars.ALIZARIN_REPO || 'flaxandteal/alizarin' }}
         run: |
-          npm ci
-          npm run build
-
-      # ------------------------------------------------------------------ #
-      # Build alizarin-napi (native Node.js bindings for CSV conversion)
-      # ------------------------------------------------------------------ #
-      - name: Build alizarin-napi
-        working-directory: alizarin/crates/alizarin-napi
-        run: |
-          npm install
-          npm run build
+          ALIZARIN_BASE="https://github.com/$ALIZARIN_REPO/releases/download/$ALIZARIN_VERSION"
+          ALIZARIN_SEMVER="${ALIZARIN_VERSION#v}"
+          # alizarin-napi for CSV conversion
+          npm install --no-save "$ALIZARIN_BASE/alizarin-napi-$ALIZARIN_SEMVER.tgz"
+          # alizarin JS+WASM dist for the example runtime
+          mkdir -p "$GITHUB_WORKSPACE/alizarin_dist"
+          curl -sL "$ALIZARIN_BASE/alizarin-$ALIZARIN_SEMVER.tgz" | \
+            tar -xz --strip-components=1 -C "$GITHUB_WORKSPACE/alizarin_dist"
 
       # ------------------------------------------------------------------ #
       # Convert CSV model definitions to PrebuildLoader-compatible JSON
       # ------------------------------------------------------------------ #
       - name: Convert aonach_mor CSVs to prebuild JSON
         run: |
-          node alizarin/crates/alizarin-napi/bin/csv-to-prebuild.mjs \
+          npx csv-to-prebuild \
             rosmadair/example/aonach_mor \
             "$GITHUB_WORKSPACE/arches_prebuild"
 
@@ -155,7 +144,7 @@ jobs:
         working-directory: rosmadair
         env:
           PREBUILD_PKG: ${{ github.workspace }}/arches_prebuild
-          ALIZARIN_DIST: ${{ github.workspace }}/alizarin/dist
+          ALIZARIN_DIST: ${{ github.workspace }}/alizarin_dist/dist
         run: python3 example/build_sparnatural_assets.py
 
       # ------------------------------------------------------------------ #

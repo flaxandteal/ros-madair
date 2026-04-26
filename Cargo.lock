@@ -32,29 +32,11 @@ dependencies = [
 ]
 
 [[package]]
-name = "alizarin-core"
-version = "0.2.1-alpha.68"
-source = "git+https://github.com/flaxandteal/alizarin?tag=v0.2.1-alpha.68#3e8e618a3d0790d490c08e543347a444dd0b5ff1"
-dependencies = [
- "chrono",
- "csv",
- "lasso",
- "lazy_static",
- "oxiri",
- "regex-lite",
- "rio_api",
- "rio_xml",
- "serde",
- "serde_json",
- "uuid",
-]
-
-[[package]]
 name = "alizarin-wasm"
 version = "0.2.1-alpha.68"
 source = "git+https://github.com/flaxandteal/alizarin?tag=v0.2.1-alpha.68#3e8e618a3d0790d490c08e543347a444dd0b5ff1"
 dependencies = [
- "alizarin-core 0.2.1-alpha.68 (git+https://github.com/flaxandteal/alizarin?tag=v0.2.1-alpha.68)",
+ "alizarin-core",
  "console_error_panic_hook",
  "getrandom",
  "js-sys",
@@ -865,7 +847,7 @@ dependencies = [
 name = "ros-madair-alizarin"
 version = "0.1.0-alpha.4"
 dependencies = [
- "alizarin-core 0.2.1-alpha.68",
+ "alizarin-core",
  "alizarin-wasm",
  "js-sys",
  "ros-madair-client",
@@ -880,7 +862,7 @@ dependencies = [
 name = "ros-madair-builder"
 version = "0.1.0-alpha.4"
 dependencies = [
- "alizarin-core 0.2.1-alpha.68",
+ "alizarin-core",
  "pyo3",
  "rmp-serde",
  "ros-madair-core",
@@ -910,7 +892,7 @@ dependencies = [
 name = "ros-madair-core"
 version = "0.1.0-alpha.4"
 dependencies = [
- "alizarin-core 0.2.1-alpha.68",
+ "alizarin-core",
  "geojson",
  "pretty_assertions",
  "rmp-serde",

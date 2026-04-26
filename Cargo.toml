@@ -28,6 +28,12 @@ debug = true
 [workspace.dependencies]
 alizarin-core = "0.2.1-alpha.68"
 
+# alizarin-wasm is a git dep that brings its own alizarin-core from the
+# same git repo. This patch forces it to use the crates.io version so
+# there is only one copy of alizarin-core in the dependency graph.
+[patch.'https://github.com/flaxandteal/alizarin']
+alizarin-core = { version = "=0.2.1-alpha.68" }
+
 # For local development with a sibling alizarin checkout, add to .cargo/config.toml:
 #   [patch.crates-io]
 #   alizarin-core = { path = "../alizarin/crates/alizarin-core" }
