@@ -168,6 +168,7 @@
                 status.textContent = 'Loading summary index...';
                 store = new wasm.SparqlStore(baseUrl);
                 await store.load_summary();
+                window.sparqlStore = store;
 
                 status.textContent = 'Ready. Summary loaded.';
                 updateCacheStats();
