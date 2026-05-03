@@ -67,8 +67,8 @@ jobs:
 
       - name: Build indexer binary (linux-amd64)
         run: |
-          cargo build --release --example build_from_prebuild
-          cp target/release/examples/build_from_prebuild ros-madair-build-linux-amd64
+          cargo build --release --bin ros-madair-build
+          cp target/release/ros-madair-build ros-madair-build-linux-amd64
           chmod +x ros-madair-build-linux-amd64
           echo "Binary size: $(du -h ros-madair-build-linux-amd64 | cut -f1)"
 

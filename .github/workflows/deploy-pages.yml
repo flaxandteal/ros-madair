@@ -130,10 +130,10 @@ jobs:
       # ------------------------------------------------------------------ #
       # Build the static index from the converted prebuild
       # ------------------------------------------------------------------ #
-      - name: Build index (cargo run --example build_from_prebuild)
+      - name: Build index (ros-madair-build)
         working-directory: rosmadair
         run: |
-          cargo run --release --example build_from_prebuild -- \
+          cargo run --release --bin ros-madair-build -- \
             "$GITHUB_WORKSPACE/arches_prebuild" \
             example/static/index
 

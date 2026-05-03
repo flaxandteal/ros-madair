@@ -8,7 +8,7 @@ members = [
 resolver = "2"
 
 [workspace.package]
-version = "0.1.0-alpha.4"
+version = "0.1.0-alpha.7"
 authors = ["Phil Weir <phil.weir@flaxandteal.co.uk>"]
 edition = "2021"
 license = "AGPL-3.0-or-later"
@@ -26,13 +26,13 @@ debug = true
 
 
 [workspace.dependencies]
-alizarin-core = "0.2.1-alpha.68"
+alizarin-core = "2.0.0-alpha.89"
 
 # alizarin-wasm is a git dep that brings its own alizarin-core from the
 # same git repo. This patch forces it to use the crates.io version so
 # there is only one copy of alizarin-core in the dependency graph.
 [patch.'https://github.com/flaxandteal/alizarin']
-alizarin-core = { version = "=0.2.1-alpha.68" }
+alizarin-core = { version = "=2.0.0-alpha.89" }
 
 # For local development with a sibling alizarin checkout, add to .cargo/config.toml:
 #   [patch.crates-io]

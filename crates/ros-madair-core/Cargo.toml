@@ -18,5 +18,9 @@ geojson = "0.24"
 thiserror = "2"
 rmp-serde = "1"
 
+[[bin]]
+name = "ros-madair-build"
+path = "src/bin/ros-madair-build.rs"
+
 [dev-dependencies]
 pretty_assertions = "1"
