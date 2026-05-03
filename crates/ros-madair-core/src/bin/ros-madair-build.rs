@@ -35,7 +35,7 @@ use ros_madair_core::uri::{concept_prefix, resource_prefix};
 use ros_madair_core::value_extract;
 
 fn main() {
-    println!("ros-madair-build {} (alizarin-core {})", env!("CARGO_PKG_VERSION"), alizarin_core::VERSION);
+    println!("ros-madair-build {}", env!("CARGO_PKG_VERSION"));
 
     let all_args: Vec<String> = std::env::args().collect();
     let debug = all_args.iter().any(|a| a == "--debug");
