@@ -70,6 +70,8 @@ fn main() {
     };
     let base_uri = base_uri.as_str();
 
+    println!("  rdf_base_uri: {base_uri}");
+
     // Load graphs and resources via alizarin PrebuildLoader
     let loader = PrebuildLoader::new(prebuild_dir).unwrap_or_else(|e| {
         eprintln!("Failed to open prebuild dir '{}': {}", prebuild_dir, e);
@@ -123,6 +125,17 @@ fn main() {
     } else {
         loader.find_business_data_files().unwrap_or_default()
     };
+    // Skip files starting with _ (e.g. _all.json)
+    let bd_files: Vec<_> = bd_files.into_iter().filter(|p| {
+        let dominated = p.file_name()
+            .and_then(|f| f.to_str())
+            .map(|f| f.starts_with('_'))
+            .unwrap_or(false);
+        if dominated {
+            println!("  Skipping {}", p.display());
+        }
+        !dominated
+    }).collect();
     println!("\nLoading resources from {} business_data file(s)...", bd_files.len());
 
     for (file_idx, file_path) in bd_files.iter().enumerate() {
@@ -225,74 +238,13 @@ fn main() {
 
     // Load reference_data (SKOS vocabularies) early so we can build the
     // concept interval index before processing page records.
-    let ref_data_dir = Path::new(prebuild_dir).join("reference_data");
-    let mut all_collections: Vec<alizarin_core::skos::SkosCollection> = Vec::new();
-    let mut vocab_file_count = 0usize;
-    let mut vocab_files_to_process: Vec<std::path::PathBuf> = Vec::new();
-
-    if ref_data_dir.is_dir() {
-        for dir in [
-            ref_data_dir.clone(),
-            ref_data_dir.join("collections"),
-            ref_data_dir.join("concepts"),
-        ] {
-            if dir.is_dir() {
-                if let Ok(entries) = fs::read_dir(&dir) {
-                    for entry in entries.flatten() {
-                        let path = entry.path();
-                        if path.is_file() {
-                            vocab_files_to_process.push(path);
-                        }
-                    }
-                }
-            }
-        }
-
-        for path in &vocab_files_to_process {
-            let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
-            match ext {
-                "xml" => {
-                    vocab_file_count += 1;
-                    match fs::read_to_string(path) {
-                        Ok(xml_content) => {
-                            match alizarin_core::skos::parse_skos_to_collections(
-                                &xml_content, base_uri,
-                            ) {
-                                Ok(collections) => {
-                                    all_collections.extend(collections);
-                                }
-                                Err(e) => {
-                                    eprintln!(
-                                        "  Warning: Failed to parse SKOS XML from {}: {}",
-                                        path.display(), e
-                                    );
-                                }
-                            }
-                        }
-                        Err(e) => {
-                            eprintln!("  Warning: Failed to read {}: {}", path.display(), e);
-                        }
-                    }
-                }
-                "json" => {
-                    vocab_file_count += 1;
-                    match fs::read_to_string(path) {
-                        Ok(json_content) => {
-                            if let Ok(coll) = serde_json::from_str::<alizarin_core::skos::SkosCollection>(&json_content) {
-                                all_collections.push(coll);
-                            } else if let Ok(colls) = serde_json::from_str::<Vec<alizarin_core::skos::SkosCollection>>(&json_content) {
-                                all_collections.extend(colls);
-                            }
-                        }
-                        Err(e) => {
-                            eprintln!("  Warning: Failed to read {}: {}", path.display(), e);
-                        }
-                    }
-                }
-                _ => {}
-            }
-        }
-    }
+    // Delegates to alizarin's PrebuildLoader which scans concepts/, collections/,
+    // controlled_lists/, and staging/ subdirectories.
+    let all_collections = loader.load_collections(base_uri).unwrap_or_else(|e| {
+        eprintln!("  Warning: Failed to load SKOS collections: {}", e);
+        Vec::new()
+    });
+    let vocab_file_count = loader.find_collection_files().map(|f| f.len()).unwrap_or(0);
 
     // Build page records + summary quads
     let mut dict = Dictionary::new();
@@ -619,15 +571,17 @@ fn main() {
     }
 
     // Write vocabulary data (loaded earlier for concept interval index)
-    if ref_data_dir.is_dir() {
-        let vocabs_out = output_path.join("vocabularies");
-        fs::create_dir_all(&vocabs_out).expect("Failed to create vocabularies dir");
+    if let Ok(vocab_files) = loader.find_collection_files() {
+        if !vocab_files.is_empty() {
+            let vocabs_out = output_path.join("vocabularies");
+            fs::create_dir_all(&vocabs_out).expect("Failed to create vocabularies dir");
 
-        // Copy XML files to output
-        for path in &vocab_files_to_process {
-            if path.extension().and_then(|e| e.to_str()) == Some("xml") {
-                let dest = vocabs_out.join(path.file_name().unwrap());
-                fs::copy(path, &dest).unwrap_or_default();
+            // Copy XML files to output
+            for path in &vocab_files {
+                if path.extension().and_then(|e| e.to_str()) == Some("xml") {
+                    let dest = vocabs_out.join(path.file_name().unwrap());
+                    fs::copy(path, &dest).unwrap_or_default();
+                }
             }
         }
 

@@ -24,3 +24,4 @@ path = "src/bin/ros-madair-build.rs"
 
 [dev-dependencies]
 pretty_assertions = "1"
+tempfile = "3.27.0"
