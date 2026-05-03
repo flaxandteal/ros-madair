@@ -12,6 +12,9 @@ description = "Combined WASM binary — Rós Madair SPARQL engine + alizarin her
 [lib]
 crate-type = ["cdylib"]
 
+[package.metadata.wasm-pack.profile.release]
+wasm-opt = false
+
 [dependencies]
 ros-madair-core = { path = "../ros-madair-core" }
 ros-madair-client = { path = "../ros-madair-client" }
