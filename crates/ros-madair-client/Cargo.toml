@@ -10,7 +10,7 @@ categories.workspace = true
 description = "WASM client for RosMadair — browser-based SPARQL over page-based static files"
 
 [lib]
-crate-type = ["rlib"]
+crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 ros-madair-core = { path = "../ros-madair-core" }

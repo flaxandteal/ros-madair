@@ -279,6 +279,62 @@ pub fn plan_from_patterns(
     }
 }
 
+/// Execute a single triple pattern over loaded page records.
+///
+/// Returns the set of matching subject dict IDs. Used by multi-layer
+/// query orchestration which needs per-pattern results before cross-layer
+/// union and inter-pattern intersection.
+pub fn execute_single_pattern(
+    pattern: &TriplePattern,
+    records: &HashMap<(u32, u32), Vec<PageRecord>>,
+    dict: &Dictionary,
+    concept_intervals: Option<&ConceptIntervalIndex>,
+) -> HashSet<u32> {
+    let pred_uri = match &pattern.predicate {
+        PatternTerm::Uri(u) => u.as_str(),
+        PatternTerm::Variable(_) => return HashSet::new(), // TODO: variable predicates
+    };
+
+    let pred_id = match dict.lookup(pred_uri) {
+        Some(id) => id,
+        None => return HashSet::new(),
+    };
+
+    let mut matches = HashSet::new();
+
+    for (&(_, pid), recs) in records {
+        if pid != pred_id {
+            continue;
+        }
+
+        match &pattern.object {
+            PatternTerm::Uri(obj_uri) => {
+                if let Some(obj_id) = dict.lookup(obj_uri) {
+                    let interval = concept_intervals.and_then(|ci| ci.lookup(obj_id));
+                    if let Some((dfs_enter, dfs_leave)) = interval {
+                        let (lo, hi) = range_search_object(recs, dfs_enter, dfs_leave);
+                        for rec in &recs[lo..hi] {
+                            matches.insert(rec.subject_id);
+                        }
+                    } else {
+                        let (lo, hi) = binary_search_object(recs, obj_id);
+                        for rec in &recs[lo..hi] {
+                            matches.insert(rec.subject_id);
+                        }
+                    }
+                }
+            }
+            PatternTerm::Variable(_) => {
+                for rec in recs {
+                    matches.insert(rec.subject_id);
+                }
+            }
+        }
+    }
+
+    matches
+}
+
 /// Execute triple patterns over loaded page records.
 ///
 /// `records` is indexed by `(page_id, pred_id)` -> sorted `PageRecord` vec.
@@ -296,62 +352,11 @@ pub fn execute_patterns(
         return Vec::new();
     }
 
-    let mut result_sets: Vec<HashSet<u32>> = Vec::new();
+    let result_sets: Vec<HashSet<u32>> = patterns
+        .iter()
+        .map(|p| execute_single_pattern(p, records, dict, concept_intervals))
+        .collect();
 
-    for pattern in patterns {
-        let pred_uri = match &pattern.predicate {
-            PatternTerm::Uri(u) => u.as_str(),
-            PatternTerm::Variable(_) => continue, // TODO: variable predicates
-        };
-
-        let pred_id = match dict.lookup(pred_uri) {
-            Some(id) => id,
-            None => {
-                result_sets.push(HashSet::new());
-                continue;
-            }
-        };
-
-        let mut matches = HashSet::new();
-
-        // Scan all loaded blocks for this predicate
-        for (&(_, pid), recs) in records {
-            if pid != pred_id {
-                continue;
-            }
-
-            match &pattern.object {
-                PatternTerm::Uri(obj_uri) => {
-                    if let Some(obj_id) = dict.lookup(obj_uri) {
-                        // Try DFS range search for concepts
-                        let interval = concept_intervals
-                            .and_then(|ci| ci.lookup(obj_id));
-
-                        if let Some((dfs_enter, dfs_leave)) = interval {
-                            let (lo, hi) = range_search_object(recs, dfs_enter, dfs_leave);
-                            for rec in &recs[lo..hi] {
-                                matches.insert(rec.subject_id);
-                            }
-                        } else {
-                            let (lo, hi) = binary_search_object(recs, obj_id);
-                            for rec in &recs[lo..hi] {
-                                matches.insert(rec.subject_id);
-                            }
-                        }
-                    }
-                }
-                PatternTerm::Variable(_) => {
-                    for rec in recs {
-                        matches.insert(rec.subject_id);
-                    }
-                }
-            }
-        }
-
-        result_sets.push(matches);
-    }
-
-    // Intersect all result sets
     if result_sets.is_empty() {
         return Vec::new();
     }
@@ -391,9 +396,9 @@ mod tests {
         let summary = SummaryIndex::from_bytes(&bytes).unwrap();
 
         let page_meta = vec![
-            PageMeta { page_id: 0, graph_id: "g".into(), resource_count: 100, bbox: None },
-            PageMeta { page_id: 1, graph_id: "g".into(), resource_count: 100, bbox: None },
-            PageMeta { page_id: 2, graph_id: "g".into(), resource_count: 50, bbox: None },
+            PageMeta { page_id: 0, graph_id: "g".into(), resource_count: 100, bbox: None, is_shadow: false },
+            PageMeta { page_id: 1, graph_id: "g".into(), resource_count: 100, bbox: None, is_shadow: false },
+            PageMeta { page_id: 2, graph_id: "g".into(), resource_count: 50, bbox: None, is_shadow: false },
         ];
 
         (summary, dict, page_meta)

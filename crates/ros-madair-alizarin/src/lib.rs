@@ -9,6 +9,8 @@
 //!
 //! - [`connect_tile_source`]: creates a [`GrowableTileSource`] from a loaded
 //!   [`SparqlStore`] and attaches it to a [`WASMResourceInstanceWrapper`].
+//! - [`reconnect_tile_source`]: re-attaches an existing tile source to a
+//!   different wrapper (avoids re-cloning dictionary / resource map).
 //! - [`prefetch_tiles_for_resource`]: fetches a tile file from the CDN and
 //!   inserts it into the shared tile source so alizarin can read it via the
 //!   Rust fast-path (no JS roundtrip).
@@ -52,6 +54,10 @@ pub struct TileSourceHandle {
 /// opaque handle that must be passed to [`prefetch_tiles_for_resource`] to
 /// populate tile data.
 ///
+/// `rdf_base` is the RDF namespace base used in the dictionary (e.g.
+/// `"https://flaxandteal.org/ontology/goidelic#/"`).  This is distinct from
+/// the HTTP serving base in the store.
+///
 /// # Errors
 ///
 /// Returns an error if the store's dictionary or resource map has not been
@@ -60,18 +66,18 @@ pub struct TileSourceHandle {
 pub fn connect_tile_source(
     store: &SparqlStore,
     wrapper: &WASMResourceInstanceWrapper,
+    rdf_base: &str,
 ) -> Result<TileSourceHandle, JsValue> {
     let dict = store
-        .dictionary()
+        .dictionary(0)
         .ok_or_else(|| JsValue::from_str("Dictionary not loaded — call loadSummary() first"))?
         .clone();
     let rmap = store
-        .resource_map()
+        .resource_map(0)
         .ok_or_else(|| JsValue::from_str("Resource map not loaded — call loadSummary() first"))?
         .clone();
 
-    let base_url = store.base_url().to_string();
-    let source = Arc::new(GrowableTileSource::new(base_url, dict, rmap));
+    let source = Arc::new(GrowableTileSource::new(rdf_base.to_string(), dict, rmap));
 
     wrapper.set_tile_source(source.clone());
 
@@ -91,10 +97,10 @@ pub async fn prefetch_tiles_for_resource(
     resource_uri: &str,
 ) -> Result<(), JsValue> {
     let dict = store
-        .dictionary()
+        .dictionary(0)
         .ok_or_else(|| JsValue::from_str("Dictionary not loaded"))?;
     let rmap = store
-        .resource_map()
+        .resource_map(0)
         .ok_or_else(|| JsValue::from_str("Resource map not loaded"))?;
 
     let dict_id = dict
@@ -110,7 +116,8 @@ pub async fn prefetch_tiles_for_resource(
         return Ok(());
     }
 
-    let base_url = store.base_url();
+    let base_url = store.base_url(0)
+        .ok_or_else(|| JsValue::from_str("No base layer loaded"))?;
     let tile_url = format!("{}tiles/tile_{:04}.dat", base_url, page_id);
 
     let bytes = ros_madair_client::fetch::fetch_full(&tile_url)
@@ -120,6 +127,18 @@ pub async fn prefetch_tiles_for_resource(
     handle.source.insert_tile_file(page_id, bytes);
 
     Ok(())
+}
+
+/// Re-attach an existing [`TileSourceHandle`] to a different wrapper.
+///
+/// This lets multiple wrappers share the same [`GrowableTileSource`] (and its
+/// cached tile files) without cloning the dictionary / resource map again.
+#[wasm_bindgen]
+pub fn reconnect_tile_source(
+    handle: &TileSourceHandle,
+    wrapper: &WASMResourceInstanceWrapper,
+) {
+    wrapper.set_tile_source(handle.source.clone());
 }
 
 /// Detach the compiled-in tile source from the wrapper, reverting it to

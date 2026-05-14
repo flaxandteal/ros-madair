@@ -13,10 +13,18 @@ use std::sync::RwLock;
 
 use alizarin_core::graph::StaticTile;
 use alizarin_core::tile_source::{TileSource, TileSourceError};
+use serde::Deserialize;
 
 use crate::tile_content_file::parse_tile_content_header;
 use crate::uri::resource_uri;
 use crate::{Dictionary, ResourceMap};
+
+/// v2 tile blob wrapper — matches the `ResourceBlob` struct in `build.rs`.
+#[derive(Deserialize)]
+struct ResourceBlob {
+    tiles: Vec<StaticTile>,
+    // __cache and __scopes are present in the blob but not needed here
+}
 
 /// Extract tiles for a subject from raw tile file bytes.
 fn extract_tiles_from_bytes(
@@ -42,8 +50,15 @@ fn extract_tiles_from_bytes(
         ));
     }
 
-    let mut tiles: Vec<StaticTile> = rmp_serde::from_slice(&file_bytes[start..end])
-        .map_err(|e| TileSourceError::LoadError(format!("Msgpack error: {}", e)))?;
+    let blob_bytes = &file_bytes[start..end];
+
+    // Try v2 format (ResourceBlob { tiles, __cache, __scopes }) first,
+    // fall back to v1 (bare Vec<StaticTile>) for older indices.
+    let mut tiles: Vec<StaticTile> = match rmp_serde::from_slice::<ResourceBlob>(blob_bytes) {
+        Ok(blob) => blob.tiles,
+        Err(_) => rmp_serde::from_slice(blob_bytes)
+            .map_err(|e| TileSourceError::LoadError(format!("Msgpack error: {}", e)))?,
+    };
 
     if let Some(ng_id) = nodegroup_id {
         tiles.retain(|t| t.nodegroup_id == ng_id);

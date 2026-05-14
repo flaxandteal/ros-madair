@@ -218,14 +218,18 @@ pub fn graph_schema_to_triples(
 ///
 /// Accepts alizarin-core Rust types directly — no JSON parsing needed.
 /// The graph must have had `build_indices()` called (for `get_node_by_id`).
+///
+/// Returns `(triples, geo_skip_count)` where `geo_skip_count` is the number
+/// of GeoJSON values that could not be parsed (empty/null coordinates).
 pub fn resource_to_triples(
     graph: &StaticGraph,
     resource_id: &str,
     tiles: &[StaticTile],
     base_uri: &str,
-) -> Result<Vec<Triple>, TripleError> {
+) -> Result<(Vec<Triple>, usize), TripleError> {
     let subject = uri(&resource_uri(base_uri, resource_id));
     let mut triples = Vec::new();
+    let mut geo_skip_count = 0usize;
 
     // rdf:type
     triples.push(Triple::new(
@@ -333,11 +337,8 @@ pub fn resource_to_triples(
                                 literal(&wkt_str, GEO_WKT_LITERAL),
                             ));
                         }
-                        Err(e) => {
-                            eprintln!(
-                                "Warning: GeoJSON conversion failed for resource {}: {}",
-                                resource_id, e
-                            );
+                        Err(_) => {
+                            geo_skip_count += 1;
                         }
                     }
                 }
@@ -374,7 +375,7 @@ pub fn resource_to_triples(
         }
     }
 
-    Ok(triples)
+    Ok((triples, geo_skip_count))
 }
 
 // ============================================================================
@@ -622,7 +623,7 @@ mod tests {
         let tiles = make_test_tiles();
         let base = "https://example.org/";
 
-        let triples = resource_to_triples(&graph, "res-001", &tiles, base).unwrap();
+        let (triples, _) = resource_to_triples(&graph, "res-001", &tiles, base).unwrap();
         assert!(triples.len() >= 3, "Expected at least 3 triples, got {}", triples.len());
 
         // Check rdf:type

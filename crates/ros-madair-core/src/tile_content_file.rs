@@ -13,15 +13,19 @@
 //! ```text
 //! [header]
 //!   magic: [u8; 4]           = b"RMTL"
-//!   version: u8              = 1
+//!   version: u8              = 1 or 2
 //!   entry_count: u32 (LE)
 //!   entries: [(subject_id: u32, blob_offset: u32, blob_size: u32)]  // 12 bytes each
 //!
 //! [body]
-//!   blob_0: [u8; N0]   — MessagePack-encoded Vec<StaticTile> for resource 0
+//!   blob_0: [u8; N0]   — MessagePack-encoded resource blob
 //!   blob_1: [u8; N1]
 //!   ...
 //! ```
+//!
+//! **Blob format by version:**
+//! - **v1**: `Vec<StaticTile>` (plain tile array)
+//! - **v2**: `ResourceBlob { tiles: Vec<StaticTile>, __cache: Option<Value>, __scopes: Option<Value> }`
 //!
 //! Header size = 9 + 12 × entry_count.  Entries are sorted by `subject_id`
 //! for binary search.
@@ -31,7 +35,10 @@
 //! Range request.
 
 pub const TILE_MAGIC: &[u8; 4] = b"RMTL";
-pub const TILE_VERSION: u8 = 1;
+pub const TILE_VERSION: u8 = 2;
+
+/// Minimum tile file version we can still read (v1 = plain Vec<StaticTile> blobs).
+pub const TILE_VERSION_MIN: u8 = 1;
 
 /// Minimum bytes needed to determine the full header size (magic + version + entry_count).
 pub const TILE_MIN_HEADER_PROBE: usize = 9;
@@ -52,6 +59,7 @@ pub struct TileContentEntry {
 /// Parsed tile content file header.
 #[derive(Debug, Clone)]
 pub struct TileContentHeader {
+    pub version: u8,
     pub entries: Vec<TileContentEntry>,
 }
 
@@ -82,10 +90,10 @@ pub fn tile_full_header_size(probe: &[u8]) -> Result<usize, String> {
             &probe[0..4]
         ));
     }
-    if probe[4] != TILE_VERSION {
+    if probe[4] < TILE_VERSION_MIN || probe[4] > TILE_VERSION {
         return Err(format!(
-            "Unsupported tile file version: {} (expected {})",
-            probe[4], TILE_VERSION
+            "Unsupported tile file version: {} (expected {}-{})",
+            probe[4], TILE_VERSION_MIN, TILE_VERSION
         ));
     }
     let entry_count = u32::from_le_bytes(
@@ -104,10 +112,10 @@ pub fn parse_tile_content_header(data: &[u8]) -> Result<TileContentHeader, Strin
     if &data[0..4] != TILE_MAGIC {
         return Err("Invalid tile file magic".into());
     }
-    if data[4] != TILE_VERSION {
+    if data[4] < TILE_VERSION_MIN || data[4] > TILE_VERSION {
         return Err(format!(
-            "Unsupported tile file version: {} (expected {})",
-            data[4], TILE_VERSION
+            "Unsupported tile file version: {} (expected {}-{})",
+            data[4], TILE_VERSION_MIN, TILE_VERSION
         ));
     }
     let entry_count = u32::from_le_bytes(
@@ -125,6 +133,7 @@ pub fn parse_tile_content_header(data: &[u8]) -> Result<TileContentHeader, Strin
         ));
     }
 
+    let version = data[4];
     let mut entries = Vec::with_capacity(entry_count);
     for i in 0..entry_count {
         let base = 9 + ENTRY_SIZE * i;
@@ -138,7 +147,7 @@ pub fn parse_tile_content_header(data: &[u8]) -> Result<TileContentHeader, Strin
         });
     }
 
-    Ok(TileContentHeader { entries })
+    Ok(TileContentHeader { version, entries })
 }
 
 /// Write a complete tile content file.
@@ -252,6 +261,25 @@ mod tests {
     }
 
     #[test]
+    fn test_version_in_header() {
+        let data = write_tile_content_file(&[]);
+        let header = parse_tile_content_header(&data).unwrap();
+        assert_eq!(header.version, TILE_VERSION);
+    }
+
+    #[test]
+    fn test_v1_still_parseable() {
+        // Construct a v1 file manually (same layout, version byte = 1)
+        let mut data = Vec::new();
+        data.extend_from_slice(TILE_MAGIC);
+        data.push(1u8); // v1
+        data.extend_from_slice(&0u32.to_le_bytes()); // 0 entries
+        let header = parse_tile_content_header(&data).unwrap();
+        assert_eq!(header.version, 1);
+        assert!(header.entries.is_empty());
+    }
+
+    #[test]
     fn test_invalid_magic() {
         let data = vec![0, 0, 0, 0, 1, 0, 0, 0, 0];
         assert!(parse_tile_content_header(&data).is_err());
@@ -268,6 +296,16 @@ mod tests {
         // but only provide 5 bytes of entry data (need 24)
         data.extend_from_slice(&[0; 5]);
         assert!(parse_tile_content_header(&data).is_err());
+    }
+
+    #[test]
+    fn test_unsupported_version() {
+        let mut data = Vec::new();
+        data.extend_from_slice(TILE_MAGIC);
+        data.push(99u8); // future version
+        data.extend_from_slice(&0u32.to_le_bytes());
+        assert!(parse_tile_content_header(&data).is_err());
+        assert!(tile_full_header_size(&data[..TILE_MIN_HEADER_PROBE]).is_err());
     }
 
     fn header_size_for_count(n: usize) -> usize {

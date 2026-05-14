@@ -54,6 +54,9 @@ pub struct PageMeta {
     pub resource_count: usize,
     /// Bounding box: (min_lng, min_lat, max_lng, max_lat), if any resources have geometry.
     pub bbox: Option<(f64, f64, f64, f64)>,
+    /// Shadow pages hold only reverse-predicate records for external link targets.
+    #[serde(default)]
+    pub is_shadow: bool,
 }
 
 /// Result of page assignment.
@@ -148,8 +151,70 @@ pub fn assign_pages(summaries: &[ResourceSummary], config: &PageConfig) -> PageI
                 } else {
                     None
                 },
+                is_shadow: false,
             });
         }
+    }
+
+    PageIndex {
+        assignments,
+        page_meta,
+        resource_to_page,
+    }
+}
+
+/// Assign external (shadow) resource IDs to pages.
+///
+/// `external_ids` — resource IDs referenced by this corpus but not present
+/// in the regular `resource_to_page`. Each gets a page assignment so that
+/// reverse predicates can land on it.
+///
+/// Returns a new `PageIndex` containing only shadow assignments. The caller
+/// merges `resource_to_page` entries into the main index.
+pub fn assign_shadow_pages(
+    external_ids: &[String],
+    next_page_id: u32,
+    config: &PageConfig,
+) -> PageIndex {
+    // Deduplicate while preserving deterministic order
+    let mut seen = HashSet::new();
+    let unique: Vec<&String> = external_ids
+        .iter()
+        .filter(|id| seen.insert(id.as_str()))
+        .collect();
+
+    if unique.is_empty() {
+        return PageIndex {
+            assignments: Vec::new(),
+            page_meta: Vec::new(),
+            resource_to_page: HashMap::new(),
+        };
+    }
+
+    let page_size = config.target_page_size.max(1);
+    let mut assignments = Vec::with_capacity(unique.len());
+    let mut page_meta = Vec::new();
+    let mut resource_to_page = HashMap::with_capacity(unique.len());
+
+    for (chunk_idx, chunk) in unique.chunks(page_size).enumerate() {
+        let page_id = next_page_id + chunk_idx as u32;
+
+        for id in chunk {
+            assignments.push(PageAssignment {
+                resource_id: (*id).clone(),
+                page_id,
+                graph_id: "__shadow__".to_string(),
+            });
+            resource_to_page.insert((*id).clone(), page_id);
+        }
+
+        page_meta.push(PageMeta {
+            page_id,
+            graph_id: "__shadow__".to_string(),
+            resource_count: chunk.len(),
+            bbox: None,
+            is_shadow: true,
+        });
     }
 
     PageIndex {
@@ -259,5 +324,69 @@ mod tests {
         let idx = assign_pages(&summaries, &PageConfig::default());
         assert!(idx.resource_to_page.contains_key("res-1"));
         assert!(idx.resource_to_page.contains_key("res-2"));
+    }
+
+    // -- Shadow page tests --
+
+    #[test]
+    fn test_shadow_empty_input() {
+        let idx = assign_shadow_pages(&[], 10, &PageConfig::default());
+        assert!(idx.assignments.is_empty());
+        assert!(idx.page_meta.is_empty());
+        assert!(idx.resource_to_page.is_empty());
+    }
+
+    #[test]
+    fn test_shadow_batching() {
+        let ids: Vec<String> = (0..5).map(|i| format!("ext-{i}")).collect();
+        let idx = assign_shadow_pages(&ids, 0, &PageConfig { target_page_size: 2 });
+
+        // 5 ids / 2 per page = 3 pages
+        assert_eq!(idx.page_meta.len(), 3);
+        assert_eq!(idx.assignments.len(), 5);
+
+        // All pages are shadow
+        for pm in &idx.page_meta {
+            assert!(pm.is_shadow);
+            assert_eq!(pm.graph_id, "__shadow__");
+            assert_eq!(pm.bbox, None);
+        }
+
+        // Page sizes: 2, 2, 1
+        assert_eq!(idx.page_meta[0].resource_count, 2);
+        assert_eq!(idx.page_meta[1].resource_count, 2);
+        assert_eq!(idx.page_meta[2].resource_count, 1);
+    }
+
+    #[test]
+    fn test_shadow_dedup() {
+        let ids = vec![
+            "a".to_string(),
+            "b".to_string(),
+            "a".to_string(),
+            "c".to_string(),
+            "b".to_string(),
+        ];
+        let idx = assign_shadow_pages(&ids, 0, &PageConfig { target_page_size: 100 });
+
+        // Only 3 unique IDs
+        assert_eq!(idx.assignments.len(), 3);
+        assert_eq!(idx.resource_to_page.len(), 3);
+    }
+
+    #[test]
+    fn test_shadow_page_ids_continue() {
+        let ids: Vec<String> = (0..3).map(|i| format!("ext-{i}")).collect();
+        let next_page_id = 42;
+        let idx = assign_shadow_pages(&ids, next_page_id, &PageConfig { target_page_size: 2 });
+
+        // Pages should start at 42
+        assert_eq!(idx.page_meta[0].page_id, 42);
+        assert_eq!(idx.page_meta[1].page_id, 43);
+
+        // All resource_to_page values should be >= 42
+        for &pid in idx.resource_to_page.values() {
+            assert!(pid >= next_page_id);
+        }
     }
 }

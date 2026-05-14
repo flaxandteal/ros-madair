@@ -241,7 +241,7 @@ fn main() {
         all_triples.extend(schema_triples);
     }
     for (resource_id, tiles) in &resources {
-        if let Ok(triples) = resource_to_triples(&graph, resource_id, tiles, base_uri) {
+        if let Ok((triples, _)) = resource_to_triples(&graph, resource_id, tiles, base_uri) {
             all_triples.extend(triples);
         }
     }

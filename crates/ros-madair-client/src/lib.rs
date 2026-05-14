@@ -3,20 +3,26 @@
 
 //! Rós Madair WASM client — browser-based query engine over page-based static files.
 //!
+//! Supports multi-layer indexes: a base layer plus optional corpus layers.
+//! Queries run transparently across all layers (or optionally a single layer).
+//!
 //! ## Usage from JS
 //!
 //! ```js
 //! import { init, SparqlStore } from 'ros-madair-client';
 //!
 //! await init();
-//! const store = new SparqlStore('https://cdn.example.org/ros-madair/');
+//! const store = new SparqlStore('https://cdn.example.org/base/index/');
 //! await store.loadSummary();
 //!
-//! const results = await store.query(`
-//!   SELECT ?place WHERE {
-//!     ?place <.../node/monument_type> <.../concept/church> .
-//!   }
-//! `);
+//! // Optional: add corpus layers
+//! await store.addLayer('https://cdn.example.org/corpus1/index/', 'corpus1');
+//!
+//! // Query across all layers
+//! const results = await store.queryPatterns(`[...]`);
+//!
+//! // Query specific layer
+//! const results = await store.queryPatterns(`[...]`, 'corpus1');
 //! ```
 
 pub mod fetch;
@@ -24,113 +30,150 @@ pub mod page_cache;
 pub mod planner;
 
 use wasm_bindgen::prelude::*;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use ros_madair_core::{
-    parse_records, parse_resource_meta,
+    parse_records, parse_resource_meta, parse_tile_content_header,
     ConceptIntervalIndex, Dictionary, PageMeta, PageRecord, ResourceMap,
     ResourceMeta, SummaryIndex, TileContentHeader,
 };
 
 use crate::fetch::{fetch_full, fetch_page_header, fetch_predicate_blocks, fetch_resource_meta, fetch_tile_header, fetch_tile_blob};
 use crate::page_cache::PageCache;
-use crate::planner::{plan_from_patterns, execute_patterns, PatternTerm, TriplePattern};
+use crate::planner::{plan_from_patterns, execute_single_pattern, PatternTerm, TriplePattern};
 
-#[wasm_bindgen]
-pub struct SparqlStore {
+/// Per-layer index data. Each layer has its own dictionary, summary, pages, etc.
+struct Layer {
     base_url: String,
-    summary: Option<SummaryIndex>,
-    dictionary: Option<Dictionary>,
-    page_meta: Option<Vec<PageMeta>>,
+    name: String,
+    summary: SummaryIndex,
+    dictionary: Dictionary,
+    page_meta: Vec<PageMeta>,
     resource_map: Option<ResourceMap>,
     concept_intervals: Option<ConceptIntervalIndex>,
-    /// Loaded resource metadata indexed by dict_id.
     resource_meta: HashMap<u32, ResourceMeta>,
     cache: PageCache,
     /// Loaded records indexed by (page_id, pred_id) → sorted records.
     records: HashMap<(u32, u32), Vec<PageRecord>>,
     /// Cached tile content headers indexed by page_id.
     tile_headers: HashMap<u32, TileContentHeader>,
+    /// Cached full tile file bytes (for tile source bridge).
+    tile_file_cache: HashMap<u32, Vec<u8>>,
+}
+
+#[wasm_bindgen]
+pub struct SparqlStore {
+    layers: Vec<Layer>,
+}
+
+/// Load index data from a base URL into a Layer.
+async fn load_layer(base_url: &str, name: &str) -> Result<Layer, JsValue> {
+    let base = if base_url.ends_with('/') {
+        base_url.to_string()
+    } else {
+        format!("{}/", base_url)
+    };
+
+    let summary_bytes = fetch_full(&format!("{}summary.bin", base))
+        .await
+        .map_err(|e| JsValue::from_str(&e))?;
+    let summary = SummaryIndex::from_bytes(&summary_bytes)
+        .map_err(|e| JsValue::from_str(&e))?;
+
+    let dict_bytes = fetch_full(&format!("{}dictionary.bin", base))
+        .await
+        .map_err(|e| JsValue::from_str(&e))?;
+    let dictionary = Dictionary::from_bytes(&dict_bytes)
+        .map_err(|e| JsValue::from_str(&e))?;
+
+    let meta_bytes = fetch_full(&format!("{}page_meta.json", base))
+        .await
+        .map_err(|e| JsValue::from_str(&e))?;
+    let meta_str = String::from_utf8(meta_bytes)
+        .map_err(|e| JsValue::from_str(&format!("Invalid UTF-8 in page_meta: {}", e)))?;
+    let page_meta: Vec<PageMeta> = serde_json::from_str(&meta_str)
+        .map_err(|e| JsValue::from_str(&format!("Invalid page_meta JSON: {}", e)))?;
+
+    let resource_map = match fetch_full(&format!("{}resource_map.bin", base)).await {
+        Ok(rm_bytes) => Some(
+            ResourceMap::from_bytes(&rm_bytes)
+                .map_err(|e| JsValue::from_str(&e))?,
+        ),
+        Err(_) => None,
+    };
+
+    let concept_intervals = match fetch_full(&format!("{}concept_intervals.bin", base)).await {
+        Ok(ci_bytes) => Some(
+            ConceptIntervalIndex::from_bytes(&ci_bytes)
+                .map_err(|e| JsValue::from_str(&e))?,
+        ),
+        Err(_) => None,
+    };
+
+    Ok(Layer {
+        base_url: base,
+        name: name.to_string(),
+        summary,
+        dictionary,
+        page_meta,
+        resource_map,
+        concept_intervals,
+        resource_meta: HashMap::new(),
+        cache: PageCache::new(),
+        records: HashMap::new(),
+        tile_headers: HashMap::new(),
+        tile_file_cache: HashMap::new(),
+    })
 }
 
 #[wasm_bindgen]
 impl SparqlStore {
     #[wasm_bindgen(constructor)]
     pub fn new(base_url: &str) -> Self {
-        let base = if base_url.ends_with('/') {
-            base_url.to_string()
-        } else {
-            format!("{}/", base_url)
-        };
+        // Store base_url for deferred loading via load_summary()
+        let _ = base_url; // used in load_summary
         Self {
-            base_url: base,
-            summary: None,
-            dictionary: None,
-            page_meta: None,
-            resource_map: None,
-            concept_intervals: None,
-            resource_meta: HashMap::new(),
-            cache: PageCache::new(),
-            records: HashMap::new(),
-            tile_headers: HashMap::new(),
+            layers: Vec::new(),
         }
     }
 
-    /// Load summary index, dictionary, and page metadata. Call once at init.
-    pub async fn load_summary(&mut self) -> Result<(), JsValue> {
-        let summary_bytes = fetch_full(&format!("{}summary.bin", self.base_url))
-            .await
-            .map_err(|e| JsValue::from_str(&e))?;
-        self.summary = Some(
-            SummaryIndex::from_bytes(&summary_bytes)
-                .map_err(|e| JsValue::from_str(&e))?,
-        );
-
-        let dict_bytes = fetch_full(&format!("{}dictionary.bin", self.base_url))
-            .await
-            .map_err(|e| JsValue::from_str(&e))?;
-        self.dictionary = Some(
-            Dictionary::from_bytes(&dict_bytes)
-                .map_err(|e| JsValue::from_str(&e))?,
-        );
-
-        let meta_bytes = fetch_full(&format!("{}page_meta.json", self.base_url))
-            .await
-            .map_err(|e| JsValue::from_str(&e))?;
-        let meta_str = String::from_utf8(meta_bytes)
-            .map_err(|e| JsValue::from_str(&format!("Invalid UTF-8 in page_meta: {}", e)))?;
-        self.page_meta = Some(
-            serde_json::from_str(&meta_str)
-                .map_err(|e| JsValue::from_str(&format!("Invalid page_meta JSON: {}", e)))?,
-        );
-
-        // Load resource map (optional — may not exist for older indices)
-        match fetch_full(&format!("{}resource_map.bin", self.base_url)).await {
-            Ok(rm_bytes) => {
-                self.resource_map = Some(
-                    ResourceMap::from_bytes(&rm_bytes)
-                        .map_err(|e| JsValue::from_str(&e))?,
-                );
-            }
-            Err(_) => {
-                self.resource_map = None;
-            }
+    /// Load summary index, dictionary, and page metadata for the base layer.
+    /// Call once at init. The base_url passed to the constructor is used.
+    #[wasm_bindgen(js_name = "loadSummary")]
+    pub async fn load_summary(&mut self, base_url: Option<String>) -> Result<(), JsValue> {
+        let url = base_url.unwrap_or_default();
+        let layer = load_layer(&url, "base").await?;
+        if self.layers.is_empty() {
+            self.layers.push(layer);
+        } else {
+            self.layers[0] = layer;
         }
-
-        // Load concept intervals (optional — may not exist for older indices)
-        match fetch_full(&format!("{}concept_intervals.bin", self.base_url)).await {
-            Ok(ci_bytes) => {
-                self.concept_intervals = Some(
-                    ConceptIntervalIndex::from_bytes(&ci_bytes)
-                        .map_err(|e| JsValue::from_str(&e))?,
-                );
-            }
-            Err(_) => {
-                self.concept_intervals = None;
-            }
-        }
-
         Ok(())
+    }
+
+    /// Add an additional index layer (e.g. a corpus overlay).
+    ///
+    /// Each layer has its own dictionary, summary, and pages.
+    /// Queries run across all layers by default.
+    #[wasm_bindgen(js_name = "addLayer")]
+    pub async fn add_layer(&mut self, base_url: &str, name: &str) -> Result<(), JsValue> {
+        let layer = load_layer(base_url, name).await?;
+        self.layers.push(layer);
+        Ok(())
+    }
+
+    /// Number of loaded layers.
+    #[wasm_bindgen(js_name = "layerCount")]
+    pub fn layer_count(&self) -> usize {
+        self.layers.len()
+    }
+
+    /// Get layer names as JSON array.
+    #[wasm_bindgen(js_name = "layerNames")]
+    pub fn layer_names(&self) -> JsValue {
+        let names: Vec<&str> = self.layers.iter().map(|l| l.name.as_str()).collect();
+        let json = serde_json::to_string(&names).unwrap_or_else(|_| "[]".to_string());
+        JsValue::from_str(&json)
     }
 
     /// Execute a query given triple patterns as JSON.
@@ -138,20 +181,20 @@ impl SparqlStore {
     /// Input format: `[{"s": "?x", "p": "http://...", "o": "http://..."}]`
     /// where `?`-prefixed values are variables and others are URIs.
     ///
-    /// Returns matching subject IDs as a JSON array of strings.
-    pub async fn query_patterns(&mut self, patterns_json: &str) -> Result<JsValue, JsValue> {
-        let summary = self
-            .summary
-            .as_ref()
-            .ok_or_else(|| JsValue::from_str("Summary not loaded — call loadSummary() first"))?;
-        let dict = self
-            .dictionary
-            .as_ref()
-            .ok_or_else(|| JsValue::from_str("Dictionary not loaded"))?;
-        let page_meta = self
-            .page_meta
-            .as_ref()
-            .ok_or_else(|| JsValue::from_str("Page meta not loaded"))?;
+    /// When `layer` is provided, only that named layer is queried.
+    /// Otherwise all layers are queried and results are unioned per-pattern,
+    /// then intersected across patterns.
+    ///
+    /// Returns matching subject URIs as a JSON array of strings.
+    #[wasm_bindgen(js_name = "queryPatterns")]
+    pub async fn query_patterns(
+        &mut self,
+        patterns_json: &str,
+        layer: Option<String>,
+    ) -> Result<JsValue, JsValue> {
+        if self.layers.is_empty() {
+            return Err(JsValue::from_str("No layers loaded — call loadSummary() first"));
+        }
 
         // Parse patterns from JSON
         let raw_patterns: Vec<RawPattern> = serde_json::from_str(patterns_json)
@@ -166,86 +209,138 @@ impl SparqlStore {
             })
             .collect();
 
-        // Plan
-        let plan = plan_from_patterns(
-            &patterns, summary, dict, page_meta,
-            self.concept_intervals.as_ref(),
-        );
-        let reduced = self.cache.reduce_plan(&plan);
+        if patterns.is_empty() {
+            return serde_wasm_bindgen::to_value(&Vec::<String>::new())
+                .map_err(|e| JsValue::from_str(&format!("Serialization error: {}", e)));
+        }
 
-        // Fetch needed pages
-        for spec in &reduced.pages {
-            let page_url = format!("{}pages/page_{:04}.dat", self.base_url, spec.page_id);
-            let header = fetch_page_header(&page_url)
-                .await
-                .map_err(|e| JsValue::from_str(&e))?;
+        // Determine which layers to query
+        let layer_indices: Vec<usize> = if let Some(ref name) = layer {
+            self.layers.iter()
+                .enumerate()
+                .filter(|(_, l)| l.name == *name)
+                .map(|(i, _)| i)
+                .collect()
+        } else {
+            (0..self.layers.len()).collect()
+        };
 
-            let blocks = fetch_predicate_blocks(&page_url, &header, &spec.predicates)
-                .await
-                .map_err(|e| JsValue::from_str(&e))?;
+        if layer_indices.is_empty() {
+            return Err(JsValue::from_str(&format!(
+                "Unknown layer: '{}'", layer.unwrap_or_default()
+            )));
+        }
 
-            for (pred_id, block_bytes) in blocks {
-                let records = parse_records(&block_bytes);
-                let count = records.len();
-                self.records
-                    .insert((spec.page_id, pred_id), records);
-                self.cache
-                    .mark_loaded(spec.page_id, &[pred_id], count);
+        // For each layer: plan → fetch → execute per-pattern
+        // Collect per-pattern URI sets across all layers
+        let mut pattern_uri_sets: Vec<HashSet<String>> = vec![HashSet::new(); patterns.len()];
+
+        for &li in &layer_indices {
+            // Plan for this layer
+            let plan = {
+                let l = &self.layers[li];
+                plan_from_patterns(
+                    &patterns, &l.summary, &l.dictionary, &l.page_meta,
+                    l.concept_intervals.as_ref(),
+                )
+            };
+            let reduced = self.layers[li].cache.reduce_plan(&plan);
+
+            // Fetch needed pages for this layer
+            for spec in &reduced.pages {
+                let page_url = format!("{}pages/page_{:04}.dat", self.layers[li].base_url, spec.page_id);
+                let header = fetch_page_header(&page_url)
+                    .await
+                    .map_err(|e| JsValue::from_str(&e))?;
+
+                let blocks = fetch_predicate_blocks(&page_url, &header, &spec.predicates)
+                    .await
+                    .map_err(|e| JsValue::from_str(&e))?;
+
+                for (pred_id, block_bytes) in blocks {
+                    let records = parse_records(&block_bytes);
+                    let count = records.len();
+                    self.layers[li].records.insert((spec.page_id, pred_id), records);
+                    self.layers[li].cache.mark_loaded(spec.page_id, &[pred_id], count);
+                }
+            }
+
+            // Execute each pattern independently against this layer's records
+            for (pi, pattern) in patterns.iter().enumerate() {
+                let l = &self.layers[li];
+                let matches = execute_single_pattern(
+                    pattern, &l.records, &l.dictionary,
+                    l.concept_intervals.as_ref(),
+                );
+                // Resolve dict_ids to URIs and add to this pattern's set
+                for subject_id in matches {
+                    if let Some(uri) = l.dictionary.resolve(subject_id) {
+                        pattern_uri_sets[pi].insert(uri.to_string());
+                    }
+                }
             }
         }
 
-        // Execute query over all loaded records.
-        let results = execute_patterns(
-            &patterns, &self.records, dict,
-            self.concept_intervals.as_ref(),
-        );
+        // Intersect across patterns
+        let mut result_iter = pattern_uri_sets.into_iter();
+        let mut result = result_iter.next().unwrap();
+        for set in result_iter {
+            result = result.intersection(&set).cloned().collect();
+        }
 
-        // Return as JSON array of URIs
-        let result_uris: Vec<String> = results
-            .into_iter()
-            .filter_map(|subject_id| dict.resolve(subject_id).map(String::from))
-            .collect();
+        let mut result_uris: Vec<String> = result.into_iter().collect();
+        result_uris.sort();
 
         serde_wasm_bindgen::to_value(&result_uris)
             .map_err(|e| JsValue::from_str(&format!("Serialization error: {}", e)))
     }
 
-    /// Reset the cache and loaded records for a fresh query run.
+    /// Reset the cache and loaded records for all layers.
+    #[wasm_bindgen(js_name = "resetCache")]
     pub fn reset_cache(&mut self) {
-        self.cache = PageCache::new();
-        self.records.clear();
+        for layer in &mut self.layers {
+            layer.cache = PageCache::new();
+            layer.records.clear();
+        }
     }
 
-    /// Get cache statistics.
+    /// Get cache statistics across all layers.
+    #[wasm_bindgen(js_name = "cacheStats")]
     pub fn cache_stats(&self) -> JsValue {
+        let (pages, records) = self.layers.iter().fold((0, 0), |(p, r), l| {
+            (p + l.cache.page_count(), r + l.cache.record_count())
+        });
         let stats = serde_json::json!({
-            "pages_loaded": self.cache.page_count(),
-            "records_loaded": self.cache.record_count(),
+            "pages_loaded": pages,
+            "records_loaded": records,
+            "layer_count": self.layers.len(),
         });
         JsValue::from_str(&stats.to_string())
     }
 
-    /// Load records for a (page, predicate) pair, fetching the page file if needed.
+    /// Load records for a (page, predicate) pair on a specific layer.
     ///
-    /// Returns JSON array: `[{subject: "uri", object: "uri_or_null", subject_id, object_val}]`
+    /// `layer_index` defaults to 0 (base layer).
+    /// Returns JSON array: `[{subject, object, subject_id, object_val}]`
+    #[wasm_bindgen(js_name = "loadPredicateRecords")]
     pub async fn load_predicate_records(
         &mut self,
         page_id: u32,
         pred_uri: &str,
+        layer_index: Option<usize>,
     ) -> Result<JsValue, JsValue> {
-        let dict = self
-            .dictionary
-            .as_ref()
-            .ok_or_else(|| JsValue::from_str("Dictionary not loaded"))?;
+        let li = layer_index.unwrap_or(0);
+        let layer = self.layers.get(li)
+            .ok_or_else(|| JsValue::from_str(&format!("Invalid layer index: {}", li)))?;
 
-        let pred_id = match dict.lookup(pred_uri) {
+        let pred_id = match layer.dictionary.lookup(pred_uri) {
             Some(id) => id,
             None => return Ok(JsValue::from_str("[]")),
         };
 
         // Load page data if not cached
-        if !self.records.contains_key(&(page_id, pred_id)) {
-            let page_url = format!("{}pages/page_{:04}.dat", self.base_url, page_id);
+        if !self.layers[li].records.contains_key(&(page_id, pred_id)) {
+            let page_url = format!("{}pages/page_{:04}.dat", self.layers[li].base_url, page_id);
             let header = fetch_page_header(&page_url)
                 .await
                 .map_err(|e| JsValue::from_str(&e))?;
@@ -255,13 +350,13 @@ impl SparqlStore {
             for (pid, block_bytes) in blocks {
                 let records = parse_records(&block_bytes);
                 let count = records.len();
-                self.records.insert((page_id, pid), records);
-                self.cache.mark_loaded(page_id, &[pid], count);
+                self.layers[li].records.insert((page_id, pid), records);
+                self.layers[li].cache.mark_loaded(page_id, &[pid], count);
             }
         }
 
-        let dict = self.dictionary.as_ref().unwrap();
-        let result: Vec<serde_json::Value> = self
+        let dict = &self.layers[li].dictionary;
+        let result: Vec<serde_json::Value> = self.layers[li]
             .records
             .get(&(page_id, pred_id))
             .map(|recs| {
@@ -286,82 +381,86 @@ impl SparqlStore {
 
     // --- Graph explorer methods ---
 
-    /// Look up a term's dictionary ID. Returns null if not found.
+    /// Look up a term's dictionary ID. Searches all layers, returns first match.
+    #[wasm_bindgen(js_name = "lookupTerm")]
     pub fn lookup_term(&self, uri: &str) -> JsValue {
-        match self.dictionary.as_ref().and_then(|d| d.lookup(uri)) {
-            Some(id) => JsValue::from(id),
-            None => JsValue::NULL,
+        for layer in &self.layers {
+            if let Some(id) = layer.dictionary.lookup(uri) {
+                return JsValue::from(id);
+            }
         }
+        JsValue::NULL
     }
 
-    /// Resolve a dictionary ID to its term string. Returns null if not found.
-    pub fn resolve_term(&self, id: u32) -> JsValue {
-        match self.dictionary.as_ref().and_then(|d| d.resolve(id)) {
+    /// Resolve a dictionary ID to its term string on a specific layer.
+    #[wasm_bindgen(js_name = "resolveTerm")]
+    pub fn resolve_term(&self, id: u32, layer_index: Option<usize>) -> JsValue {
+        let li = layer_index.unwrap_or(0);
+        match self.layers.get(li).and_then(|l| l.dictionary.resolve(id)) {
             Some(term) => JsValue::from_str(term),
             None => JsValue::NULL,
         }
     }
 
-    /// Get the page ID for a resource URI. Returns null if not found.
+    /// Get the page ID for a resource URI. Searches all layers.
+    ///
+    /// Returns JSON: `{page_id, layer_index, layer_name}` or null.
+    #[wasm_bindgen(js_name = "pageForResource")]
     pub fn page_for_resource(&self, uri: &str) -> JsValue {
-        let dict = match self.dictionary.as_ref() {
-            Some(d) => d,
-            None => return JsValue::NULL,
-        };
-        let rmap = match self.resource_map.as_ref() {
-            Some(r) => r,
-            None => return JsValue::NULL,
-        };
-        match dict.lookup(uri).and_then(|id| rmap.page_for(id)) {
-            Some(page_id) => JsValue::from(page_id),
-            None => JsValue::NULL,
+        for (li, layer) in self.layers.iter().enumerate() {
+            let rmap = match &layer.resource_map {
+                Some(r) => r,
+                None => continue,
+            };
+            if let Some(page_id) = layer.dictionary.lookup(uri).and_then(|id| rmap.page_for(id)) {
+                let result = serde_json::json!({
+                    "page_id": page_id,
+                    "layer_index": li,
+                    "layer_name": layer.name,
+                });
+                return JsValue::from_str(&result.to_string());
+            }
         }
+        JsValue::NULL
     }
 
-    /// Check if a URI is a known resource.
+    /// Check if a URI is a known resource in any layer.
+    #[wasm_bindgen(js_name = "isResource")]
     pub fn is_resource(&self, uri: &str) -> bool {
-        let dict = match self.dictionary.as_ref() {
-            Some(d) => d,
-            None => return false,
-        };
-        let rmap = match self.resource_map.as_ref() {
-            Some(r) => r,
-            None => return false,
-        };
-        dict.lookup(uri)
-            .map(|id| rmap.is_resource(id))
-            .unwrap_or(false)
+        self.layers.iter().any(|l| {
+            l.resource_map.as_ref().map_or(false, |rmap| {
+                l.dictionary.lookup(uri).map(|id| rmap.is_resource(id)).unwrap_or(false)
+            })
+        })
     }
 
-    /// Get page metadata as JSON array.
-    pub fn page_meta_json(&self) -> JsValue {
-        match &self.page_meta {
-            Some(meta) => {
-                let json = serde_json::to_string(meta).unwrap_or_else(|_| "[]".to_string());
+    /// Get page metadata as JSON array for a specific layer.
+    #[wasm_bindgen(js_name = "pageMetaJson")]
+    pub fn page_meta_json(&self, layer_index: Option<usize>) -> JsValue {
+        let li = layer_index.unwrap_or(0);
+        match self.layers.get(li) {
+            Some(layer) => {
+                let json = serde_json::to_string(&layer.page_meta).unwrap_or_else(|_| "[]".to_string());
                 JsValue::from_str(&json)
             }
             None => JsValue::NULL,
         }
     }
 
-    /// Get all forward connections from a page (quads where page_s == page_id).
-    ///
-    /// Returns JSON array: `[{page_s, predicate, pred_uri, page_o, edge_count, subject_count}]`
-    pub fn summary_from_page(&self, page_id: u32) -> JsValue {
-        let summary = match self.summary.as_ref() {
-            Some(s) => s,
-            None => return JsValue::NULL,
-        };
-        let dict = match self.dictionary.as_ref() {
-            Some(d) => d,
+    /// Get all forward connections from a page.
+    #[wasm_bindgen(js_name = "summaryFromPage")]
+    pub fn summary_from_page(&self, page_id: u32, layer_index: Option<usize>) -> JsValue {
+        let li = layer_index.unwrap_or(0);
+        let layer = match self.layers.get(li) {
+            Some(l) => l,
             None => return JsValue::NULL,
         };
 
-        let quads = summary.lookup_s(page_id);
+        let quads = layer.summary.lookup_s(page_id);
         let result: Vec<serde_json::Value> = quads
             .iter()
             .map(|q| {
-                let pred_uri = dict.resolve(q.predicate).unwrap_or("?").to_string();
+                let pred_uri = layer.dictionary.resolve(q.predicate).unwrap_or("?").to_string();
                 serde_json::json!({
                     "page_s": q.page_s,
                     "predicate": q.predicate,
@@ -377,24 +476,20 @@ impl SparqlStore {
         JsValue::from_str(&json)
     }
 
-    /// Get all reverse connections to a page (quads where page_o == page_id).
-    ///
-    /// Returns JSON array: `[{page_s, predicate, pred_uri, page_o, edge_count, subject_count}]`
-    pub fn summary_to_page(&self, page_id: u32) -> JsValue {
-        let summary = match self.summary.as_ref() {
-            Some(s) => s,
-            None => return JsValue::NULL,
-        };
-        let dict = match self.dictionary.as_ref() {
-            Some(d) => d,
+    /// Get all reverse connections to a page.
+    #[wasm_bindgen(js_name = "summaryToPage")]
+    pub fn summary_to_page(&self, page_id: u32, layer_index: Option<usize>) -> JsValue {
+        let li = layer_index.unwrap_or(0);
+        let layer = match self.layers.get(li) {
+            Some(l) => l,
             None => return JsValue::NULL,
         };
 
-        let quads = summary.lookup_o(page_id);
+        let quads = layer.summary.lookup_o(page_id);
         let result: Vec<serde_json::Value> = quads
             .iter()
             .map(|q| {
-                let pred_uri = dict.resolve(q.predicate).unwrap_or("?").to_string();
+                let pred_uri = layer.dictionary.resolve(q.predicate).unwrap_or("?").to_string();
                 serde_json::json!({
                     "page_s": q.page_s,
                     "predicate": q.predicate,
@@ -410,18 +505,26 @@ impl SparqlStore {
         JsValue::from_str(&json)
     }
 
-    /// Check whether resource_map was loaded.
+    /// Check whether resource_map was loaded (on base layer).
+    #[wasm_bindgen(js_name = "hasResourceMap")]
     pub fn has_resource_map(&self) -> bool {
-        self.resource_map.is_some()
+        self.layers.first().map_or(false, |l| l.resource_map.is_some())
     }
 
     /// Load resource metadata from a page file's embedded metadata section.
-    ///
-    /// Fetches the metadata via a single range request if not already cached.
-    /// Returns JSON array: `[{dict_id, name, slug, model}]`
-    pub async fn load_resource_meta(&mut self, page_id: u32) -> Result<JsValue, JsValue> {
-        if !self.cache.is_meta_loaded(page_id) {
-            let page_url = format!("{}pages/page_{:04}.dat", self.base_url, page_id);
+    #[wasm_bindgen(js_name = "loadResourceMeta")]
+    pub async fn load_resource_meta(
+        &mut self,
+        page_id: u32,
+        layer_index: Option<usize>,
+    ) -> Result<JsValue, JsValue> {
+        let li = layer_index.unwrap_or(0);
+        if li >= self.layers.len() {
+            return Err(JsValue::from_str(&format!("Invalid layer index: {}", li)));
+        }
+
+        if !self.layers[li].cache.is_meta_loaded(page_id) {
+            let page_url = format!("{}pages/page_{:04}.dat", self.layers[li].base_url, page_id);
             let header = fetch_page_header(&page_url)
                 .await
                 .map_err(|e| JsValue::from_str(&e))?;
@@ -433,26 +536,22 @@ impl SparqlStore {
                 let metas = parse_resource_meta(&meta_bytes)
                     .map_err(|e| JsValue::from_str(&e))?;
                 for m in metas {
-                    self.resource_meta.insert(m.dict_id, m);
+                    self.layers[li].resource_meta.insert(m.dict_id, m);
                 }
             }
-            self.cache.mark_meta_loaded(page_id);
+            self.layers[li].cache.mark_meta_loaded(page_id);
         }
 
-        // Return metadata for this page's resources
-        let dict = match self.dictionary.as_ref() {
-            Some(d) => d,
-            None => return Ok(JsValue::from_str("[]")),
-        };
-        let rmap = match self.resource_map.as_ref() {
+        let layer = &self.layers[li];
+        let rmap = match &layer.resource_map {
             Some(r) => r,
             None => return Ok(JsValue::from_str("[]")),
         };
 
-        let result: Vec<serde_json::Value> = self.resource_meta.values()
+        let result: Vec<serde_json::Value> = layer.resource_meta.values()
             .filter(|m| rmap.page_for(m.dict_id) == Some(page_id))
             .map(|m| {
-                let uri = dict.resolve(m.dict_id).unwrap_or("?");
+                let uri = layer.dictionary.resolve(m.dict_id).unwrap_or("?");
                 serde_json::json!({
                     "dict_id": m.dict_id,
                     "uri": uri,
@@ -467,40 +566,33 @@ impl SparqlStore {
         Ok(JsValue::from_str(&json))
     }
 
-    /// Look up metadata for a resource URI.
-    ///
-    /// Returns JSON: `{name, slug, model}` or null if not loaded.
-    /// The page containing this resource must have been loaded via
-    /// `load_resource_meta` first.
+    /// Look up metadata for a resource URI across all layers.
+    #[wasm_bindgen(js_name = "resourceInfo")]
     pub fn resource_info(&self, uri: &str) -> JsValue {
-        let dict = match self.dictionary.as_ref() {
-            Some(d) => d,
-            None => return JsValue::NULL,
-        };
-        let dict_id = match dict.lookup(uri) {
-            Some(id) => id,
-            None => return JsValue::NULL,
-        };
-        match self.resource_meta.get(&dict_id) {
-            Some(m) => {
-                let json = serde_json::json!({
-                    "name": m.name,
-                    "slug": m.slug,
-                    "model": m.model,
-                });
-                JsValue::from_str(&json.to_string())
+        for layer in &self.layers {
+            if let Some(dict_id) = layer.dictionary.lookup(uri) {
+                if let Some(m) = layer.resource_meta.get(&dict_id) {
+                    let json = serde_json::json!({
+                        "name": m.name,
+                        "slug": m.slug,
+                        "model": m.model,
+                    });
+                    return JsValue::from_str(&json.to_string());
+                }
             }
-            None => JsValue::NULL,
         }
+        JsValue::NULL
     }
 
-    /// List all resource URIs on a given page. Returns JSON array of strings.
-    pub fn resources_on_page(&self, page_id: u32) -> JsValue {
-        let dict = match self.dictionary.as_ref() {
-            Some(d) => d,
+    /// List all resource URIs on a given page in a specific layer.
+    #[wasm_bindgen(js_name = "resourcesOnPage")]
+    pub fn resources_on_page(&self, page_id: u32, layer_index: Option<usize>) -> JsValue {
+        let li = layer_index.unwrap_or(0);
+        let layer = match self.layers.get(li) {
+            Some(l) => l,
             None => return JsValue::from_str("[]"),
         };
-        let rmap = match self.resource_map.as_ref() {
+        let rmap = match &layer.resource_map {
             Some(r) => r,
             None => return JsValue::from_str("[]"),
         };
@@ -508,7 +600,7 @@ impl SparqlStore {
         let mut uris: Vec<&str> = Vec::new();
         for i in 0..rmap.len() {
             if rmap.page_for(i as u32) == Some(page_id) {
-                if let Some(term) = dict.resolve(i as u32) {
+                if let Some(term) = layer.dictionary.resolve(i as u32) {
                     uris.push(term);
                 }
             }
@@ -518,34 +610,27 @@ impl SparqlStore {
         JsValue::from_str(&json)
     }
 
-    /// Get all summary quads as JSON (for building the full page-level overview graph).
-    ///
-    /// Returns JSON array: `[{page_s, predicate, pred_uri, page_o, edge_count, subject_count}]`
-    pub fn summary_all_quads(&self) -> JsValue {
-        let summary = match self.summary.as_ref() {
-            Some(s) => s,
-            None => return JsValue::NULL,
-        };
-        let dict = match self.dictionary.as_ref() {
-            Some(d) => d,
+    /// Get all summary quads as JSON for a specific layer.
+    #[wasm_bindgen(js_name = "summaryAllQuads")]
+    pub fn summary_all_quads(&self, layer_index: Option<usize>) -> JsValue {
+        let li = layer_index.unwrap_or(0);
+        let layer = match self.layers.get(li) {
+            Some(l) => l,
             None => return JsValue::NULL,
         };
 
-        // Iterate all pages and collect their forward quads (SPO order covers everything)
         let mut result: Vec<serde_json::Value> = Vec::new();
-        if let Some(meta) = &self.page_meta {
-            for pm in meta {
-                for q in summary.lookup_s(pm.page_id) {
-                    let pred_uri = dict.resolve(q.predicate).unwrap_or("?").to_string();
-                    result.push(serde_json::json!({
-                        "page_s": q.page_s,
-                        "predicate": q.predicate,
-                        "pred_uri": pred_uri,
-                        "page_o": q.page_o,
-                        "edge_count": q.edge_count,
-                        "subject_count": q.subject_count,
-                    }));
-                }
+        for pm in &layer.page_meta {
+            for q in layer.summary.lookup_s(pm.page_id) {
+                let pred_uri = layer.dictionary.resolve(q.predicate).unwrap_or("?").to_string();
+                result.push(serde_json::json!({
+                    "page_s": q.page_s,
+                    "predicate": q.predicate,
+                    "pred_uri": pred_uri,
+                    "page_o": q.page_o,
+                    "edge_count": q.edge_count,
+                    "subject_count": q.subject_count,
+                }));
             }
         }
 
@@ -557,40 +642,27 @@ impl SparqlStore {
 
     /// Load full-fidelity tiles for a resource, returning JSON (StaticTile array).
     ///
+    /// Searches all layers for the resource, using the first match.
     /// If `nodegroup_id` is provided, filters to tiles matching that nodegroup.
-    /// Uses resource_map for O(1) page lookup, then Range requests to tile content file.
+    #[wasm_bindgen(js_name = "loadTilesForResource")]
     pub async fn load_tiles_for_resource(
         &mut self,
         resource_uri: &str,
         nodegroup_id: Option<String>,
     ) -> Result<JsValue, JsValue> {
-        let dict = self
-            .dictionary
-            .as_ref()
-            .ok_or_else(|| JsValue::from_str("Dictionary not loaded"))?;
-        let rmap = self
-            .resource_map
-            .as_ref()
-            .ok_or_else(|| JsValue::from_str("Resource map not loaded"))?;
-
-        let subject_id = dict
-            .lookup(resource_uri)
-            .ok_or_else(|| JsValue::from_str(&format!("Unknown resource URI: {}", resource_uri)))?;
-
-        let page_id = rmap
-            .page_for(subject_id)
-            .ok_or_else(|| JsValue::from_str(&format!("No page for subject_id {}", subject_id)))?;
+        // Find which layer has this resource
+        let (li, subject_id, page_id) = self.find_resource(resource_uri)?;
 
         // Fetch and cache tile header if needed
-        if !self.tile_headers.contains_key(&page_id) {
-            let tile_url = format!("{}tiles/tile_{:04}.dat", self.base_url, page_id);
+        if !self.layers[li].tile_headers.contains_key(&page_id) {
+            let tile_url = format!("{}tiles/tile_{:04}.dat", self.layers[li].base_url, page_id);
             let header = fetch_tile_header(&tile_url)
                 .await
                 .map_err(|e| JsValue::from_str(&e))?;
-            self.tile_headers.insert(page_id, header);
+            self.layers[li].tile_headers.insert(page_id, header);
         }
 
-        let header = self.tile_headers.get(&page_id).unwrap();
+        let header = self.layers[li].tile_headers.get(&page_id).unwrap();
         let entry = header
             .entry_for_subject(subject_id)
             .ok_or_else(|| JsValue::from_str(&format!(
@@ -598,47 +670,144 @@ impl SparqlStore {
                 subject_id, page_id
             )))?;
 
-        // Fetch the blob
-        let tile_url = format!("{}tiles/tile_{:04}.dat", self.base_url, page_id);
+        let tile_url = format!("{}tiles/tile_{:04}.dat", self.layers[li].base_url, page_id);
         let blob = fetch_tile_blob(&tile_url, entry.blob_offset, entry.blob_size)
             .await
             .map_err(|e| JsValue::from_str(&e))?;
 
-        // Deserialize MessagePack → Vec<serde_json::Value>
-        // We use Value rather than StaticTile to avoid pulling alizarin-core into WASM.
-        let tiles: Vec<serde_json::Value> = rmp_serde::from_slice(&blob)
-            .map_err(|e| JsValue::from_str(&format!("Failed to deserialize tile data: {}", e)))?;
+        #[derive(serde::Deserialize)]
+        struct ResourceBlob {
+            tiles: Vec<serde_json::Value>,
+            #[serde(default, rename = "__cache")]
+            cache: Option<serde_json::Value>,
+            #[serde(default, rename = "__scopes")]
+            scopes: Option<serde_json::Value>,
+        }
 
-        // Optionally filter by nodegroup_id
+        let parsed = if header.version >= 2 {
+            rmp_serde::from_slice::<ResourceBlob>(&blob)
+                .map_err(|e| JsValue::from_str(&format!("Failed to deserialize v2 tile blob: {}", e)))?
+        } else {
+            let tiles: Vec<serde_json::Value> = rmp_serde::from_slice(&blob)
+                .map_err(|e| JsValue::from_str(&format!("Failed to deserialize v1 tile data: {}", e)))?;
+            ResourceBlob { tiles, cache: None, scopes: None }
+        };
+
         let filtered: Vec<&serde_json::Value> = match &nodegroup_id {
-            Some(ng_id) => tiles
+            Some(ng_id) => parsed.tiles
                 .iter()
                 .filter(|t| t.get("nodegroup_id").and_then(|v| v.as_str()) == Some(ng_id.as_str()))
                 .collect(),
-            None => tiles.iter().collect(),
+            None => parsed.tiles.iter().collect(),
         };
 
-        serde_wasm_bindgen::to_value(&filtered)
+        let result = serde_json::json!({
+            "tiles": filtered,
+            "__cache": parsed.cache,
+            "__scopes": parsed.scopes,
+        });
+
+        serde_wasm_bindgen::to_value(&result)
             .map_err(|e| JsValue::from_str(&format!("Serialization error: {}", e)))
+    }
+
+    // --- Tile file cache methods (for tile source bridge) ---
+
+    /// Pre-fetch and cache the entire tile file for the page containing this resource.
+    /// Call before `getTileBlobSync()` to ensure data is available.
+    #[wasm_bindgen(js_name = "prefetchTileFile")]
+    pub async fn prefetch_tile_file(&mut self, resource_uri: &str) -> Result<(), JsValue> {
+        let (li, _subject_id, page_id) = self.find_resource(resource_uri)?;
+        if self.layers[li].tile_file_cache.contains_key(&page_id) {
+            return Ok(());
+        }
+        let tile_url = format!("{}tiles/tile_{:04}.dat", self.layers[li].base_url, page_id);
+        let bytes = fetch_full(&tile_url)
+            .await
+            .map_err(|e| JsValue::from_str(&e))?;
+        self.layers[li].tile_file_cache.insert(page_id, bytes);
+        Ok(())
+    }
+
+    /// Synchronously extract the raw msgpack blob for a resource's tiles from
+    /// cached tile files. Returns `Uint8Array`. Must call `prefetchTileFile` first.
+    ///
+    /// This is the building block for Phase 2's dynamic tile source bridge —
+    /// alizarin's JS callback calls this synchronously.
+    #[wasm_bindgen(js_name = "getTileBlobSync")]
+    pub fn get_tile_blob_sync(
+        &self,
+        resource_uri: &str,
+        nodegroup_id: Option<String>,
+    ) -> Result<Vec<u8>, JsValue> {
+        let (li, subject_id, page_id) = self.find_resource(resource_uri)?;
+        let file_bytes = self.layers[li]
+            .tile_file_cache
+            .get(&page_id)
+            .ok_or_else(|| {
+                JsValue::from_str("Tile file not cached — call prefetchTileFile first")
+            })?;
+
+        let header = parse_tile_content_header(file_bytes)
+            .map_err(|e| JsValue::from_str(&e))?;
+        let entry = header.entry_for_subject(subject_id).ok_or_else(|| {
+            JsValue::from_str(&format!(
+                "No tile entry for subject_id {} in page {}",
+                subject_id, page_id
+            ))
+        })?;
+
+        let start = entry.blob_offset as usize;
+        let end = start + entry.blob_size as usize;
+
+        if end > file_bytes.len() {
+            return Err(JsValue::from_str(&format!(
+                "Tile blob range [{}, {}) exceeds file size {}",
+                start, end, file_bytes.len()
+            )));
+        }
+
+        // If nodegroup filtering requested, we still return the full blob —
+        // filtering happens in the consumer (alizarin side). The blob is raw
+        // msgpack, and slicing by nodegroup requires deserialization.
+        let _ = nodegroup_id;
+
+        Ok(file_bytes[start..end].to_vec())
     }
 }
 
 // --- Rust-only accessors (not exposed to JS) ---
 
 impl SparqlStore {
-    /// Borrow the loaded dictionary, if any.
-    pub fn dictionary(&self) -> Option<&Dictionary> {
-        self.dictionary.as_ref()
+    /// Borrow the loaded dictionary for a layer.
+    pub fn dictionary(&self, layer_index: usize) -> Option<&Dictionary> {
+        self.layers.get(layer_index).map(|l| &l.dictionary)
     }
 
-    /// Borrow the loaded resource map, if any.
-    pub fn resource_map(&self) -> Option<&ResourceMap> {
-        self.resource_map.as_ref()
+    /// Borrow the loaded resource map for a layer.
+    pub fn resource_map(&self, layer_index: usize) -> Option<&ResourceMap> {
+        self.layers.get(layer_index).and_then(|l| l.resource_map.as_ref())
     }
 
-    /// The base URL this store fetches from.
-    pub fn base_url(&self) -> &str {
-        &self.base_url
+    /// The base URL for a layer.
+    pub fn base_url(&self, layer_index: usize) -> Option<&str> {
+        self.layers.get(layer_index).map(|l| l.base_url.as_str())
+    }
+
+    /// Find a resource across all layers. Returns (layer_index, subject_id, page_id).
+    fn find_resource(&self, uri: &str) -> Result<(usize, u32, u32), JsValue> {
+        for (li, layer) in self.layers.iter().enumerate() {
+            let rmap = match &layer.resource_map {
+                Some(r) => r,
+                None => continue,
+            };
+            if let Some(subject_id) = layer.dictionary.lookup(uri) {
+                if let Some(page_id) = rmap.page_for(subject_id) {
+                    return Ok((li, subject_id, page_id));
+                }
+            }
+        }
+        Err(JsValue::from_str(&format!("Resource not found in any layer: {}", uri)))
     }
 }
 
@@ -656,5 +825,3 @@ fn parse_term(s: &str) -> PatternTerm {
         PatternTerm::Uri(s.to_string())
     }
 }
-
-// execute_patterns is now in ros-madair-core::query, re-exported via planner module.

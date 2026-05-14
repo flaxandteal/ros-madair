@@ -25,6 +25,7 @@
 //! - [`uri`] — shared URI construction helpers
 //! - [`value_extract`] — shared JSON value extraction
 
+pub mod build;
 pub mod concept_intervals;
 pub mod concept_tree;
 pub mod datatype_class;
@@ -46,7 +47,7 @@ pub mod value_extract;
 
 pub use dictionary::Dictionary;
 pub use geo_convert::{extract_centroid, geojson_to_wkt};
-pub use page_assignment::{assign_pages, PageAssignment, PageConfig, PageIndex, PageMeta};
+pub use page_assignment::{assign_pages, assign_shadow_pages, PageAssignment, PageConfig, PageIndex, PageMeta, ResourceSummary};
 pub use page_file::{
     binary_search_object, full_header_size, parse_page_header, parse_records,
     parse_resource_meta, range_search_object, serialize_resource_meta, write_page_file,
@@ -71,9 +72,19 @@ pub use tile_content_file::{
 };
 pub use local_engine::LocalQueryEngine;
 pub use query::{
-    execute_patterns, plan_from_patterns, FetchPlan, PageFetchSpec, PatternTerm, SummaryResult,
-    TriplePattern,
+    execute_patterns, execute_single_pattern, plan_from_patterns, FetchPlan, PageFetchSpec,
+    PatternTerm, SummaryResult, TriplePattern,
 };
 pub use concept_intervals::ConceptIntervalIndex;
 pub use concept_tree::{build_concept_indexes, ConceptTree, ConceptInfo};
 pub use tile_source_impl::{DiskTileSource, GrowableTileSource, InMemoryTileSource};
+pub use build::{
+    build_to_memory, build_to_disk, BuildStats,
+    collect_reference_ids, extract_resource_summary,
+    prepare_routing, process_resource_batch, finalize_build,
+    BuildRouting, BuildAccumulator,
+};
+
+// Re-export alizarin types needed by downstream consumers (Tauri plugin, etc.)
+pub use alizarin_core::graph::{StaticGraph, StaticResource, StaticTile};
+pub use alizarin_core::skos::SkosCollection;

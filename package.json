@@ -7,29 +7,26 @@
     "dist",
     "pkg"
   ],
-  "main": "./dist/ros-madair.umd.cjs",
   "module": "./dist/ros-madair.js",
   "types": "./dist/main.d.ts",
   "exports": {
     ".": {
       "types": "./dist/main.d.ts",
-      "import": "./dist/ros-madair.js",
-      "require": "./dist/ros-madair.umd.cjs"
+      "import": "./dist/ros-madair.js"
     }
   },
   "scripts": {
-    "build:wasm": "wasm-pack build crates/ros-madair-alizarin --target web --out-dir ../../pkg --out-name ros_madair --release",
+    "build:wasm": "wasm-pack build crates/ros-madair-client --target web --out-dir ../../pkg --out-name ros_madair --release",
+    "build:combined": "wasm-pack build crates/ros-madair-alizarin --target web --out-dir ../../pkg-alizarin --out-name ros_madair_alizarin --release",
     "build:js": "vite build && tsc -p tsconfig.build.json",
     "build": "npm run build:wasm && npm run build:js",
     "prepublishOnly": "npm run build"
   },
   "dependencies": {
-    "alizarin": "https://github.com/flaxandteal/alizarin/releases/download/v2.0.0-alpha.90/alizarin-2.0.0-alpha.90.tgz"
+    "ros-madair-client": "file:./pkg"
   },
   "devDependencies": {
     "typescript": "~5.6.3",
-    "vite": "^5.4.18",
-    "vite-plugin-top-level-await": "^1.6.0",
-    "vite-plugin-wasm": "^3.5.0"
+    "vite": "^5.4.18"
   }
 }

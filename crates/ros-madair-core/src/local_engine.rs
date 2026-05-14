@@ -5,23 +5,20 @@
 //!
 //! Mirrors the WASM client's plan-then-fetch-then-execute workflow,
 //! but reads page files from disk instead of issuing HTTP Range requests.
+//! Supports multiple layers (base + corpus overlays).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::concept_intervals::ConceptIntervalIndex;
 use crate::concept_tree::ConceptTree;
-use crate::query::{execute_patterns, plan_from_patterns, PatternTerm, TriplePattern};
+use crate::query::{execute_patterns, execute_single_pattern, plan_from_patterns, PatternTerm, TriplePattern};
 use crate::uri::node_uri;
 use crate::{parse_page_header, parse_records, Dictionary, PageMeta, PageRecord, ResourceMap, SummaryIndex};
 
-/// A local (filesystem-backed) query engine over a Rós Madair index.
-///
-/// Loads the lightweight routing structures (summary, dictionary, resource_map,
-/// page_meta) at construction, then reads individual page files on demand during
-/// query execution.
-pub struct LocalQueryEngine {
+/// Per-layer index data for a local query engine.
+struct LocalLayer {
     dict: Dictionary,
     summary: SummaryIndex,
     resource_map: ResourceMap,
@@ -30,68 +27,105 @@ pub struct LocalQueryEngine {
     page_meta: Vec<PageMeta>,
     pages_dir: PathBuf,
     base_uri: String,
+    name: String,
+}
+
+/// A local (filesystem-backed) query engine over a Rós Madair index.
+///
+/// Supports multiple layers (base + overlays). Loads the lightweight routing
+/// structures at construction, then reads individual page files on demand
+/// during query execution.
+pub struct LocalQueryEngine {
+    layers: Vec<LocalLayer>,
+}
+
+/// Load a layer from an index directory.
+fn load_local_layer(index_dir: &Path, base_uri: &str, name: &str) -> Result<LocalLayer, String> {
+    let dict_bytes = fs::read(index_dir.join("dictionary.bin"))
+        .map_err(|e| format!("Failed to read dictionary.bin: {e}"))?;
+    let dict = Dictionary::from_bytes(&dict_bytes)?;
+
+    let summary_bytes = fs::read(index_dir.join("summary.bin"))
+        .map_err(|e| format!("Failed to read summary.bin: {e}"))?;
+    let summary = SummaryIndex::from_bytes(&summary_bytes)?;
+
+    let rmap_bytes = fs::read(index_dir.join("resource_map.bin"))
+        .map_err(|e| format!("Failed to read resource_map.bin: {e}"))?;
+    let resource_map = ResourceMap::from_bytes(&rmap_bytes)?;
+
+    let meta_str = fs::read_to_string(index_dir.join("page_meta.json"))
+        .map_err(|e| format!("Failed to read page_meta.json: {e}"))?;
+    let page_meta: Vec<PageMeta> = serde_json::from_str(&meta_str)
+        .map_err(|e| format!("Failed to parse page_meta.json: {e}"))?;
+
+    let concept_intervals = match fs::read(index_dir.join("concept_intervals.bin")) {
+        Ok(ci_bytes) => Some(
+            ConceptIntervalIndex::from_bytes(&ci_bytes)
+                .map_err(|e| format!("Failed to parse concept_intervals.bin: {e}"))?
+        ),
+        Err(_) => None,
+    };
+
+    let concept_tree = match fs::read(index_dir.join("concept_tree.bin")) {
+        Ok(ct_bytes) => Some(
+            ConceptTree::from_bytes(&ct_bytes)
+                .map_err(|e| format!("Failed to parse concept_tree.bin: {e}"))?
+        ),
+        Err(_) => None,
+    };
+
+    let pages_dir = index_dir.join("pages");
+    if !pages_dir.is_dir() {
+        return Err(format!("Pages directory not found: {}", pages_dir.display()));
+    }
+
+    Ok(LocalLayer {
+        dict,
+        summary,
+        resource_map,
+        concept_intervals,
+        concept_tree,
+        page_meta,
+        pages_dir,
+        base_uri: base_uri.to_string(),
+        name: name.to_string(),
+    })
+}
+
+/// Load page records for a fetch plan from a local layer's pages directory.
+fn load_plan_records(
+    layer: &LocalLayer,
+    plan: &crate::query::FetchPlan,
+) -> Result<HashMap<(u32, u32), Vec<PageRecord>>, String> {
+    let mut records: HashMap<(u32, u32), Vec<PageRecord>> = HashMap::new();
+    for spec in &plan.pages {
+        let page_path = layer.pages_dir.join(format!("page_{:04}.dat", spec.page_id));
+        let data = fs::read(&page_path)
+            .map_err(|e| format!("Failed to read {}: {e}", page_path.display()))?;
+        let header = parse_page_header(&data)?;
+        for &pred_id in &spec.predicates {
+            if let Some(entry) = header.entries.iter().find(|e| e.pred_id == pred_id) {
+                let start = entry.offset as usize;
+                let end = start + entry.record_count as usize * 8;
+                if end > data.len() {
+                    return Err(format!(
+                        "Predicate block overflows page file (page={}, pred={})",
+                        spec.page_id, pred_id
+                    ));
+                }
+                let recs = parse_records(&data[start..end]);
+                records.insert((spec.page_id, pred_id), recs);
+            }
+        }
+    }
+    Ok(records)
 }
 
 impl LocalQueryEngine {
     /// Open a Rós Madair index directory.
-    ///
-    /// Expects the directory to contain:
-    /// - `dictionary.bin`
-    /// - `summary.bin`
-    /// - `resource_map.bin`
-    /// - `page_meta.json`
-    /// - `pages/page_XXXX.dat`
     pub fn open(index_dir: &Path, base_uri: &str) -> Result<Self, String> {
-        let dict_bytes = fs::read(index_dir.join("dictionary.bin"))
-            .map_err(|e| format!("Failed to read dictionary.bin: {e}"))?;
-        let dict = Dictionary::from_bytes(&dict_bytes)?;
-
-        let summary_bytes = fs::read(index_dir.join("summary.bin"))
-            .map_err(|e| format!("Failed to read summary.bin: {e}"))?;
-        let summary = SummaryIndex::from_bytes(&summary_bytes)?;
-
-        let rmap_bytes = fs::read(index_dir.join("resource_map.bin"))
-            .map_err(|e| format!("Failed to read resource_map.bin: {e}"))?;
-        let resource_map = ResourceMap::from_bytes(&rmap_bytes)?;
-
-        let meta_str = fs::read_to_string(index_dir.join("page_meta.json"))
-            .map_err(|e| format!("Failed to read page_meta.json: {e}"))?;
-        let page_meta: Vec<PageMeta> = serde_json::from_str(&meta_str)
-            .map_err(|e| format!("Failed to parse page_meta.json: {e}"))?;
-
-        // Load concept intervals (optional — older indices won't have this file)
-        let concept_intervals = match fs::read(index_dir.join("concept_intervals.bin")) {
-            Ok(ci_bytes) => Some(
-                ConceptIntervalIndex::from_bytes(&ci_bytes)
-                    .map_err(|e| format!("Failed to parse concept_intervals.bin: {e}"))?
-            ),
-            Err(_) => None,
-        };
-
-        // Load concept tree (optional ��� older indices won't have this file)
-        let concept_tree = match fs::read(index_dir.join("concept_tree.bin")) {
-            Ok(ct_bytes) => Some(
-                ConceptTree::from_bytes(&ct_bytes)
-                    .map_err(|e| format!("Failed to parse concept_tree.bin: {e}"))?
-            ),
-            Err(_) => None,
-        };
-
-        let pages_dir = index_dir.join("pages");
-        if !pages_dir.is_dir() {
-            return Err(format!("Pages directory not found: {}", pages_dir.display()));
-        }
-
-        Ok(Self {
-            dict,
-            summary,
-            resource_map,
-            concept_intervals,
-            concept_tree,
-            page_meta,
-            pages_dir,
-            base_uri: base_uri.to_string(),
-        })
+        let layer = load_local_layer(index_dir, base_uri, "base")?;
+        Ok(Self { layers: vec![layer] })
     }
 
     /// Construct from pre-loaded structures (used when caller already has them).
@@ -104,65 +138,143 @@ impl LocalQueryEngine {
         pages_dir: PathBuf,
         base_uri: String,
     ) -> Self {
-        Self { dict, summary, resource_map, concept_intervals, concept_tree: None, page_meta, pages_dir, base_uri }
+        Self {
+            layers: vec![LocalLayer {
+                dict, summary, resource_map, concept_intervals,
+                concept_tree: None, page_meta, pages_dir,
+                base_uri, name: "base".to_string(),
+            }],
+        }
     }
 
-    /// Borrow the concept tree.
+    /// Add an additional index layer (e.g. a corpus overlay).
+    pub fn add_layer(&mut self, index_dir: &Path, base_uri: &str, name: &str) -> Result<(), String> {
+        let layer = load_local_layer(index_dir, base_uri, name)?;
+        self.layers.push(layer);
+        Ok(())
+    }
+
+    /// Number of loaded layers.
+    pub fn layer_count(&self) -> usize {
+        self.layers.len()
+    }
+
+    /// Borrow the concept tree (base layer).
     pub fn concept_tree(&self) -> Option<&ConceptTree> {
-        self.concept_tree.as_ref()
+        self.layers.first().and_then(|l| l.concept_tree.as_ref())
     }
 
-    /// Execute triple patterns against local page files.
+    /// Execute triple patterns across layers, returning matching resource URIs.
     ///
-    /// Returns matching resource dict IDs (sorted).
-    pub fn query_patterns(&self, patterns: &[TriplePattern]) -> Result<Vec<u32>, String> {
-        let plan = plan_from_patterns(
-            patterns,
-            &self.summary,
-            &self.dict,
-            &self.page_meta,
-            self.concept_intervals.as_ref(),
-        );
+    /// Each pattern is executed against all targeted layers, results are unioned
+    /// per-pattern (resolved to URIs), then intersected across patterns.
+    ///
+    /// `layer_filter` optionally restricts to a named layer.
+    pub fn query_patterns_multi(
+        &self,
+        patterns: &[TriplePattern],
+        layer_filter: Option<&str>,
+    ) -> Result<Vec<String>, String> {
+        if patterns.is_empty() {
+            return Ok(Vec::new());
+        }
 
-        let mut records: HashMap<(u32, u32), Vec<PageRecord>> = HashMap::new();
+        let target_layers: Vec<usize> = if let Some(name) = layer_filter {
+            self.layers.iter()
+                .enumerate()
+                .filter(|(_, l)| l.name == name)
+                .map(|(i, _)| i)
+                .collect()
+        } else {
+            (0..self.layers.len()).collect()
+        };
 
-        for spec in &plan.pages {
-            let page_path = self.pages_dir.join(format!("page_{:04}.dat", spec.page_id));
-            let data = fs::read(&page_path)
-                .map_err(|e| format!("Failed to read {}: {e}", page_path.display()))?;
+        if target_layers.is_empty() {
+            return Err(format!("Unknown layer: '{}'", layer_filter.unwrap_or("")));
+        }
 
-            let header = parse_page_header(&data)?;
+        // Single layer fast path
+        if target_layers.len() == 1 {
+            let li = target_layers[0];
+            let layer = &self.layers[li];
+            let plan = plan_from_patterns(
+                patterns, &layer.summary, &layer.dict, &layer.page_meta,
+                layer.concept_intervals.as_ref(),
+            );
+            let records = load_plan_records(layer, &plan)?;
+            let dict_ids = execute_patterns(
+                patterns, &records, &layer.dict,
+                layer.concept_intervals.as_ref(),
+            );
+            let uris: Vec<String> = dict_ids.into_iter()
+                .filter_map(|id| layer.dict.resolve(id).map(String::from))
+                .collect();
+            return Ok(uris);
+        }
 
-            for &pred_id in &spec.predicates {
-                if let Some(entry) = header.entries.iter().find(|e| e.pred_id == pred_id) {
-                    let start = entry.offset as usize;
-                    let end = start + entry.record_count as usize * 8;
-                    if end > data.len() {
-                        return Err(format!(
-                            "Predicate block overflows page file (page={}, pred={})",
-                            spec.page_id, pred_id
-                        ));
+        // Multi-layer: per-pattern union, then intersection
+        let mut pattern_uri_sets: Vec<HashSet<String>> = vec![HashSet::new(); patterns.len()];
+
+        for &li in &target_layers {
+            let layer = &self.layers[li];
+            let plan = plan_from_patterns(
+                patterns, &layer.summary, &layer.dict, &layer.page_meta,
+                layer.concept_intervals.as_ref(),
+            );
+            let records = load_plan_records(layer, &plan)?;
+
+            for (pi, pattern) in patterns.iter().enumerate() {
+                let matches = execute_single_pattern(
+                    pattern, &records, &layer.dict,
+                    layer.concept_intervals.as_ref(),
+                );
+                for subject_id in matches {
+                    if let Some(uri) = layer.dict.resolve(subject_id) {
+                        pattern_uri_sets[pi].insert(uri.to_string());
                     }
-                    let recs = parse_records(&data[start..end]);
-                    records.insert((spec.page_id, pred_id), recs);
                 }
             }
         }
 
-        Ok(execute_patterns(patterns, &records, &self.dict, self.concept_intervals.as_ref()))
+        let mut result_iter = pattern_uri_sets.into_iter();
+        let mut result = result_iter.next().unwrap();
+        for set in result_iter {
+            result = result.intersection(&set).cloned().collect();
+        }
+
+        let mut uris: Vec<String> = result.into_iter().collect();
+        uris.sort();
+        Ok(uris)
     }
 
-    /// Convenience: single-predicate query.
+    /// Execute triple patterns against the base layer's page files.
     ///
-    /// `pred_alias` is the node alias (e.g. "type", "name") — it will be
-    /// expanded to the full predicate URI using `base_uri`.
-    /// `obj_uri` is an optional exact object URI to filter on.
+    /// Returns matching resource dict IDs (sorted). For multi-layer queries,
+    /// use `query_patterns_multi` instead.
+    pub fn query_patterns(&self, patterns: &[TriplePattern]) -> Result<Vec<u32>, String> {
+        let layer = self.layers.first()
+            .ok_or_else(|| "No layers loaded".to_string())?;
+        let plan = plan_from_patterns(
+            patterns, &layer.summary, &layer.dict, &layer.page_meta,
+            layer.concept_intervals.as_ref(),
+        );
+        let records = load_plan_records(layer, &plan)?;
+        Ok(execute_patterns(
+            patterns, &records, &layer.dict,
+            layer.concept_intervals.as_ref(),
+        ))
+    }
+
+    /// Convenience: single-predicate query on base layer.
     pub fn query_predicate(
         &self,
         pred_alias: &str,
         obj_uri: Option<&str>,
     ) -> Result<Vec<u32>, String> {
-        let pred_full = node_uri(&self.base_uri, pred_alias);
+        let base_uri = self.layers.first()
+            .map(|l| l.base_uri.as_str())
+            .unwrap_or("");
+        let pred_full = node_uri(base_uri, pred_alias);
         let pattern = TriplePattern {
             subject: PatternTerm::Variable("s".into()),
             predicate: PatternTerm::Uri(pred_full),
@@ -174,24 +286,24 @@ impl LocalQueryEngine {
         self.query_patterns(&[pattern])
     }
 
-    /// Borrow the dictionary.
+    /// Borrow the dictionary (base layer).
     pub fn dictionary(&self) -> &Dictionary {
-        &self.dict
+        &self.layers[0].dict
     }
 
-    /// Borrow the resource map.
+    /// Borrow the resource map (base layer).
     pub fn resource_map(&self) -> &ResourceMap {
-        &self.resource_map
+        &self.layers[0].resource_map
     }
 
-    /// Borrow the page metadata.
+    /// Borrow the page metadata (base layer).
     pub fn page_meta(&self) -> &[PageMeta] {
-        &self.page_meta
+        &self.layers[0].page_meta
     }
 
-    /// The base URI this engine was opened with.
+    /// The base URI (base layer).
     pub fn base_uri(&self) -> &str {
-        &self.base_uri
+        &self.layers[0].base_uri
     }
 }
 

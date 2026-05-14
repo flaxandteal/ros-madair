@@ -455,7 +455,7 @@ fn main() {
             tiles,
             base_uri,
         ) {
-            Ok(triples) => {
+            Ok((triples, _geo_skipped)) => {
                 triple_count += triples.len();
                 all_triples.extend(triples);
             }
