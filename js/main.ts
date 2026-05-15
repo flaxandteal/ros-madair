@@ -3,3 +3,12 @@
 
 export { initWasm as default, initWasm, setWasmURL } from "./_wasm";
 export { SparqlStore } from "./_wasm";
+export {
+  setBackend,
+  getBackend,
+  setNapiModule,
+  getNapiModule,
+  autoDetectBackend,
+  createSparqlStore,
+} from "./backend";
+export type { BackendType } from "./backend";

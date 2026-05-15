@@ -15,7 +15,7 @@ export default defineConfig({
       formats: ['es'],
     },
     rollupOptions: {
-      external: ['ros-madair-client'],
+      external: ['ros-madair-client', 'ros-madair-napi'],
       output: { exports: 'named' },
     },
   },

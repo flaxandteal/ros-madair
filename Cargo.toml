@@ -4,11 +4,12 @@ members = [
     "crates/ros-madair-builder",
     "crates/ros-madair-client",
     "crates/ros-madair-alizarin",
+    "crates/ros-madair-napi",
 ]
 resolver = "2"
 
 [workspace.package]
-version = "0.1.0-alpha.8"
+version = "0.1.0-alpha.9"
 authors = ["Phil Weir <phil.weir@flaxandteal.co.uk>"]
 edition = "2021"
 license = "AGPL-3.0-or-later"

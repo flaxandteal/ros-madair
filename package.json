@@ -18,6 +18,7 @@
   "scripts": {
     "build:wasm": "wasm-pack build crates/ros-madair-client --target web --out-dir ../../pkg --out-name ros_madair --release",
     "build:combined": "wasm-pack build crates/ros-madair-alizarin --target web --out-dir ../../pkg-alizarin --out-name ros_madair_alizarin --release",
+    "build:napi": "cd crates/ros-madair-napi && napi build --platform --release",
     "build:js": "vite build && tsc -p tsconfig.build.json",
     "build": "npm run build:wasm && npm run build:js",
     "prepublishOnly": "npm run build"

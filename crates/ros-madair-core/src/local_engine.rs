@@ -15,7 +15,10 @@ use crate::concept_intervals::ConceptIntervalIndex;
 use crate::concept_tree::ConceptTree;
 use crate::query::{execute_patterns, execute_single_pattern, plan_from_patterns, PatternTerm, TriplePattern};
 use crate::uri::node_uri;
-use crate::{parse_page_header, parse_records, Dictionary, PageMeta, PageRecord, ResourceMap, SummaryIndex};
+use crate::{
+    parse_page_header, parse_records, parse_resource_meta, parse_tile_content_header,
+    Dictionary, PageMeta, PageRecord, ResourceMap, ResourceMeta, SummaryIndex,
+};
 
 /// Per-layer index data for a local query engine.
 struct LocalLayer {
@@ -304,6 +307,175 @@ impl LocalQueryEngine {
     /// The base URI (base layer).
     pub fn base_uri(&self) -> &str {
         &self.layers[0].base_uri
+    }
+
+    /// Find a resource across all layers. Returns `(layer_index, dict_id, page_id)`.
+    pub fn find_resource(&self, uri: &str) -> Result<(usize, u32, u32), String> {
+        for (li, layer) in self.layers.iter().enumerate() {
+            if let Some(dict_id) = layer.dict.lookup(uri) {
+                if let Some(page_id) = layer.resource_map.page_for(dict_id) {
+                    return Ok((li, dict_id, page_id));
+                }
+            }
+        }
+        Err(format!("Resource not found in any layer: {}", uri))
+    }
+
+    /// Load resource metadata from a page file's embedded metadata section.
+    pub fn load_resource_meta(&self, page_id: u32, layer_index: Option<usize>) -> Result<Vec<ResourceMeta>, String> {
+        let li = layer_index.unwrap_or(0);
+        let layer = self.layers.get(li)
+            .ok_or_else(|| format!("Invalid layer index: {}", li))?;
+
+        let page_path = layer.pages_dir.join(format!("page_{:04}.dat", page_id));
+        let data = fs::read(&page_path)
+            .map_err(|e| format!("Failed to read {}: {e}", page_path.display()))?;
+        let header = parse_page_header(&data)?;
+
+        match header.resource_meta_range {
+            Some((offset, size)) => {
+                let start = offset as usize;
+                let end = start + size as usize;
+                if end > data.len() {
+                    return Err(format!(
+                        "Resource meta range [{}, {}) exceeds page file size {}",
+                        start, end, data.len()
+                    ));
+                }
+                parse_resource_meta(&data[start..end])
+            }
+            None => Ok(Vec::new()),
+        }
+    }
+
+    /// Load and parse tiles for a resource, optionally filtering by nodegroup.
+    ///
+    /// Reads the tile file from disk, finds the resource's blob via the header,
+    /// and deserializes it.
+    pub fn load_tiles_for_resource(
+        &self,
+        resource_uri: &str,
+        nodegroup_id: Option<&str>,
+    ) -> Result<serde_json::Value, String> {
+        let (li, subject_id, page_id) = self.find_resource(resource_uri)?;
+        let layer = &self.layers[li];
+
+        let tiles_dir = layer.pages_dir.parent()
+            .ok_or_else(|| "Cannot determine tiles directory".to_string())?
+            .join("tiles");
+        let tile_path = tiles_dir.join(format!("tile_{:04}.dat", page_id));
+        let data = fs::read(&tile_path)
+            .map_err(|e| format!("Failed to read {}: {e}", tile_path.display()))?;
+
+        let header = parse_tile_content_header(&data)?;
+        let entry = header.entry_for_subject(subject_id)
+            .ok_or_else(|| format!(
+                "No tile entry for subject_id {} in page {}",
+                subject_id, page_id
+            ))?;
+
+        let start = entry.blob_offset as usize;
+        let end = start + entry.blob_size as usize;
+        if end > data.len() {
+            return Err(format!(
+                "Tile blob range [{}, {}) exceeds file size {}",
+                start, end, data.len()
+            ));
+        }
+        let blob = &data[start..end];
+
+        #[derive(serde::Deserialize)]
+        struct ResourceBlob {
+            tiles: Vec<serde_json::Value>,
+            #[serde(default, rename = "__cache")]
+            cache: Option<serde_json::Value>,
+            #[serde(default, rename = "__scopes")]
+            scopes: Option<serde_json::Value>,
+        }
+
+        let parsed = if header.version >= 2 {
+            rmp_serde::from_slice::<ResourceBlob>(blob)
+                .map_err(|e| format!("Failed to deserialize v2 tile blob: {e}"))?
+        } else {
+            let tiles: Vec<serde_json::Value> = rmp_serde::from_slice(blob)
+                .map_err(|e| format!("Failed to deserialize v1 tile data: {e}"))?;
+            ResourceBlob { tiles, cache: None, scopes: None }
+        };
+
+        let filtered: Vec<&serde_json::Value> = match nodegroup_id {
+            Some(ng_id) => parsed.tiles.iter()
+                .filter(|t| t.get("nodegroup_id").and_then(|v| v.as_str()) == Some(ng_id))
+                .collect(),
+            None => parsed.tiles.iter().collect(),
+        };
+
+        Ok(serde_json::json!({
+            "tiles": filtered,
+            "__cache": parsed.cache,
+            "__scopes": parsed.scopes,
+        }))
+    }
+
+    /// Load raw tile blob bytes for a resource (unfiltered).
+    pub fn load_tile_blob(&self, resource_uri: &str) -> Result<Vec<u8>, String> {
+        let (li, subject_id, page_id) = self.find_resource(resource_uri)?;
+        let layer = &self.layers[li];
+
+        let tiles_dir = layer.pages_dir.parent()
+            .ok_or_else(|| "Cannot determine tiles directory".to_string())?
+            .join("tiles");
+        let tile_path = tiles_dir.join(format!("tile_{:04}.dat", page_id));
+        let data = fs::read(&tile_path)
+            .map_err(|e| format!("Failed to read {}: {e}", tile_path.display()))?;
+
+        let header = parse_tile_content_header(&data)?;
+        let entry = header.entry_for_subject(subject_id)
+            .ok_or_else(|| format!(
+                "No tile entry for subject_id {} in page {}",
+                subject_id, page_id
+            ))?;
+
+        let start = entry.blob_offset as usize;
+        let end = start + entry.blob_size as usize;
+        if end > data.len() {
+            return Err(format!(
+                "Tile blob range [{}, {}) exceeds file size {}",
+                start, end, data.len()
+            ));
+        }
+
+        Ok(data[start..end].to_vec())
+    }
+
+    /// Borrow a layer's dictionary by index.
+    pub fn layer_dictionary(&self, layer_index: usize) -> Option<&Dictionary> {
+        self.layers.get(layer_index).map(|l| &l.dict)
+    }
+
+    /// Borrow a layer's resource map by index.
+    pub fn layer_resource_map(&self, layer_index: usize) -> Option<&ResourceMap> {
+        self.layers.get(layer_index).map(|l| &l.resource_map)
+    }
+
+    /// Get layer names.
+    pub fn layer_names(&self) -> Vec<&str> {
+        self.layers.iter().map(|l| l.name.as_str()).collect()
+    }
+
+    /// Look up a summary's forward connections from a page.
+    pub fn summary_from_page(&self, page_id: u32, layer_index: Option<usize>) -> Vec<crate::SummaryQuad> {
+        let li = layer_index.unwrap_or(0);
+        self.layers.get(li)
+            .map(|l| l.summary.lookup_s(page_id).to_vec())
+            .unwrap_or_default()
+    }
+
+    /// Look up a summary's reverse connections to a page.
+    pub fn summary_to_page(&self, page_id: u32, layer_index: Option<usize>) -> Vec<crate::SummaryQuad> {
+        let li = layer_index.unwrap_or(0);
+        self.layers.get(li)
+            .map(|l| l.summary.lookup_o(page_id).to_vec())
+            .unwrap_or_default()
     }
 }
 

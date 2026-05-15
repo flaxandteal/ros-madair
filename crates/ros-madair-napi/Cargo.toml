@@ -1,0 +1,24 @@
+[package]
+name = "ros-madair-napi"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
+description = "NAPI bindings for RosMadair — Node.js native query engine"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+ros-madair-core = { path = "../ros-madair-core" }
+napi = { version = "2", features = ["napi6", "serde-json"] }
+napi-derive = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+rmp-serde = "1"
+
+[build-dependencies]
+napi-build = "2"
