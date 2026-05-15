@@ -256,7 +256,7 @@
       setStatus('Loading Rós Madair WASM…');
       await init();
       store = new SparqlStore('./static/index/');
-      await store.load_summary();
+      await store.loadSummary();
 
       setStatus('Loading Alizarin…');
       await alizarin.wasmReady;
@@ -434,7 +434,7 @@
         }
         setStatus(`Querying with ${patterns.length} pattern(s)…`);
         const t0 = performance.now();
-        const uris = await store.query_patterns(JSON.stringify(patterns));
+        const uris = await store.queryPatterns(JSON.stringify(patterns));
         const t1 = performance.now();
         metaEl.textContent = `${uris.length} results in ${(t1 - t0).toFixed(0)} ms`;
         setStatus('Loading resources…');

@@ -23,6 +23,9 @@
     "build": "npm run build:wasm && npm run build:js",
     "prepublishOnly": "npm run build"
   },
+  "bundledDependencies": [
+    "ros-madair-client"
+  ],
   "dependencies": {
     "ros-madair-client": "file:./pkg"
   },

@@ -140,7 +140,7 @@
 
                 status.textContent = 'Loading summary index...';
                 store = new wasm.SparqlStore(baseUrl);
-                await store.load_summary();
+                await store.loadSummary();
 
                 // Load graph definition
                 try {
@@ -198,7 +198,7 @@
             const patternsJson = document.getElementById('query-input').value;
             try {
                 const startTime = performance.now();
-                const results = await store.query_patterns(patternsJson);
+                const results = await store.queryPatterns(patternsJson);
                 const elapsed = (performance.now() - startTime).toFixed(1);
 
                 if (!Array.isArray(results) || results.length === 0) {
@@ -226,7 +226,7 @@
             const el = document.getElementById('page-list');
             if (!store) { el.textContent = 'Load index first.'; return; }
 
-            const metaJson = store.page_meta_json();
+            const metaJson = store.pageMetaJson();
             if (!metaJson) { el.textContent = 'No page metadata.'; return; }
 
             const meta = JSON.parse(metaJson);
@@ -245,7 +245,7 @@
             el.style.display = 'block';
             el.innerHTML = '<div style="color:#666;">Loading...</div>';
 
-            const resJson = store.resources_on_page(pageId);
+            const resJson = store.resourcesOnPage(pageId);
             const resources = JSON.parse(resJson);
 
             el.innerHTML = `<div style="margin-bottom:0.5rem; font-weight:600;">Page ${pageId} — ${resources.length} resources:</div>`;
@@ -273,7 +273,7 @@
 
             try {
                 const t0 = performance.now();
-                const tiles = await store.load_tiles_for_resource(uri, null);
+                const tiles = await store.loadTilesForResource(uri, null);
                 const elapsed = (performance.now() - t0).toFixed(1);
                 timingEl.textContent = `Loaded in ${elapsed}ms`;
 

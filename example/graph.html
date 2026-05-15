@@ -152,9 +152,9 @@
                 setStatus('Loading index...');
                 const baseUrl = document.getElementById('base-url').value;
                 store = new wasm.SparqlStore(baseUrl);
-                await store.load_summary();
+                await store.loadSummary();
 
-                const metaStr = store.page_meta_json();
+                const metaStr = store.pageMetaJson();
                 pageMeta = metaStr ? JSON.parse(metaStr) : [];
 
                 try {
@@ -325,7 +325,7 @@
 
             setStatus('Building page overview...');
 
-            const allQuadsStr = store.summary_all_quads();
+            const allQuadsStr = store.summaryAllQuads();
             const allQuads = allQuadsStr ? JSON.parse(allQuadsStr) : [];
 
             initCy();
@@ -424,7 +424,7 @@
                 list.innerHTML = '<div style="padding:0.5rem;color:#999;">Loading...</div>';
                 panel.classList.remove('hidden');
 
-                const urisStr = store.resources_on_page(pageId);
+                const urisStr = store.resourcesOnPage(pageId);
                 const uris = urisStr ? JSON.parse(urisStr) : [];
 
                 if (uris.length === 0) {
@@ -468,7 +468,7 @@
 
             setStatus(`Looking up ${shortUri(uri)}...`);
 
-            const pageVal = store.page_for_resource(uri);
+            const pageVal = store.pageForResource(uri);
             if (pageVal === null || pageVal === undefined) {
                 setStatus(`Resource not found in index: ${uri}`);
                 return;
@@ -479,8 +479,8 @@
 
             setStatus(`Loading connections for ${shortUri(uri)}...`);
 
-            const fwdStr = store.summary_from_page(centerPageId);
-            const revStr = store.summary_to_page(centerPageId);
+            const fwdStr = store.summaryFromPage(centerPageId);
+            const revStr = store.summaryToPage(centerPageId);
             const allFwd = fwdStr ? JSON.parse(fwdStr) : [];
             const allRev = revStr ? JSON.parse(revStr) : [];
 
@@ -689,11 +689,11 @@
 
             for (const q of predicates) {
                 if (direction === 'forward') {
-                    const recsStr = await store.load_predicate_records(centerPageId, q.pred_uri);
+                    const recsStr = await store.loadPredicateRecords(centerPageId, q.pred_uri);
                     const recs = JSON.parse(recsStr);
                     for (const r of recs) {
                         if (r.subject === centerUri && r.object) {
-                            const objPage = store.page_for_resource(r.object);
+                            const objPage = store.pageForResource(r.object);
                             if (objPage === targetPageId) {
                                 if (!connected.has(r.object)) connected.set(r.object, new Set());
                                 connected.get(r.object).add(q.pred_uri);
@@ -701,7 +701,7 @@
                         }
                     }
                 } else {
-                    const recsStr = await store.load_predicate_records(targetPageId, q.pred_uri);
+                    const recsStr = await store.loadPredicateRecords(targetPageId, q.pred_uri);
                     const recs = JSON.parse(recsStr);
                     for (const r of recs) {
                         if (r.object === centerUri) {

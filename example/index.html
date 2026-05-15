@@ -167,7 +167,7 @@
 
                 status.textContent = 'Loading summary index...';
                 store = new wasm.SparqlStore(baseUrl);
-                await store.load_summary();
+                await store.loadSummary();
                 window.sparqlStore = store;
 
                 status.textContent = 'Ready. Summary loaded.';
@@ -188,7 +188,7 @@
             const patternsJson = document.getElementById('query-input').value;
             try {
                 const startTime = performance.now();
-                const results = await store.query_patterns(patternsJson);
+                const results = await store.queryPatterns(patternsJson);
                 const elapsed = (performance.now() - startTime).toFixed(1);
 
                 if (Array.isArray(results)) {
@@ -248,7 +248,7 @@
                 let results, elapsed;
                 try {
                     const t0 = performance.now();
-                    results = await store.query_patterns(JSON.stringify(ex.patterns));
+                    results = await store.queryPatterns(JSON.stringify(ex.patterns));
                     elapsed = (performance.now() - t0).toFixed(0);
                     if (!Array.isArray(results)) results = [];
                 } catch (e) {
@@ -313,7 +313,7 @@
 
         function updateCacheStats() {
             if (!store) return;
-            const stats = JSON.parse(store.cache_stats());
+            const stats = JSON.parse(store.cacheStats());
             document.getElementById('cache-stats').textContent =
                 `Pages: ${stats.pages_loaded} | Records: ${stats.records_loaded}`;
         }
