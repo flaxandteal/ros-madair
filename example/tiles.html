@@ -138,9 +138,16 @@
                 const wasm = await import('./pkg/ros_madair.js');
                 await wasm.default();
 
-                status.textContent = 'Loading summary index...';
+                let ver = '';
+                try {
+                    const r = await fetch('./pkg/package.json');
+                    if (r.ok) ver = (await r.json()).version || '';
+                } catch (_) {}
+                const verTag = ver ? ` v${ver}` : '';
+
+                status.textContent = `Loading summary index (Rós Madair${verTag})...`;
                 store = new wasm.SparqlStore(baseUrl);
-                await store.loadSummary();
+                await store.loadSummary(baseUrl);
 
                 // Load graph definition
                 try {
@@ -162,7 +169,7 @@
                     // graph.json is optional
                 }
 
-                status.textContent = 'Ready. Summary loaded.';
+                status.textContent = `Ready — Rós Madair${verTag}`;
                 populatePageList();
             } catch (e) {
                 status.innerHTML = `<span class="error">Error: ${e}</span>`;
@@ -273,10 +280,11 @@
 
             try {
                 const t0 = performance.now();
-                const tiles = await store.loadTilesForResource(uri, null);
+                const result = await store.loadTilesForResource(uri, null);
                 const elapsed = (performance.now() - t0).toFixed(1);
                 timingEl.textContent = `Loaded in ${elapsed}ms`;
 
+                const tiles = result?.tiles ?? result;
                 if (!tiles || tiles.length === 0) {
                     contentEl.innerHTML = '<div style="color:#888;">No tile data for this resource.</div>';
                     return;

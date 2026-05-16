@@ -43,36 +43,26 @@
 
     <div class="section">
         <label for="base-url">Index URL:</label>
-        <input type="text" id="base-url" value="./static/index/" style="width: 100%; padding: 0.25rem; font-family: monospace;">
+        <input type="text" id="base-url" value="./static/ros-madair/" style="width: 100%; padding: 0.25rem; font-family: monospace;">
         <button onclick="initStore()">Load Index</button>
     </div>
 
     <div class="section">
         <label for="query-input">Triple Patterns (JSON):</label>
         <textarea id="query-input">[
-  {"s": "?place", "p": "https://example.org/node/monument_type_n1", "o": "https://example.org/concept/43bf135f-e369-f6f4-a85d-9a54fb1fa44b"},
-  {"s": "?place", "p": "https://example.org/node/townland", "o": "https://example.org/concept/afad673d-a7f1-d1ed-12b9-abd1ac321134"}
+  {"s": "?place", "p": "https://example.org/node/monument_type", "o": "https://example.org/concept/church"}
 ]</textarea>
         <button onclick="runQuery()">Run Query</button>
         <div style="margin-top: 0.75rem">
-            <strong>Single predicate:</strong><br>
-            <button onclick="loadExample('monument_a')">Monument Type A (~6900)</button>
-            <button onclick="loadExample('monument_b')">Monument Type B (~3800)</button>
-            <button onclick="loadExample('townland')">Townland (~330)</button>
-        </div>
-        <div style="margin-top: 0.5rem">
-            <strong>Two-predicate intersection:</strong><br>
-            <button onclick="loadExample('type_townland')">Type A + Townland (~160)</button>
-            <button onclick="loadExample('type_grade')">Type A + Grade (~1900)</button>
-        </div>
-        <div style="margin-top: 0.5rem">
-            <strong>Three-predicate intersection:</strong><br>
-            <button onclick="loadExample('type_townland_grade')">Type A + Townland + Grade (~100)</button>
+            <strong>By monument type:</strong><br>
+            <button onclick="loadExample('churches')">Churches (3)</button>
+            <button onclick="loadExample('castles')">Castles (2)</button>
+            <button onclick="loadExample('forts')">Forts (1)</button>
         </div>
         <div style="margin-top: 0.5rem">
             <strong>Open-ended (variable object):</strong><br>
-            <button onclick="loadExample('all_typed')">All with any Monument Type</button>
-            <button onclick="loadExample('all_graded')">All with any Grade</button>
+            <button onclick="loadExample('all_typed')">All with any Monument Type (6)</button>
+            <button onclick="loadExample('all_named')">All with any Name (6)</button>
         </div>
     </div>
 
@@ -96,62 +86,41 @@
     <script type="module">
         let store = null;
 
-        // Concept UUIDs (opaque in this dataset)
+        // URI prefixes for the Aonach Mór sample dataset
         const C = 'https://example.org/concept/';
         const N = 'https://example.org/node/';
 
         // Shared example definitions — used by loadExample() and runValidation()
+        // Aonach Mór sample dataset: 6 heritage places in Northern Ireland
         const examples = {
-            monument_a: {
-                label: 'Monument Type A',
+            churches: {
+                label: 'Churches',
                 patterns: [
-                    {s: '?place', p: `${N}monument_type_n1`, o: `${C}43bf135f-e369-f6f4-a85d-9a54fb1fa44b`},
+                    {s: '?place', p: `${N}monument_type`, o: `${C}church`},
                 ],
             },
-            monument_b: {
-                label: 'Monument Type B',
+            castles: {
+                label: 'Castles',
                 patterns: [
-                    {s: '?place', p: `${N}monument_type_n1`, o: `${C}50ae187e-98ab-7ff3-6925-a75398112e70`},
+                    {s: '?place', p: `${N}monument_type`, o: `${C}castle`},
                 ],
             },
-            townland: {
-                label: 'Townland',
+            forts: {
+                label: 'Forts',
                 patterns: [
-                    {s: '?place', p: `${N}townland`, o: `${C}afad673d-a7f1-d1ed-12b9-abd1ac321134`},
-                ],
-            },
-            type_townland: {
-                label: 'Type A + Townland',
-                patterns: [
-                    {s: '?place', p: `${N}monument_type_n1`, o: `${C}43bf135f-e369-f6f4-a85d-9a54fb1fa44b`},
-                    {s: '?place', p: `${N}townland`, o: `${C}afad673d-a7f1-d1ed-12b9-abd1ac321134`},
-                ],
-            },
-            type_grade: {
-                label: 'Type A + Grade',
-                patterns: [
-                    {s: '?place', p: `${N}monument_type_n1`, o: `${C}43bf135f-e369-f6f4-a85d-9a54fb1fa44b`},
-                    {s: '?place', p: `${N}grade`, o: `${C}e47378ae-6ede-a0ab-dba8-97e840833f25`},
-                ],
-            },
-            type_townland_grade: {
-                label: 'Type A + Townland + Grade',
-                patterns: [
-                    {s: '?place', p: `${N}monument_type_n1`, o: `${C}43bf135f-e369-f6f4-a85d-9a54fb1fa44b`},
-                    {s: '?place', p: `${N}townland`, o: `${C}afad673d-a7f1-d1ed-12b9-abd1ac321134`},
-                    {s: '?place', p: `${N}grade`, o: `${C}e47378ae-6ede-a0ab-dba8-97e840833f25`},
+                    {s: '?place', p: `${N}monument_type`, o: `${C}fort`},
                 ],
             },
             all_typed: {
                 label: 'All with any Monument Type',
                 patterns: [
-                    {s: '?place', p: `${N}monument_type_n1`, o: '?type'},
+                    {s: '?place', p: `${N}monument_type`, o: '?type'},
                 ],
             },
-            all_graded: {
-                label: 'All with any Grade',
+            all_named: {
+                label: 'All with any Name',
                 patterns: [
-                    {s: '?place', p: `${N}grade`, o: '?g'},
+                    {s: '?place', p: `${N}name_value`, o: '?name'},
                 ],
             },
         };
@@ -165,12 +134,20 @@
                 const wasm = await import('./pkg/ros_madair.js');
                 await wasm.default();
 
-                status.textContent = 'Loading summary index...';
+                // Read version from package.json (same as Vite build-time injection)
+                let ver = '';
+                try {
+                    const resp = await fetch('./pkg/package.json');
+                    if (resp.ok) ver = (await resp.json()).version || '';
+                } catch (_) {}
+                const verTag = ver ? ` v${ver}` : '';
+
+                status.textContent = `Loading summary index (Rós Madair${verTag})...`;
                 store = new wasm.SparqlStore(baseUrl);
-                await store.loadSummary();
+                await store.loadSummary(baseUrl);
                 window.sparqlStore = store;
 
-                status.textContent = 'Ready. Summary loaded.';
+                status.textContent = `Ready — Rós Madair${verTag}`;
                 updateCacheStats();
             } catch (e) {
                 status.innerHTML = `<span class="error">Error: ${e}</span>`;

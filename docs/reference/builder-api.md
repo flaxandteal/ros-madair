@@ -65,13 +65,13 @@ with open("heritage_place_resources.json") as f:
 Build the index and write all output files.
 
 ```python
-builder.build("./static/mydata/", page_size=2000)
+builder.build("./static/mydata/", page_size=200)
 ```
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `output_dir` | `str` | — | Directory to write output files. Created if it doesn't exist. |
-| `page_size` | `int` or `None` | `2000` | Target number of resources per page. Larger values mean fewer pages (fewer HTTP requests) but more false positives per page. |
+| `page_size` | `int` or `None` | `200` | Target number of resources per page. Smaller values give faster first-entry latency (smaller tile files); larger values (e.g. 2000) reduce HTTP requests for cross-resource queries. |
 
 **Raises:** `ValueError` on I/O errors or serialization failures.
 
@@ -93,14 +93,14 @@ For building from an Arches prebuild export without Python:
 cargo run --example build_from_prebuild -- \
     /path/to/prebuild \
     output/mydata \
-    2000
+    200
 ```
 
 | Argument | Description |
 |----------|-------------|
 | Path 1 | Arches prebuild directory (with `graphs/` and `business_data/`) |
 | Path 2 | Output directory |
-| Number | Target resources per page (default: 2000) |
+| Number | Target resources per page (default: 200) |
 
 The CLI produces the same output files as `IndexBuilder.build()`.
 
@@ -152,7 +152,7 @@ for filename in os.listdir(bd_dir):
         resources_json = json.dumps(data["business_data"]["resources"])
         builder.add_resources(graph_id, resources_json)
 
-# Build with default page size (2000)
+# Build with default page size (200)
 builder.build(OUTPUT)
 print(f"Index written to {OUTPUT}")
 ```

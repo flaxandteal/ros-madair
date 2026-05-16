@@ -141,6 +141,31 @@ pub fn reconnect_tile_source(
     wrapper.set_tile_source(handle.source.clone());
 }
 
+/// Load all tiles for a resource from the tile source handle into the wrapper.
+///
+/// After this call, `tilesLoaded()` will return `true` and property access
+/// will not trigger `TILES_NOT_LOADED` errors.  Must be called after
+/// [`prefetch_tiles_for_resource`].
+#[wasm_bindgen]
+pub fn load_tiles_from_source(
+    handle: &TileSourceHandle,
+    wrapper: &WASMResourceInstanceWrapper,
+) -> Result<(), JsValue> {
+    use alizarin_core::tile_source::TileSource;
+
+    let resource_id = wrapper
+        .get_resource_id()
+        .ok_or_else(|| JsValue::from_str("No resource ID set on wrapper"))?;
+
+    let tiles = handle
+        .source
+        .load_tiles(&resource_id, None)
+        .map_err(|e| JsValue::from_str(&format!("Failed to load tiles: {}", e)))?;
+
+    wrapper.append_tiles(tiles, true)?;
+    Ok(())
+}
+
 /// Detach the compiled-in tile source from the wrapper, reverting it to
 /// JS-callback-only tile loading.
 #[wasm_bindgen]

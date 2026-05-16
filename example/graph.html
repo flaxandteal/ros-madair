@@ -63,7 +63,7 @@
 
     <div class="controls">
         <label for="base-url">Index:</label>
-        <input type="text" id="base-url" value="./static/index/">
+        <input type="text" id="base-url" value="./static/ros-madair/">
         <button onclick="initStore()">Load</button>
         <button onclick="showOverview()" style="margin-left: 1rem;">Overview</button>
     </div>
@@ -149,10 +149,17 @@
                 const wasm = await import('./pkg/ros_madair.js');
                 await wasm.default();
 
-                setStatus('Loading index...');
+                let ver = '';
+                try {
+                    const r = await fetch('./pkg/package.json');
+                    if (r.ok) ver = (await r.json()).version || '';
+                } catch (_) {}
+                const verTag = ver ? ` v${ver}` : '';
+
+                setStatus(`Loading index (Rós Madair${verTag})...`);
                 const baseUrl = document.getElementById('base-url').value;
                 store = new wasm.SparqlStore(baseUrl);
-                await store.loadSummary();
+                await store.loadSummary(baseUrl);
 
                 const metaStr = store.pageMetaJson();
                 pageMeta = metaStr ? JSON.parse(metaStr) : [];
@@ -170,7 +177,7 @@
                     }
                 } catch (_) {}
 
-                setStatus(`Ready. ${pageMeta.length} pages.`);
+                setStatus(`Ready — Rós Madair${verTag}. ${pageMeta.length} pages.`);
                 showOverview();
             } catch (e) {
                 setStatus(`Error: ${e}`);
@@ -468,12 +475,13 @@
 
             setStatus(`Looking up ${shortUri(uri)}...`);
 
-            const pageVal = store.pageForResource(uri);
-            if (pageVal === null || pageVal === undefined) {
+            const pageResult = store.pageForResource(uri);
+            if (pageResult === null || pageResult === undefined) {
                 setStatus(`Resource not found in index: ${uri}`);
                 return;
             }
-            centerPageId = typeof pageVal === 'number' ? pageVal : Number(pageVal);
+            const parsed = typeof pageResult === 'string' ? JSON.parse(pageResult) : pageResult;
+            centerPageId = parsed.page_id ?? (typeof parsed === 'number' ? parsed : Number(parsed));
 
             setBreadcrumb(`<a onclick="showOverview()">Overview</a> &rsaquo; <a onclick="selectPageFromBreadcrumb(${centerPageId})">Page ${centerPageId}</a> &rsaquo; <strong>${shortUri(uri)}</strong>`);
 
@@ -693,7 +701,9 @@
                     const recs = JSON.parse(recsStr);
                     for (const r of recs) {
                         if (r.subject === centerUri && r.object) {
-                            const objPage = store.pageForResource(r.object);
+                            const objPageResult = store.pageForResource(r.object);
+                            const objPageParsed = typeof objPageResult === 'string' ? JSON.parse(objPageResult) : objPageResult;
+                            const objPage = objPageParsed?.page_id ?? objPageParsed;
                             if (objPage === targetPageId) {
                                 if (!connected.has(r.object)) connected.set(r.object, new Set());
                                 connected.get(r.object).add(q.pred_uri);

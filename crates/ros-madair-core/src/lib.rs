@@ -45,9 +45,9 @@ pub mod tile_source_impl;
 pub mod uri;
 pub mod value_extract;
 
-pub use dictionary::Dictionary;
+pub use dictionary::{DictLookup, Dictionary, IndexedDictionary};
 pub use geo_convert::{extract_centroid, geojson_to_wkt};
-pub use page_assignment::{assign_pages, assign_shadow_pages, PageAssignment, PageConfig, PageIndex, PageMeta, ResourceSummary};
+pub use page_assignment::{assign_pages, assign_shadow_pages, PageAssignment, PageConfig, PageIndex, PageMeta, ResourceSummary, DEFAULT_TARGET_PAGE_SIZE};
 pub use page_file::{
     binary_search_object, full_header_size, parse_page_header, parse_records,
     parse_resource_meta, range_search_object, serialize_resource_meta, write_page_file,

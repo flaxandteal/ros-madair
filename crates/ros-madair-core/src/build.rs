@@ -268,7 +268,7 @@ pub fn build_to_memory(
     page_size: Option<usize>,
 ) -> Result<HashMap<String, Vec<u8>>, String> {
     let config = PageConfig {
-        target_page_size: page_size.unwrap_or(2000),
+        target_page_size: page_size.unwrap_or(crate::page_assignment::DEFAULT_TARGET_PAGE_SIZE),
     };
     let mut dict = Dictionary::new();
     let mut artifacts: HashMap<String, Vec<u8>> = HashMap::new();
@@ -551,7 +551,7 @@ pub fn build_to_disk(
     page_size: Option<usize>,
 ) -> Result<BuildStats, String> {
     let config = PageConfig {
-        target_page_size: page_size.unwrap_or(2000),
+        target_page_size: page_size.unwrap_or(crate::page_assignment::DEFAULT_TARGET_PAGE_SIZE),
     };
     let mut dict = Dictionary::new();
 
@@ -969,7 +969,7 @@ pub fn prepare_routing(
     page_size: Option<usize>,
 ) -> Result<(BuildRouting, Dictionary), String> {
     let config = PageConfig {
-        target_page_size: page_size.unwrap_or(2000),
+        target_page_size: page_size.unwrap_or(crate::page_assignment::DEFAULT_TARGET_PAGE_SIZE),
     };
     let mut dict = Dictionary::new();
 

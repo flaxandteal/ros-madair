@@ -31,6 +31,12 @@ pub struct PageAssignment {
     pub graph_id: String,
 }
 
+/// Default target resources per page.
+///
+/// 200 gives ~250 KB tile files — good for mobile first-entry latency.
+/// Heritage datasets may prefer larger values (2000+) for fewer HTTP round-trips.
+pub const DEFAULT_TARGET_PAGE_SIZE: usize = 200;
+
 /// Configuration for page assignment.
 #[derive(Debug, Clone)]
 pub struct PageConfig {
@@ -41,7 +47,7 @@ pub struct PageConfig {
 impl Default for PageConfig {
     fn default() -> Self {
         Self {
-            target_page_size: 2000,
+            target_page_size: DEFAULT_TARGET_PAGE_SIZE,
         }
     }
 }

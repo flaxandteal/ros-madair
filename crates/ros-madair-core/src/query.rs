@@ -12,7 +12,7 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::concept_intervals::ConceptIntervalIndex;
-use crate::{binary_search_object, range_search_object, Dictionary, PageMeta, PageRecord, SummaryIndex};
+use crate::{binary_search_object, range_search_object, DictLookup, PageMeta, PageRecord, SummaryIndex};
 
 /// A plan for which pages and predicate blocks to fetch.
 #[derive(Debug, Clone)]
@@ -78,7 +78,7 @@ impl PatternTerm {
 pub fn plan_from_patterns(
     patterns: &[TriplePattern],
     summary: &SummaryIndex,
-    dict: &Dictionary,
+    dict: &dyn DictLookup,
     page_meta: &[PageMeta],
     concept_intervals: Option<&ConceptIntervalIndex>,
 ) -> FetchPlan {
@@ -287,7 +287,7 @@ pub fn plan_from_patterns(
 pub fn execute_single_pattern(
     pattern: &TriplePattern,
     records: &HashMap<(u32, u32), Vec<PageRecord>>,
-    dict: &Dictionary,
+    dict: &dyn DictLookup,
     concept_intervals: Option<&ConceptIntervalIndex>,
 ) -> HashSet<u32> {
     let pred_uri = match &pattern.predicate {
@@ -345,7 +345,7 @@ pub fn execute_single_pattern(
 pub fn execute_patterns(
     patterns: &[TriplePattern],
     records: &HashMap<(u32, u32), Vec<PageRecord>>,
-    dict: &Dictionary,
+    dict: &dyn DictLookup,
     concept_intervals: Option<&ConceptIntervalIndex>,
 ) -> Vec<u32> {
     if patterns.is_empty() {
@@ -375,7 +375,7 @@ pub fn execute_patterns(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{serialize_summary, SummaryBuilder};
+    use crate::{serialize_summary, Dictionary, SummaryBuilder};
 
     fn setup() -> (SummaryIndex, Dictionary, Vec<PageMeta>) {
         let mut dict = Dictionary::new();

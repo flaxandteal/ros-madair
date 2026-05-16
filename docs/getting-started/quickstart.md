@@ -14,7 +14,7 @@ layout with `graphs/` and `business_data/`):
 cargo run --example build_from_prebuild -- \
     /path/to/prebuild \
     example/static/mydata \
-    2000
+    200
 ```
 
 Arguments:
@@ -23,7 +23,7 @@ Arguments:
 |-----|---------|
 | `/path/to/prebuild` | Arches prebuild export directory |
 | `example/static/mydata` | Output directory for the index |
-| `2000` | Target resources per page (default: 2000) |
+| `200` | Target resources per page (default: 200) |
 
 This produces:
 
@@ -47,7 +47,7 @@ from ros_madair import IndexBuilder
 builder = IndexBuilder()
 builder.add_graph("/path/to/graph.json")
 builder.add_business_data("/path/to/business_data/")
-builder.build("output/myindex", page_size=2000)
+builder.build("output/myindex", page_size=200)
 ```
 
 ## 2. Serve the Files

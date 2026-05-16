@@ -3,8 +3,12 @@
 
 import { resolve } from "path";
 import { defineConfig } from "vite";
+import pkg from "./package.json" with { type: "json" };
 
 export default defineConfig({
+  define: {
+    __ROS_MADAIR_VERSION__: JSON.stringify(pkg.version),
+  },
   build: {
     minify: false,
     sourcemap: true,
@@ -16,7 +20,16 @@ export default defineConfig({
     },
     rollupOptions: {
       external: ['ros-madair-client', 'ros-madair-napi'],
-      output: { exports: 'named' },
+      output: {
+        exports: 'named',
+        paths: {
+          // Rewrite the external import so the dist bundle references the
+          // wasm-pack output via a relative path.  This eliminates the need
+          // for ros-madair-client as an npm dependency — the pkg/ directory
+          // is shipped in the tarball via the "files" field instead.
+          'ros-madair-client': '../pkg/ros_madair.js',
+        },
+      },
     },
   },
 });

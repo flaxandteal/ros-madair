@@ -43,7 +43,7 @@ fn main() {
         eprintln!("");
         eprintln!("  prebuild_dir  Path to Arches prebuild export");
         eprintln!("  output_dir    Output directory (default: example/static/index)");
-        eprintln!("  page_size     Resources per page (default: 2000)");
+        eprintln!("  page_size     Resources per page (default: 200)");
         eprintln!("  base_uri      RDF base URI (default: https://example.org/)");
         eprintln!("  bd_file       Only process this business_data file (optional)");
         eprintln!("  --debug       Show detailed progress logging");
@@ -55,7 +55,7 @@ fn main() {
     let page_size: usize = args
         .get(3)
         .and_then(|s| s.parse().ok())
-        .unwrap_or(2000);
+        .unwrap_or(ros_madair_core::DEFAULT_TARGET_PAGE_SIZE);
 
     let output_path = Path::new(output_dir);
     fs::create_dir_all(output_path.join("pages")).expect("Failed to create output dir");

@@ -95,7 +95,7 @@ from ros_madair import IndexBuilder
 builder = IndexBuilder()
 builder.add_graph("path/to/graph.json")
 builder.add_business_data("path/to/business_data/")
-builder.build("output/myindex", page_size=2000)
+builder.build("output/myindex", page_size=200)
 ```
 
 ## Documentation

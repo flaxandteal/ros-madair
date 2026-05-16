@@ -17,7 +17,7 @@ use serde::Deserialize;
 
 use crate::tile_content_file::parse_tile_content_header;
 use crate::uri::resource_uri;
-use crate::{Dictionary, ResourceMap};
+use crate::{DictLookup, Dictionary, ResourceMap};
 
 /// v2 tile blob wrapper — matches the `ResourceBlob` struct in `build.rs`.
 #[derive(Deserialize)]
@@ -34,7 +34,7 @@ fn extract_tiles_from_bytes(
     nodegroup_id: Option<&str>,
 ) -> Result<Vec<StaticTile>, TileSourceError> {
     let header = parse_tile_content_header(file_bytes)
-        .map_err(|e| TileSourceError::LoadError(e))?;
+        .map_err(TileSourceError::LoadError)?;
 
     let entry = header.entry_for_subject(dict_id).ok_or_else(|| {
         TileSourceError::ResourceNotFound {
@@ -69,7 +69,7 @@ fn extract_tiles_from_bytes(
 
 /// Resolve a resource_id to (dict_id, page_id) via dictionary + resource_map.
 fn resolve_resource(
-    dictionary: &Dictionary,
+    dictionary: &dyn DictLookup,
     resource_map: &ResourceMap,
     base_uri: &str,
     resource_id: &str,
@@ -194,23 +194,23 @@ impl TileSource for DiskTileSource {
 
 /// Tile source that accumulates tile files at runtime.
 ///
-/// Designed for the combined WASM binary: the [`Dictionary`] and
+/// Designed for the combined WASM binary: the dictionary and
 /// [`ResourceMap`] are cloned from [`SparqlStore`] at connect-time, and tile
 /// files are inserted as they are fetched from the CDN.  The [`RwLock`] on
 /// `tile_files` satisfies the `Send + Sync` bound required by [`TileSource`];
 /// WASM is single-threaded so there is never actual contention.
 pub struct GrowableTileSource {
     base_uri: String,
-    dictionary: Dictionary,
+    dictionary: Box<dyn DictLookup + Send + Sync>,
     resource_map: ResourceMap,
     tile_files: RwLock<HashMap<u32, Vec<u8>>>,
 }
 
 impl GrowableTileSource {
-    pub fn new(base_uri: String, dictionary: Dictionary, resource_map: ResourceMap) -> Self {
+    pub fn new(base_uri: String, dictionary: impl DictLookup + Send + Sync + 'static, resource_map: ResourceMap) -> Self {
         Self {
             base_uri,
-            dictionary,
+            dictionary: Box::new(dictionary),
             resource_map,
             tile_files: RwLock::new(HashMap::new()),
         }
@@ -233,8 +233,8 @@ impl GrowableTileSource {
     }
 
     /// Borrow the dictionary.
-    pub fn dictionary(&self) -> &Dictionary {
-        &self.dictionary
+    pub fn dictionary(&self) -> &dyn DictLookup {
+        &*self.dictionary
     }
 
     /// Borrow the resource map.
@@ -255,7 +255,7 @@ impl TileSource for GrowableTileSource {
         nodegroup_id: Option<&str>,
     ) -> Result<Vec<StaticTile>, TileSourceError> {
         let (dict_id, page_id) =
-            resolve_resource(&self.dictionary, &self.resource_map, &self.base_uri, resource_id)?;
+            resolve_resource(&*self.dictionary, &self.resource_map, &self.base_uri, resource_id)?;
 
         let files = self
             .tile_files

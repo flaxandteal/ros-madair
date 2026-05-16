@@ -46,7 +46,7 @@ fn main() {
         eprintln!("");
         eprintln!("  prebuild_dir  Path to Arches prebuild export");
         eprintln!("  output_dir    Output directory (default: example/static/index)");
-        eprintln!("  page_size     Resources per page (default: 2000)");
+        eprintln!("  page_size     Resources per page (default: 200)");
         eprintln!("  base_uri      RDF base URI (default: https://example.org/)");
         eprintln!("  bd_file       Only process this business_data file (optional)");
         eprintln!("  --debug       Show detailed progress logging");
@@ -58,7 +58,7 @@ fn main() {
     let page_size: usize = args
         .get(3)
         .and_then(|s| s.parse().ok())
-        .unwrap_or(2000);
+        .unwrap_or(ros_madair_core::DEFAULT_TARGET_PAGE_SIZE);
 
     let output_path = Path::new(output_dir);
 
@@ -193,9 +193,11 @@ fn main() {
         // resources dropped here — full tile data freed
 
         total_resource_count += file_count;
-        println!("  {} — {} resources ({:.1?})",
-            file_path.file_name().unwrap_or_default().to_string_lossy(),
-            file_count, t0.elapsed());
+        if debug {
+            println!("  {} — {} resources ({:.1?})",
+                file_path.file_name().unwrap_or_default().to_string_lossy(),
+                file_count, t0.elapsed());
+        }
     }
 
     println!("Pass 1 done: {} resources, {} reference IDs ({:.1?})",

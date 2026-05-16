@@ -34,8 +34,8 @@ use std::collections::{HashMap, HashSet};
 
 use ros_madair_core::{
     parse_records, parse_resource_meta, parse_tile_content_header,
-    ConceptIntervalIndex, Dictionary, PageMeta, PageRecord, ResourceMap,
-    ResourceMeta, SummaryIndex, TileContentHeader,
+    ConceptIntervalIndex, IndexedDictionary, PageMeta, PageRecord,
+    ResourceMap, ResourceMeta, SummaryIndex, TileContentHeader,
 };
 
 use crate::fetch::{fetch_full, fetch_page_header, fetch_predicate_blocks, fetch_resource_meta, fetch_tile_header, fetch_tile_blob};
@@ -47,7 +47,7 @@ struct Layer {
     base_url: String,
     name: String,
     summary: SummaryIndex,
-    dictionary: Dictionary,
+    dictionary: IndexedDictionary,
     page_meta: Vec<PageMeta>,
     resource_map: Option<ResourceMap>,
     concept_intervals: Option<ConceptIntervalIndex>,
@@ -83,7 +83,7 @@ async fn load_layer(base_url: &str, name: &str) -> Result<Layer, JsValue> {
     let dict_bytes = fetch_full(&format!("{}dictionary.bin", base))
         .await
         .map_err(|e| JsValue::from_str(&e))?;
-    let dictionary = Dictionary::from_bytes(&dict_bytes)
+    let dictionary = IndexedDictionary::from_bytes(dict_bytes)
         .map_err(|e| JsValue::from_str(&e))?;
 
     let meta_bytes = fetch_full(&format!("{}page_meta.json", base))
@@ -780,7 +780,7 @@ impl SparqlStore {
 
 impl SparqlStore {
     /// Borrow the loaded dictionary for a layer.
-    pub fn dictionary(&self, layer_index: usize) -> Option<&Dictionary> {
+    pub fn dictionary(&self, layer_index: usize) -> Option<&IndexedDictionary> {
         self.layers.get(layer_index).map(|l| &l.dictionary)
     }
 

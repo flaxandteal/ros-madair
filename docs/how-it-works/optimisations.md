@@ -152,14 +152,17 @@ Page size is the main tuning parameter. Larger pages mean:
 - More false positives (irrelevant records loaded per page)
 - Larger individual Range responses
 
-The current default of **2,000 resources/page** is a sweet spot for the
-heritage dataset (162K resources). It gives 86 pages with an average of
-267 KB each. A typical single-predicate query touches ~51 pages with
-~102 HTTP requests and ~540 KB transferred.
+The current default of **200 resources/page** optimises for mobile
+first-entry latency (~250 KB tile fetch vs ~2.5 MB at 2000/page). For
+heritage datasets served over CDN where HTTP round-trips dominate,
+pass `page_size=2000` or higher explicitly.
 
-At the previous default of 200 resources/page, the same query required
-~558 HTTP requests — a **5.5× increase** — because the target concept was
-spread across 186 out of 282 pages.
+For the heritage dataset (162K resources), 2000/page gives 86 pages with
+an average of 267 KB each. A typical single-predicate query touches ~51
+pages with ~102 HTTP requests and ~540 KB transferred. At 200/page, the
+same query requires ~558 HTTP requests — a 5.5× increase — because the
+target concept is spread across 186 out of 282 pages. For tile-fetch
+workloads (entry detail views), 200/page wins decisively on latency.
 
 ```
   Page size trade-off (same dataset, same query)

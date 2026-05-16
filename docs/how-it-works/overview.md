@@ -111,7 +111,7 @@ files:
   │ Tier 2: sort by  │             │
   │   3D Hilbert     │  ┌──────────▼──────────┐
   │   (lng,lat,type) │  │ Build page records  │
-  │ Slice: ~2000     │  │                     │
+  │ Slice: ~200      │  │                     │
   │   resources/page │  │ PageRecord (8 bytes) │
   └────────┬─────────┘  │ = (object_val,      │
            │             │    subject_id)       │
@@ -166,7 +166,7 @@ The Hilbert curve (10-bit resolution per axis, Skilling's algorithm)
 preserves locality: resources that are geographically close *and* share
 similar concept types get nearby Hilbert indices and land on the same page.
 
-The sorted sequence is then sliced into pages of ~2,000 resources each.
+The sorted sequence is then sliced into pages of ~200 resources each (configurable).
 
 !!! info "Why this matters"
     A query for "all ringforts in County Down" benefits because ringforts in

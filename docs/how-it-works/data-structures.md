@@ -170,8 +170,8 @@ subject pages in O(log N) — without touching any page files.
 
 ## Page Files (`pages/page_XXXX.dat`)
 
-Each page file contains all indexed records for the ~2,000 resources
-assigned to that page. Records are partitioned by predicate and sorted
+Each page file contains all indexed records for the ~200 resources
+assigned to that page (configurable via `page_size`). Records are partitioned by predicate and sorted
 within each partition.
 
 **Format:**
@@ -284,7 +284,7 @@ and provide bounding-box information for spatial queries.
 [
   {
     "page_id": 0,
-    "resource_count": 2000,
+    "resource_count": 200,
     "graph_id": "22477f01-...",
     "bbox": { "min_x": -8.17, "min_y": 53.27, "max_x": -5.43, "max_y": 55.38 }
   },
