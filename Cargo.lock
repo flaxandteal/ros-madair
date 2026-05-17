@@ -1086,7 +1086,7 @@ dependencies = [
 
 [[package]]
 name = "ros-madair-alizarin"
-version = "0.1.0-alpha.11"
+version = "0.1.0-alpha.12"
 dependencies = [
  "alizarin-core",
  "alizarin-wasm",
@@ -1101,7 +1101,7 @@ dependencies = [
 
 [[package]]
 name = "ros-madair-builder"
-version = "0.1.0-alpha.11"
+version = "0.1.0-alpha.12"
 dependencies = [
  "alizarin-core",
  "pyo3",
@@ -1113,7 +1113,7 @@ dependencies = [
 
 [[package]]
 name = "ros-madair-client"
-version = "0.1.0-alpha.11"
+version = "0.1.0-alpha.12"
 dependencies = [
  "getrandom 0.2.17",
  "js-sys",
@@ -1131,7 +1131,7 @@ dependencies = [
 
 [[package]]
 name = "ros-madair-core"
-version = "0.1.0-alpha.11"
+version = "0.1.0-alpha.12"
 dependencies = [
  "alizarin-core",
  "geojson",
@@ -1146,7 +1146,7 @@ dependencies = [
 
 [[package]]
 name = "ros-madair-napi"
-version = "0.1.0-alpha.11"
+version = "0.1.0-alpha.12"
 dependencies = [
  "napi",
  "napi-build",
