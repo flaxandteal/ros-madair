@@ -208,8 +208,7 @@ fn main() {
     println!("Loaded {} resources across {} graphs", all_resources.len(), graphs_by_id.len());
 
     if all_resources.is_empty() {
-        eprintln!("No resources found. Check that business_data/ contains valid JSON files.");
-        std::process::exit(1);
+        eprintln!("Warning: No resources found. Producing empty index (schema + concepts only).");
     }
 
     // Assign pages

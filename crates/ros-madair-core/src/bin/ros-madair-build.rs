@@ -204,8 +204,7 @@ fn main() {
         total_resource_count, all_reference_ids.len(), t_pass1.elapsed());
 
     if total_resource_count == 0 {
-        eprintln!("No resources found. Check that business_data/ contains valid JSON files.");
-        std::process::exit(1);
+        eprintln!("Warning: No resources found. Producing empty index (schema + concepts only).");
     }
 
     // -----------------------------------------------------------------------
