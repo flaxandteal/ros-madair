@@ -82,6 +82,12 @@ async fn fetch_range(url: &str, start: u32, end: u32) -> Result<Vec<u8>, String>
         return Ok(bytes[..expected_len].to_vec());
     }
 
+    // A 206 with fewer bytes than requested means the range extends past EOF.
+    // This is normal for header probes on small files — return what we got.
+    if bytes.len() < expected_len && status == 206 {
+        return Ok(bytes);
+    }
+
     if bytes.len() < expected_len {
         return Err(format!(
             "fetch_range: expected {} bytes, got {} (HTTP {})",

@@ -25,7 +25,7 @@ dependencies = [
 
 [[package]]
 name = "alizarin-core"
-version = "2.0.0-alpha.103"
+version = "2.0.0-alpha.109"
 dependencies = [
  "chrono",
  "csv",
@@ -43,7 +43,7 @@ dependencies = [
 
 [[package]]
 name = "alizarin-wasm"
-version = "2.0.0-alpha.103"
+version = "2.0.0-alpha.109"
 dependencies = [
  "alizarin-core",
  "console_error_panic_hook",
@@ -1086,7 +1086,7 @@ dependencies = [
 
 [[package]]
 name = "ros-madair-alizarin"
-version = "0.1.0-alpha.12"
+version = "0.1.0-alpha.13"
 dependencies = [
  "alizarin-core",
  "alizarin-wasm",
@@ -1101,7 +1101,7 @@ dependencies = [
 
 [[package]]
 name = "ros-madair-builder"
-version = "0.1.0-alpha.12"
+version = "0.1.0-alpha.13"
 dependencies = [
  "alizarin-core",
  "pyo3",
@@ -1113,7 +1113,7 @@ dependencies = [
 
 [[package]]
 name = "ros-madair-client"
-version = "0.1.0-alpha.12"
+version = "0.1.0-alpha.13"
 dependencies = [
  "getrandom 0.2.17",
  "js-sys",
@@ -1131,7 +1131,7 @@ dependencies = [
 
 [[package]]
 name = "ros-madair-core"
-version = "0.1.0-alpha.12"
+version = "0.1.0-alpha.13"
 dependencies = [
  "alizarin-core",
  "geojson",
@@ -1146,7 +1146,7 @@ dependencies = [
 
 [[package]]
 name = "ros-madair-napi"
-version = "0.1.0-alpha.12"
+version = "0.1.0-alpha.13"
 dependencies = [
  "napi",
  "napi-build",
@@ -1635,7 +1635,7 @@ dependencies = [
 
 [[package]]
 name = "wasm-wrapper-derive"
-version = "2.0.0-alpha.103"
+version = "2.0.0-alpha.109"
 dependencies = [
  "darling",
  "proc-macro2",

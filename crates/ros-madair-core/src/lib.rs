@@ -51,7 +51,7 @@ pub use page_assignment::{assign_pages, assign_shadow_pages, PageAssignment, Pag
 pub use page_file::{
     binary_search_object, full_header_size, parse_page_header, parse_records,
     parse_resource_meta, range_search_object, serialize_resource_meta, write_page_file,
-    PageHeader, PredicateBlock, PredicateEntry, ResourceMeta,
+    PageHeader, PredicateBlock, PredicateEntry, ResourceMeta, MIN_HEADER_PROBE,
 };
 pub use quantize::{
     dequantize_date, dequantize_point, quantize_bbox, quantize_bool, quantize_date,

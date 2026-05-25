@@ -433,6 +433,24 @@ fn main() {
                 }
             }
         }
+
+        // Emit rdf:type triple: <resource> rdf:type <graph_uri>
+        {
+            const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
+            let rdf_type_pred = dict.intern(RDF_TYPE);
+            let graph_obj = dict.intern(&ros_madair_core::uri::graph_uri(base_uri, graph_id));
+            let record = PageRecord {
+                object_val: graph_obj,
+                subject_id,
+            };
+            page_records
+                .entry(page_id)
+                .or_default()
+                .push((rdf_type_pred, record));
+
+            const NON_PAGE_SENTINEL: u32 = u32::MAX;
+            summary_builder.add(page_id, rdf_type_pred, NON_PAGE_SENTINEL, subject_id);
+        }
     }
 
     // Generate RDF triples for the N-Triples export

@@ -23,7 +23,7 @@ use serde::Serialize;
 use crate::concept_intervals::ConceptIntervalIndex;
 use crate::datatype_class::{classify_datatype, DatatypeClass};
 use crate::quantize::QuantizeType;
-use crate::uri::{concept_prefix, node_uri, resource_prefix, resource_uri};
+use crate::uri::{concept_prefix, graph_uri, node_uri, resource_prefix, resource_uri};
 use crate::{
     assign_pages, assign_shadow_pages, build_concept_indexes,
     extract_centroid, graph_schema_to_triples, quantize_tile_value,
@@ -244,6 +244,26 @@ pub fn build_records_for_resource(
                 }
             }
         }
+    }
+
+    // Emit rdf:type triple: <resource> rdf:type <graph_uri>
+    // This is expected by SPARQL consumers (e.g. Sparnatural) and matches
+    // the rdf:type triples generated in the N-Triples export.
+    {
+        const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
+        let rdf_type_pred = dict.intern(RDF_TYPE);
+        let graph_obj = dict.intern(&graph_uri(base_uri, &graph.graphid));
+        let record = PageRecord {
+            object_val: graph_obj,
+            subject_id,
+        };
+        page_records
+            .entry(page_id)
+            .or_default()
+            .push((rdf_type_pred, record));
+
+        const NON_PAGE_SENTINEL: u32 = u32::MAX;
+        summary_builder.add(page_id, rdf_type_pred, NON_PAGE_SENTINEL, subject_id);
     }
 
     subject_id
@@ -1350,11 +1370,11 @@ mod tests {
         assert_eq!(names.len(), 2);
         assert_eq!(names["aaa-111"], "Resource aaa-111");
 
-        // page_meta is valid JSON (may be empty — resources have no tiles so no records)
+        // page_meta is valid JSON — even without tiles, rdf:type records are produced
         let page_meta: Vec<serde_json::Value> =
             serde_json::from_slice(&artifacts["page_meta.json"]).unwrap();
-        // With empty tiles, no quantized records are produced, so all pages are filtered
-        assert!(page_meta.is_empty());
+        // rdf:type records exist for each resource, so pages are non-empty
+        assert!(!page_meta.is_empty());
 
         // N-Triples export should contain graph schema triples
         let nt = std::str::from_utf8(&artifacts["all.nt"]).unwrap();

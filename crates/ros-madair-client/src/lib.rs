@@ -310,9 +310,19 @@ impl SparqlStore {
         let (pages, records) = self.layers.iter().fold((0, 0), |(p, r), l| {
             (p + l.cache.page_count(), r + l.cache.record_count())
         });
+        let (total_pages, total_records, total_resources) = self.layers.iter().fold((0usize, 0u64, 0usize), |(tp, tr, tres), l| {
+            let edge_sum: u64 = l.page_meta.iter().flat_map(|pm| {
+                l.summary.lookup_s(pm.page_id).iter().map(|q| q.edge_count as u64)
+            }).sum();
+            let res_sum: usize = l.page_meta.iter().map(|pm| pm.resource_count).sum();
+            (tp + l.page_meta.len(), tr + edge_sum, tres + res_sum)
+        });
         let stats = serde_json::json!({
             "pages_loaded": pages,
             "records_loaded": records,
+            "total_pages": total_pages,
+            "total_records": total_records,
+            "total_resources": total_resources,
             "layer_count": self.layers.len(),
         });
         JsValue::from_str(&stats.to_string())
@@ -642,7 +652,9 @@ impl SparqlStore {
 
     /// Load full-fidelity tiles for a resource, returning JSON (StaticTile array).
     ///
-    /// Searches all layers for the resource, using the first match.
+    /// Searches **all** layers for the resource and merges tiles from every layer
+    /// that contains it. This allows senses/forms from different data sources
+    /// (e.g. Wiktionary + Téarma) to appear together for the same headword.
     /// If `nodegroup_id` is provided, filters to tiles matching that nodegroup.
     #[wasm_bindgen(js_name = "loadTilesForResource")]
     pub async fn load_tiles_for_resource(
@@ -650,31 +662,6 @@ impl SparqlStore {
         resource_uri: &str,
         nodegroup_id: Option<String>,
     ) -> Result<JsValue, JsValue> {
-        // Find which layer has this resource
-        let (li, subject_id, page_id) = self.find_resource(resource_uri)?;
-
-        // Fetch and cache tile header if needed
-        if !self.layers[li].tile_headers.contains_key(&page_id) {
-            let tile_url = format!("{}tiles/tile_{:04}.dat", self.layers[li].base_url, page_id);
-            let header = fetch_tile_header(&tile_url)
-                .await
-                .map_err(|e| JsValue::from_str(&e))?;
-            self.layers[li].tile_headers.insert(page_id, header);
-        }
-
-        let header = self.layers[li].tile_headers.get(&page_id).unwrap();
-        let entry = header
-            .entry_for_subject(subject_id)
-            .ok_or_else(|| JsValue::from_str(&format!(
-                "No tile entry for subject_id {} in page {}",
-                subject_id, page_id
-            )))?;
-
-        let tile_url = format!("{}tiles/tile_{:04}.dat", self.layers[li].base_url, page_id);
-        let blob = fetch_tile_blob(&tile_url, entry.blob_offset, entry.blob_size)
-            .await
-            .map_err(|e| JsValue::from_str(&e))?;
-
         #[derive(serde::Deserialize)]
         struct ResourceBlob {
             tiles: Vec<serde_json::Value>,
@@ -684,27 +671,83 @@ impl SparqlStore {
             scopes: Option<serde_json::Value>,
         }
 
-        let parsed = if header.version >= 2 {
-            rmp_serde::from_slice::<ResourceBlob>(&blob)
-                .map_err(|e| JsValue::from_str(&format!("Failed to deserialize v2 tile blob: {}", e)))?
-        } else {
-            let tiles: Vec<serde_json::Value> = rmp_serde::from_slice(&blob)
-                .map_err(|e| JsValue::from_str(&format!("Failed to deserialize v1 tile data: {}", e)))?;
-            ResourceBlob { tiles, cache: None, scopes: None }
-        };
+        // Find the resource in ALL layers, not just the first match
+        let matches = self.find_resource_all(resource_uri);
+        if matches.is_empty() {
+            return Err(JsValue::from_str(&format!(
+                "Resource not found in any layer: {}", resource_uri
+            )));
+        }
 
-        let filtered: Vec<&serde_json::Value> = match &nodegroup_id {
-            Some(ng_id) => parsed.tiles
-                .iter()
-                .filter(|t| t.get("nodegroup_id").and_then(|v| v.as_str()) == Some(ng_id.as_str()))
-                .collect(),
-            None => parsed.tiles.iter().collect(),
-        };
+        let mut all_tiles: Vec<serde_json::Value> = Vec::new();
+        let mut merged_cache = serde_json::Map::new();
+        let mut merged_scopes = serde_json::Map::new();
+
+        for (li, subject_id, page_id) in &matches {
+            let li = *li;
+            let subject_id = *subject_id;
+            let page_id = *page_id;
+
+            // Fetch and cache tile header if needed
+            if !self.layers[li].tile_headers.contains_key(&page_id) {
+                let tile_url = format!("{}tiles/tile_{:04}.dat", self.layers[li].base_url, page_id);
+                let header = fetch_tile_header(&tile_url)
+                    .await
+                    .map_err(|e| JsValue::from_str(&e))?;
+                self.layers[li].tile_headers.insert(page_id, header);
+            }
+
+            let header = self.layers[li].tile_headers.get(&page_id).unwrap();
+            let entry = match header.entry_for_subject(subject_id) {
+                Some(e) => e,
+                None => continue, // Skip layers where the subject has no tile entry
+            };
+
+            let tile_url = format!("{}tiles/tile_{:04}.dat", self.layers[li].base_url, page_id);
+            let blob = fetch_tile_blob(&tile_url, entry.blob_offset, entry.blob_size)
+                .await
+                .map_err(|e| JsValue::from_str(&e))?;
+
+            let parsed = if header.version >= 2 {
+                rmp_serde::from_slice::<ResourceBlob>(&blob)
+                    .map_err(|e| JsValue::from_str(&format!(
+                        "Failed to deserialize v2 tile blob from layer {}: {}", li, e
+                    )))?
+            } else {
+                let tiles: Vec<serde_json::Value> = rmp_serde::from_slice(&blob)
+                    .map_err(|e| JsValue::from_str(&format!(
+                        "Failed to deserialize v1 tile data from layer {}: {}", li, e
+                    )))?;
+                ResourceBlob { tiles, cache: None, scopes: None }
+            };
+
+            // Filter by nodegroup if requested
+            let tiles_to_add: Vec<serde_json::Value> = match &nodegroup_id {
+                Some(ng_id) => parsed.tiles
+                    .into_iter()
+                    .filter(|t| t.get("nodegroup_id").and_then(|v| v.as_str()) == Some(ng_id.as_str()))
+                    .collect(),
+                None => parsed.tiles,
+            };
+            all_tiles.extend(tiles_to_add);
+
+            // Merge caches and scopes from each layer
+            if let Some(serde_json::Value::Object(cache)) = parsed.cache {
+                for (k, v) in cache {
+                    merged_cache.entry(k).or_insert(v);
+                }
+            }
+            if let Some(serde_json::Value::Object(scopes)) = parsed.scopes {
+                for (k, v) in scopes {
+                    merged_scopes.entry(k).or_insert(v);
+                }
+            }
+        }
 
         let result = serde_json::json!({
-            "tiles": filtered,
-            "__cache": parsed.cache,
-            "__scopes": parsed.scopes,
+            "tiles": all_tiles,
+            "__cache": if merged_cache.is_empty() { serde_json::Value::Null } else { serde_json::Value::Object(merged_cache) },
+            "__scopes": if merged_scopes.is_empty() { serde_json::Value::Null } else { serde_json::Value::Object(merged_scopes) },
         });
 
         serde_wasm_bindgen::to_value(&result)
@@ -794,7 +837,7 @@ impl SparqlStore {
         self.layers.get(layer_index).map(|l| l.base_url.as_str())
     }
 
-    /// Find a resource across all layers. Returns (layer_index, subject_id, page_id).
+    /// Find a resource across all layers. Returns first (layer_index, subject_id, page_id).
     fn find_resource(&self, uri: &str) -> Result<(usize, u32, u32), JsValue> {
         for (li, layer) in self.layers.iter().enumerate() {
             let rmap = match &layer.resource_map {
@@ -808,6 +851,23 @@ impl SparqlStore {
             }
         }
         Err(JsValue::from_str(&format!("Resource not found in any layer: {}", uri)))
+    }
+
+    /// Find a resource in ALL layers. Returns vec of (layer_index, subject_id, page_id).
+    fn find_resource_all(&self, uri: &str) -> Vec<(usize, u32, u32)> {
+        let mut results = Vec::new();
+        for (li, layer) in self.layers.iter().enumerate() {
+            let rmap = match &layer.resource_map {
+                Some(r) => r,
+                None => continue,
+            };
+            if let Some(subject_id) = layer.dictionary.lookup(uri) {
+                if let Some(page_id) = rmap.page_for(subject_id) {
+                    results.push((li, subject_id, page_id));
+                }
+            }
+        }
+        results
     }
 }
 

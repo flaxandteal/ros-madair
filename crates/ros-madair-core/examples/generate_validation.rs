@@ -33,35 +33,19 @@ fn main() {
     let c = "https://example.org/concept/";
     let n = "https://example.org/node/";
 
-    // Same queries as the HTML demo examples
+    // Same queries as the HTML demo examples (Aonach Mór synthetic dataset)
     let queries: Vec<(&str, Vec<(String, Option<String>)>)> = vec![
-        ("monument_a", vec![
-            (format!("{n}monument_type_n1"), Some(format!("{c}43bf135f-e369-f6f4-a85d-9a54fb1fa44b"))),
+        ("churches", vec![
+            (format!("{n}monument_type"), Some(format!("{c}church"))),
         ]),
-        ("monument_b", vec![
-            (format!("{n}monument_type_n1"), Some(format!("{c}50ae187e-98ab-7ff3-6925-a75398112e70"))),
+        ("castles", vec![
+            (format!("{n}monument_type"), Some(format!("{c}castle"))),
         ]),
-        ("townland", vec![
-            (format!("{n}townland"), Some(format!("{c}afad673d-a7f1-d1ed-12b9-abd1ac321134"))),
-        ]),
-        ("type_townland", vec![
-            (format!("{n}monument_type_n1"), Some(format!("{c}43bf135f-e369-f6f4-a85d-9a54fb1fa44b"))),
-            (format!("{n}townland"), Some(format!("{c}afad673d-a7f1-d1ed-12b9-abd1ac321134"))),
-        ]),
-        ("type_grade", vec![
-            (format!("{n}monument_type_n1"), Some(format!("{c}43bf135f-e369-f6f4-a85d-9a54fb1fa44b"))),
-            (format!("{n}grade"), Some(format!("{c}e47378ae-6ede-a0ab-dba8-97e840833f25"))),
-        ]),
-        ("type_townland_grade", vec![
-            (format!("{n}monument_type_n1"), Some(format!("{c}43bf135f-e369-f6f4-a85d-9a54fb1fa44b"))),
-            (format!("{n}townland"), Some(format!("{c}afad673d-a7f1-d1ed-12b9-abd1ac321134"))),
-            (format!("{n}grade"), Some(format!("{c}e47378ae-6ede-a0ab-dba8-97e840833f25"))),
+        ("forts", vec![
+            (format!("{n}monument_type"), Some(format!("{c}fort"))),
         ]),
         ("all_typed", vec![
-            (format!("{n}monument_type_n1"), None),
-        ]),
-        ("all_graded", vec![
-            (format!("{n}grade"), None),
+            (format!("{n}monument_type"), None),
         ]),
     ];
 

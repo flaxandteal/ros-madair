@@ -272,6 +272,40 @@ fn main() {
     // Write graph definition for the HTML demo
     fs::write(output_dir.join("graph.json"), graph_json).unwrap();
 
+    // Write validation.json — ground-truth expected results for the HTML demo
+    // Must match the `examples` object in example/index.html
+    let validation = serde_json::json!({
+        "churches": {
+            "count": 3,
+            "uris": [
+                format!("{base_uri}resource/hp-001"),
+                format!("{base_uri}resource/hp-003"),
+                format!("{base_uri}resource/hp-005"),
+            ]
+        },
+        "castles": {
+            "count": 2,
+            "uris": [
+                format!("{base_uri}resource/hp-002"),
+                format!("{base_uri}resource/hp-004"),
+            ]
+        },
+        "forts": {
+            "count": 1,
+            "uris": [
+                format!("{base_uri}resource/hp-006"),
+            ]
+        },
+        "all_typed": {
+            "count": 6,
+            "uris": places.iter().map(|(id, ..)| format!("{base_uri}resource/{id}")).collect::<Vec<_>>(),
+        },
+    });
+    fs::write(
+        output_dir.join("validation.json"),
+        serde_json::to_string_pretty(&validation).unwrap(),
+    ).unwrap();
+
     println!("Built index with {} resources, {} pages", resources.len(), page_index.page_meta.len());
     println!("Dictionary: {} terms", dict.len());
     println!("Output: {}", output_dir.display());

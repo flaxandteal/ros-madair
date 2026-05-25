@@ -3,22 +3,26 @@ use std::fs;
 
 use ros_madair_core::{
     binary_search_object, full_header_size, parse_page_header, parse_records,
-    Dictionary, PageMeta, PageRecord, SummaryIndex,
+    Dictionary, PageMeta, PageRecord, SummaryIndex, MIN_HEADER_PROBE,
 };
 
 fn main() {
-    let base = "example/static/ros-madair";
+    let args: Vec<String> = std::env::args().collect();
+    let base = args.get(1).map(|s| s.as_str()).unwrap_or("example/static/ros-madair");
 
     // Load dictionary
     let dict_bytes = fs::read(format!("{base}/dictionary.bin")).unwrap();
     let dict = Dictionary::from_bytes(&dict_bytes).unwrap();
 
     println!("=== Dictionary ({} terms) ===", dict.len());
-    // Dump all terms
-    for id in 0..dict.len() as u32 {
+    let sample = dict.len().min(20) as u32;
+    for id in 0..sample {
         if let Some(uri) = dict.resolve(id) {
             println!("  {} → {:?}", id, uri);
         }
+    }
+    if dict.len() > 20 {
+        println!("  ... ({} more)", dict.len() - 20);
     }
 
     // Load summary
@@ -29,85 +33,128 @@ fn main() {
     // Load page meta
     let meta_str = fs::read_to_string(format!("{base}/page_meta.json")).unwrap();
     let page_meta: Vec<PageMeta> = serde_json::from_str(&meta_str).unwrap();
-    println!("\n=== Page Meta ===");
-    for pm in &page_meta {
+    println!("\n=== Page Meta ({} pages) ===", page_meta.len());
+    let page_sample = page_meta.len().min(10);
+    for pm in &page_meta[..page_sample] {
         println!("  page {} — {} resources, bbox {:?}", pm.page_id, pm.resource_count, pm.bbox);
     }
+    if page_meta.len() > 10 {
+        println!("  ... ({} more)", page_meta.len() - 10);
+    }
 
-    // Simulate query: ?place monument_type church
-    let pred_uri = "https://example.org/node/monument_type";
-    let obj_uri = "https://example.org/concept/church";
-
-    let pred_id = dict.lookup(pred_uri);
-    let obj_id = dict.lookup(obj_uri);
-    println!("\n=== Query ===");
-    println!("pred '{}' → id {:?}", pred_uri, pred_id);
-    println!("obj  '{}' → id {:?}", obj_uri, obj_id);
-
-    // === Simulate EXACT client flow ===
-    println!("\n=== Simulating WASM client flow ===");
-    simulate_client_query(base, &dict, &summary, &page_meta,
-        r#"[{"s": "?place", "p": "https://example.org/node/monument_type", "o": "https://example.org/concept/church"}]"#);
-
-    simulate_client_query(base, &dict, &summary, &page_meta,
-        r#"[{"s": "?person", "p": "https://example.org/node/occupation", "o": "https://example.org/concept/architect"},{"s": "?person", "p": "https://example.org/node/lived_in", "o": "https://example.org/concept/bangor"}]"#);
-
-    if let (Some(pred_id), Some(obj_id)) = (pred_id, obj_id) {
-        // OPS lookup
-        let op_quads = summary.lookup_op(obj_id, pred_id);
-        println!("\nOPS lookup (obj={}, pred={}) → {} quads", obj_id, pred_id, op_quads.len());
-        for q in op_quads {
-            println!("  page_s={}, pred={}, page_o={}, edges={}, subjects={}",
-                q.page_s, q.predicate, q.page_o, q.edge_count, q.subject_count);
+    // Discover predicates from the summary — iterate pages to gather predicate frequencies
+    let mut pred_freq: HashMap<u32, usize> = HashMap::new();
+    for pm in &page_meta {
+        for q in summary.lookup_s(pm.page_id) {
+            *pred_freq.entry(q.predicate).or_default() += q.edge_count as usize;
         }
+    }
+    let mut pred_vec: Vec<(u32, usize)> = pred_freq.into_iter().collect();
+    pred_vec.sort_by(|a, b| b.1.cmp(&a.1));
 
-        // P lookup (broader)
-        let p_quads = summary.lookup_p(pred_id);
-        println!("\nP lookup (pred={}) → {} quads", pred_id, p_quads.len());
-        for q in p_quads {
-            println!("  page_s={}, pred={}, page_o={}, edges={}, subjects={}",
-                q.page_s, q.predicate, q.page_o, q.edge_count, q.subject_count);
-        }
+    println!("\n=== Top predicates ===");
+    for (pid, count) in pred_vec.iter().take(10) {
+        let uri = dict.resolve(*pid).unwrap_or("?");
+        println!("  id={} edges={} → {}", pid, count, uri);
+    }
 
-        // Load page files and search
-        println!("\n=== Page Records ===");
-        for pm in &page_meta {
-            let path = format!("{base}/pages/page_{:04}.dat", pm.page_id);
-            let data = fs::read(&path).unwrap();
-            let header = parse_page_header(&data).unwrap();
-            println!("\nPage {} header: {} predicates", pm.page_id, header.entries.len());
-            for pe in &header.entries {
-                println!("  pred_id={}, offset={}, records={}",
-                    pe.pred_id, pe.offset, pe.record_count);
-                if let Some(uri) = dict.resolve(pe.pred_id) {
-                    println!("    → {}", uri);
+    // Pick the most frequent predicate for a demo query
+    if let Some(&(top_pred_id, _)) = pred_vec.first() {
+        let top_pred_uri = dict.resolve(top_pred_id).unwrap_or("?");
+
+        // Find an object for this predicate by scanning a page
+        let p_quads = summary.lookup_p(top_pred_id);
+        let mut sample_obj_id: Option<u32> = None;
+
+        if let Some(q) = p_quads.first() {
+            let path = format!("{base}/pages/page_{:04}.dat", q.page_s);
+            if let Ok(data) = fs::read(&path) {
+                if data.len() >= MIN_HEADER_PROBE {
+                    let header_size = full_header_size(&data[..MIN_HEADER_PROBE]).unwrap();
+                    if let Ok(header) = parse_page_header(&data[..header_size.min(data.len())]) {
+                        if let Some((start, end)) = header.predicate_byte_range(top_pred_id) {
+                            let records = parse_records(&data[start as usize..end as usize]);
+                            if let Some(rec) = records.first() {
+                                sample_obj_id = Some(rec.object_val);
+                            }
+                        }
+                    }
                 }
             }
+        }
 
-            // Try to get monument_type block
-            if let Some((start, end)) = header.predicate_byte_range(pred_id) {
-                let block = &data[start as usize..end as usize];
-                let records = parse_records(block);
-                println!("  monument_type block: {} records", records.len());
-                for rec in &records {
-                    let subj = dict.resolve(rec.subject_id).unwrap_or("?");
-                    let obj = dict.resolve(rec.object_val).unwrap_or("?");
-                    println!("    subject_id={} ({}) object_val={} ({})",
-                        rec.subject_id, subj, rec.object_val, obj);
-                }
+        // Run the demo query
+        if let Some(obj_id) = sample_obj_id {
+            let obj_uri = dict.resolve(obj_id).unwrap_or("?");
+            let query = format!(
+                r#"[{{"s": "?x", "p": "{}", "o": "{}"}}]"#,
+                top_pred_uri, obj_uri
+            );
+            println!("\n=== Demo query ===");
+            simulate_client_query(base, &dict, &summary, &page_meta, &query);
+        }
 
-                // Binary search for church
-                let (lo, hi) = binary_search_object(&records, obj_id);
-                println!("  binary_search for obj_id={}: range [{}, {})", obj_id, lo, hi);
-                for rec in &records[lo..hi] {
-                    let subj = dict.resolve(rec.subject_id).unwrap_or("?");
-                    println!("    MATCH: subject_id={} ({})", rec.subject_id, subj);
+        // Also run an open query (?s pred ?o) on a less frequent predicate
+        if pred_vec.len() > 2 {
+            let (alt_pred_id, _) = pred_vec[2];
+            let alt_pred_uri = dict.resolve(alt_pred_id).unwrap_or("?");
+            let query = format!(
+                r#"[{{"s": "?x", "p": "{}", "o": "?y"}}]"#,
+                alt_pred_uri
+            );
+            println!("\n=== Open query ===");
+            simulate_client_query(base, &dict, &summary, &page_meta, &query);
+        }
+    }
+
+    // Validate all pages are readable
+    println!("\n=== Page validation ===");
+    let mut ok = 0;
+    let mut fail = 0;
+    for pm in &page_meta {
+        let path = format!("{base}/pages/page_{:04}.dat", pm.page_id);
+        match fs::read(&path) {
+            Ok(data) => {
+                if data.len() < MIN_HEADER_PROBE {
+                    println!("  page {} — too small ({} bytes)", pm.page_id, data.len());
+                    fail += 1;
+                    continue;
                 }
-            } else {
-                println!("  No monument_type block in this page");
+                match full_header_size(&data[..MIN_HEADER_PROBE]) {
+                    Ok(hs) => {
+                        match parse_page_header(&data[..hs.min(data.len())]) {
+                            Ok(header) => {
+                                ok += 1;
+                                // Spot-check: verify each predicate block is within bounds
+                                for pe in &header.entries {
+                                    if let Some((_start, end)) = header.predicate_byte_range(pe.pred_id) {
+                                        if end as usize > data.len() {
+                                            println!("  page {} pred {} — block exceeds file ({} > {})",
+                                                pm.page_id, pe.pred_id, end, data.len());
+                                            fail += 1;
+                                        }
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                println!("  page {} — header parse error: {}", pm.page_id, e);
+                                fail += 1;
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        println!("  page {} — probe error: {}", pm.page_id, e);
+                        fail += 1;
+                    }
+                }
+            }
+            Err(e) => {
+                println!("  page {} — read error: {}", pm.page_id, e);
+                fail += 1;
             }
         }
     }
+    println!("  {} OK, {} failed", ok, fail);
 }
 
 /// Simulate the WASM client's complete query flow.
@@ -118,23 +165,22 @@ fn simulate_client_query(
     page_meta: &[PageMeta],
     patterns_json: &str,
 ) {
-    println!("\n--- Query: {} ---", patterns_json);
+    println!("  Query: {}", patterns_json);
 
-    // Step 1: Parse JSON patterns (same as client lib.rs)
     #[derive(serde::Deserialize)]
     struct RawPattern { s: String, p: String, o: String }
 
     fn parse_term(s: &str) -> (bool, String) {
         if s.starts_with('?') {
-            (true, s[1..].to_string())  // variable
+            (true, s[1..].to_string())
         } else {
-            (false, s.to_string())  // URI
+            (false, s.to_string())
         }
     }
 
     let raw_patterns: Vec<RawPattern> = serde_json::from_str(patterns_json).unwrap();
 
-    // Step 2: Plan (mirrors planner.rs plan_from_patterns)
+    // Plan
     let mut page_predicates: HashMap<u32, HashSet<u32>> = HashMap::new();
 
     for rp in &raw_patterns {
@@ -154,7 +200,7 @@ fn simulate_client_query(
             }
         };
 
-        let (s_var, _s_uri) = parse_term(&rp.s);
+        let (s_var, _) = parse_term(&rp.s);
         let (o_var, o_uri) = parse_term(&rp.o);
 
         if s_var && !o_var {
@@ -189,37 +235,38 @@ fn simulate_client_query(
         }
     }
 
-    println!("  Plan: {} pages", page_predicates.len());
-    for (pid, preds) in &page_predicates {
-        println!("    page {} → preds {:?}", pid, preds);
-    }
+    println!("  Plan: {} pages to fetch", page_predicates.len());
 
-    // Step 3: Fetch page data (simulate with file reads + range slicing)
+    // Fetch + execute
     let mut records: HashMap<(u32, u32), Vec<PageRecord>> = HashMap::new();
 
     for (&page_id, preds) in &page_predicates {
         let path = format!("{base}/pages/page_{:04}.dat", page_id);
-        let data = fs::read(&path).unwrap();
+        let data = match fs::read(&path) {
+            Ok(d) => d,
+            Err(_) => continue,
+        };
+        if data.len() < MIN_HEADER_PROBE { continue; }
 
-        // Simulate: client first fetches header probe (7 bytes)
-        let probe = &data[0..7];
-        let header_size = full_header_size(probe).unwrap();
+        let header_size = match full_header_size(&data[..MIN_HEADER_PROBE]) {
+            Ok(s) => s,
+            Err(_) => continue,
+        };
+        let header = match parse_page_header(&data[..header_size.min(data.len())]) {
+            Ok(h) => h,
+            Err(_) => continue,
+        };
 
-        // Then fetches full header
-        let header = parse_page_header(&data[0..header_size]).unwrap();
-
-        // Then fetches predicate blocks
         for &pred_id in preds {
             if let Some((start, end)) = header.predicate_byte_range(pred_id) {
                 let block_bytes = &data[start as usize..end as usize];
                 let recs = parse_records(block_bytes);
-                println!("    page {} pred {} → {} records", page_id, pred_id, recs.len());
                 records.insert((page_id, pred_id), recs);
             }
         }
     }
 
-    // Step 4: Execute patterns (mirrors client lib.rs execute_patterns)
+    // Execute patterns
     let mut result_sets: Vec<HashSet<u32>> = Vec::new();
 
     for rp in &raw_patterns {
@@ -254,11 +301,10 @@ fn simulate_client_query(
             }
         }
 
-        println!("  Pattern p={} → {} matches", p_uri, matches.len());
         result_sets.push(matches);
     }
 
-    // Step 5: Intersect
+    // Intersect
     if result_sets.is_empty() {
         println!("  RESULT: 0 (no patterns)");
         return;
@@ -273,13 +319,16 @@ fn simulate_client_query(
     let mut results: Vec<u32> = intersection.into_iter().collect();
     results.sort();
 
-    // Step 6: Resolve URIs
+    // Resolve URIs
     let uris: Vec<&str> = results.iter()
         .filter_map(|&id| dict.resolve(id))
         .collect();
 
     println!("  RESULT: {} matches", uris.len());
-    for uri in &uris {
+    for uri in uris.iter().take(10) {
         println!("    {}", uri);
+    }
+    if uris.len() > 10 {
+        println!("    ... ({} more)", uris.len() - 10);
     }
 }
