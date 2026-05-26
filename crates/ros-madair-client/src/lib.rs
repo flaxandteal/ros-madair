@@ -412,9 +412,9 @@ impl SparqlStore {
         }
     }
 
-    /// Get the page ID for a resource URI. Searches all layers.
+    /// Get the page ID for a resource URI. Searches all layers (including shadow pages).
     ///
-    /// Returns JSON: `{page_id, layer_index, layer_name}` or null.
+    /// Returns JSON: `{page_id, layer_index, layer_name, is_shadow}` or null.
     #[wasm_bindgen(js_name = "pageForResource")]
     pub fn page_for_resource(&self, uri: &str) -> JsValue {
         for (li, layer) in self.layers.iter().enumerate() {
@@ -423,15 +423,42 @@ impl SparqlStore {
                 None => continue,
             };
             if let Some(page_id) = layer.dictionary.lookup(uri).and_then(|id| rmap.page_for(id)) {
+                let is_shadow = self.is_shadow_page(li, page_id);
                 let result = serde_json::json!({
                     "page_id": page_id,
                     "layer_index": li,
                     "layer_name": layer.name,
+                    "is_shadow": is_shadow,
                 });
                 return JsValue::from_str(&result.to_string());
             }
         }
         JsValue::NULL
+    }
+
+    /// Get page IDs for a resource URI across ALL layers (including shadow pages).
+    ///
+    /// Returns JSON array: `[{page_id, layer_index, layer_name, is_shadow}, ...]`.
+    #[wasm_bindgen(js_name = "pageForResourceAll")]
+    pub fn page_for_resource_all(&self, uri: &str) -> JsValue {
+        let mut results = Vec::new();
+        for (li, layer) in self.layers.iter().enumerate() {
+            let rmap = match &layer.resource_map {
+                Some(r) => r,
+                None => continue,
+            };
+            if let Some(page_id) = layer.dictionary.lookup(uri).and_then(|id| rmap.page_for(id)) {
+                let is_shadow = self.is_shadow_page(li, page_id);
+                results.push(serde_json::json!({
+                    "page_id": page_id,
+                    "layer_index": li,
+                    "layer_name": layer.name,
+                    "is_shadow": is_shadow,
+                }));
+            }
+        }
+        let json = serde_json::to_string(&results).unwrap_or_else(|_| "[]".to_string());
+        JsValue::from_str(&json)
     }
 
     /// Check if a URI is a known resource in any layer.
@@ -671,9 +698,20 @@ impl SparqlStore {
             scopes: Option<serde_json::Value>,
         }
 
-        // Find the resource in ALL layers, not just the first match
+        // Find the resource in ALL layers (skips shadow pages — no tile data).
         let matches = self.find_resource_all(resource_uri);
         if matches.is_empty() {
+            // Resource may exist only in shadow pages (referenced but no tile data).
+            // Return empty tiles rather than erroring.
+            if self.find_resource_any(resource_uri).is_ok() {
+                let result = serde_json::json!({
+                    "tiles": [],
+                    "__cache": serde_json::Value::Null,
+                    "__scopes": serde_json::Value::Null,
+                });
+                return serde_wasm_bindgen::to_value(&result)
+                    .map_err(|e| JsValue::from_str(&format!("Serialization error: {}", e)));
+            }
             return Err(JsValue::from_str(&format!(
                 "Resource not found in any layer: {}", resource_uri
             )));
@@ -837,8 +875,54 @@ impl SparqlStore {
         self.layers.get(layer_index).map(|l| l.base_url.as_str())
     }
 
-    /// Find a resource across all layers. Returns first (layer_index, subject_id, page_id).
+    /// Check if a page is a shadow page (exists only for SPO/OPS summary, no tile files).
+    fn is_shadow_page(&self, layer_index: usize, page_id: u32) -> bool {
+        self.layers.get(layer_index)
+            .map_or(false, |l| l.page_meta.iter().any(|pm| pm.page_id == page_id && pm.is_shadow))
+    }
+
+    /// Find a resource across all layers, skipping shadow pages.
+    /// Returns first (layer_index, subject_id, page_id) with tile data.
     fn find_resource(&self, uri: &str) -> Result<(usize, u32, u32), JsValue> {
+        for (li, layer) in self.layers.iter().enumerate() {
+            let rmap = match &layer.resource_map {
+                Some(r) => r,
+                None => continue,
+            };
+            if let Some(subject_id) = layer.dictionary.lookup(uri) {
+                if let Some(page_id) = rmap.page_for(subject_id) {
+                    if !self.is_shadow_page(li, page_id) {
+                        return Ok((li, subject_id, page_id));
+                    }
+                }
+            }
+        }
+        Err(JsValue::from_str(&format!("Resource not found in any layer: {}", uri)))
+    }
+
+    /// Find a resource in ALL layers, skipping shadow pages.
+    /// Returns vec of (layer_index, subject_id, page_id) with tile data.
+    fn find_resource_all(&self, uri: &str) -> Vec<(usize, u32, u32)> {
+        let mut results = Vec::new();
+        for (li, layer) in self.layers.iter().enumerate() {
+            let rmap = match &layer.resource_map {
+                Some(r) => r,
+                None => continue,
+            };
+            if let Some(subject_id) = layer.dictionary.lookup(uri) {
+                if let Some(page_id) = rmap.page_for(subject_id) {
+                    if !self.is_shadow_page(li, page_id) {
+                        results.push((li, subject_id, page_id));
+                    }
+                }
+            }
+        }
+        results
+    }
+
+    /// Find a resource including shadow pages. Used for summary/index queries
+    /// where you need the page_id but not tile data.
+    fn find_resource_any(&self, uri: &str) -> Result<(usize, u32, u32), JsValue> {
         for (li, layer) in self.layers.iter().enumerate() {
             let rmap = match &layer.resource_map {
                 Some(r) => r,
@@ -851,23 +935,6 @@ impl SparqlStore {
             }
         }
         Err(JsValue::from_str(&format!("Resource not found in any layer: {}", uri)))
-    }
-
-    /// Find a resource in ALL layers. Returns vec of (layer_index, subject_id, page_id).
-    fn find_resource_all(&self, uri: &str) -> Vec<(usize, u32, u32)> {
-        let mut results = Vec::new();
-        for (li, layer) in self.layers.iter().enumerate() {
-            let rmap = match &layer.resource_map {
-                Some(r) => r,
-                None => continue,
-            };
-            if let Some(subject_id) = layer.dictionary.lookup(uri) {
-                if let Some(page_id) = rmap.page_for(subject_id) {
-                    results.push((li, subject_id, page_id));
-                }
-            }
-        }
-        results
     }
 }
 

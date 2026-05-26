@@ -25,7 +25,7 @@ dependencies = [
 
 [[package]]
 name = "alizarin-core"
-version = "2.0.0-alpha.109"
+version = "2.0.0-alpha.110"
 dependencies = [
  "chrono",
  "csv",
@@ -43,7 +43,7 @@ dependencies = [
 
 [[package]]
 name = "alizarin-wasm"
-version = "2.0.0-alpha.109"
+version = "2.0.0-alpha.110"
 dependencies = [
  "alizarin-core",
  "console_error_panic_hook",
@@ -1635,7 +1635,7 @@ dependencies = [
 
 [[package]]
 name = "wasm-wrapper-derive"
-version = "2.0.0-alpha.109"
+version = "2.0.0-alpha.110"
 dependencies = [
  "darling",
  "proc-macro2",
