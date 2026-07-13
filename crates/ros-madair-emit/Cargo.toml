@@ -1,0 +1,26 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+[package]
+name = "ros-madair-emit"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
+description = "Compile alizarin-governed data into Rós Madair static query artifacts (head DB, chunks, closure, manifest)"
+
+[[bin]]
+name = "ros-madair-emit"
+path = "src/main.rs"
+
+[dependencies]
+alizarin-core.workspace = true
+alizarin-clm-core = { path = "../../../alizarin-sandbox/crates/alizarin-clm-core" }
+ros-madair-query = { path = "../ros-madair-query" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+rusqlite = { version = "0.32", features = ["bundled"] }
+rmp-serde = "1"
+sha2 = "0.10"

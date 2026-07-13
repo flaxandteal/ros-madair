@@ -1,9 +1,27 @@
 [workspace]
 members = [
+    # v2 static-assets stack (head-schema query compiler + emitter)
+    "crates/ros-madair-query",
+    "crates/ros-madair-emit",
+    # v1 — SPARQL/page-index stack.
     "crates/ros-madair-core",
     "crates/ros-madair-builder",
     "crates/ros-madair-client",
     "crates/ros-madair-alizarin",
+    "crates/ros-madair-napi",
+]
+# `ros-madair-alizarin` is excluded from the default build: it links the
+# git-pinned alizarin-wasm v2.0.0-alpha.111, whose extension handlers predate
+# `HandlerCapabilities::can_index` and so no longer compile against the current
+# governance core. It is v1 (being retired) and is not worth carrying; the rest
+# of the workspace — the v2 static-assets stack and the remaining v1 crates —
+# builds and tests cleanly. Build it explicitly with `-p` if ever needed.
+default-members = [
+    "crates/ros-madair-query",
+    "crates/ros-madair-emit",
+    "crates/ros-madair-core",
+    "crates/ros-madair-builder",
+    "crates/ros-madair-client",
     "crates/ros-madair-napi",
 ]
 resolver = "2"
@@ -27,14 +45,15 @@ debug = true
 
 
 [workspace.dependencies]
-alizarin-core = "2.0.0-alpha.111"
+# Single source of truth for the governance core: the local alizarin
+# checkout. The v2 static-assets stack builds directly against it.
+alizarin-core = { path = "../alizarin-sandbox/crates/alizarin-core" }
 
 # alizarin-wasm is a git dep that brings its own alizarin-core from the
-# same git repo. This patch forces it to use the crates.io version so
-# there is only one copy of alizarin-core in the dependency graph.
+# same git repo. This patch forces it to use the same single copy of
+# alizarin-core as everything else in the graph.
 [patch.'https://github.com/flaxandteal/alizarin']
-alizarin-core = { version = "=2.0.0-alpha.111" }
+alizarin-core = { path = "../alizarin-sandbox/crates/alizarin-core" }
 
-# For local development with a sibling alizarin checkout, add to .cargo/config.toml:
-#   [patch.crates-io]
-#   alizarin-core = { path = "../alizarin/crates/alizarin-core" }
+[patch.crates-io]
+alizarin-core = { path = "../alizarin-sandbox/crates/alizarin-core" }
