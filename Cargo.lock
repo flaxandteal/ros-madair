@@ -1259,6 +1259,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "ros-madair-python"
+version = "0.1.0-alpha.15"
+dependencies = [
+ "alizarin-clm-core",
+ "alizarin-core",
+ "pyo3",
+ "ros-madair-query",
+ "serde_json",
+]
+
+[[package]]
 name = "ros-madair-query"
 version = "0.1.0-alpha.15"
 dependencies = [

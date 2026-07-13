@@ -3,6 +3,7 @@ members = [
     # v2 static-assets stack (head-schema query compiler + emitter)
     "crates/ros-madair-query",
     "crates/ros-madair-emit",
+    "crates/ros-madair-python",
     # v1 — SPARQL/page-index stack.
     "crates/ros-madair-core",
     "crates/ros-madair-builder",

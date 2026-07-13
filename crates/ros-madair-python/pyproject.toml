@@ -1,0 +1,20 @@
+[build-system]
+requires = ["maturin>=1.0,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "ros-madair-v2"
+version = "0.1.0a15"
+description = "Python binding for the Rós Madair v2 query compiler (head-schema IR to SQL), with the CLM reference handler registered"
+requires-python = ">=3.9"
+classifiers = [
+    "Programming Language :: Rust",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: Implementation :: CPython",
+]
+
+[tool.maturin]
+# Pure Rust extension. The module is `ros_madair_v2`, NOT `ros_madair`: v1's
+# ros-madair-builder already owns `ros_madair` (IndexBuilder/IndexReader, which
+# Clódóir imports), so the two coexist during the transition.
+module-name = "ros_madair_v2"

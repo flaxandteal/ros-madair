@@ -1,0 +1,31 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+[package]
+name = "ros-madair-python"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
+description = "Python binding for the Rós Madair v2 query compiler (head-schema IR → SQL), with the CLM reference handler registered"
+
+[lib]
+# Deliberately NOT `ros_madair`: v1's ros-madair-builder ships a `ros_madair`
+# Python module (IndexBuilder/IndexReader) that Clódóir imports today. The v2
+# compiler lives under its own name so both can be installed side by side
+# during the transition.
+name = "ros_madair_v2"
+crate-type = ["cdylib"]
+
+[dependencies]
+# pyo3 0.22, NOT alizarin-python's 0.21: pyo3 carries `links = "python"`, so the
+# whole workspace graph may contain exactly one version of it, and v1's
+# ros-madair-builder already pins ^0.22. abi3-py39 matches alizarin-python's
+# abi3 level (one wheel for py39+).
+pyo3 = { version = "0.22", features = ["extension-module", "abi3-py39"] }
+alizarin-core.workspace = true
+alizarin-clm-core = { path = "../../../alizarin-sandbox/crates/alizarin-clm-core" }
+ros-madair-query = { path = "../ros-madair-query" }
+serde_json = "1"
