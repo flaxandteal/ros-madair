@@ -44,6 +44,7 @@ use rusqlite::Connection;
 
 mod chunks;
 mod closure;
+mod composability;
 mod head;
 mod input;
 mod manifest;
@@ -271,6 +272,13 @@ pub fn emit_with_options(
                     tiles.retain(|t| !exclude_ngs.contains(t.nodegroup_id.as_str()));
                 }
             }
+            // Refuse to emit layers that cannot compose. Cardinality-1 tiles are
+            // supposed to carry alizarin's DERIVABLE ids (so an independently
+            // built layer can address them); several differently-id'd tiles in
+            // one (parent, nodegroup) scope means they do not. We DETECT this —
+            // we never rewrite ids. See `composability`.
+            composability::validate_composable_tile_ids(&resource, &models[idx].graph)?;
+
             head::process_resource(
                 &tx,
                 &spine_tables[idx],
