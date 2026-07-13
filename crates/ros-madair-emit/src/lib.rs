@@ -109,18 +109,12 @@ pub struct EmitOptions {
     pub tier: Option<TierManifest>,
 }
 
-/// Build the emitter's default extension-type registry: the CLM reference
-/// handler registered under its datatype name. This is what makes the plain
-/// CLI / library path index `reference` fields — core itself knows nothing
-/// of `reference`; the datatype is contributed entirely by this handler.
-pub fn default_registry() -> ExtensionTypeRegistry {
-    let mut registry = ExtensionTypeRegistry::new();
-    registry.register(
-        alizarin_clm_core::DATATYPE_NAME,
-        alizarin_clm_core::create_reference_handler(),
-    );
-    registry
-}
+/// The emitter's extension-type registry. Defined ONCE, in
+/// `ros-madair-handlers`, which the query side (and any WASM consumer) uses
+/// too: an emitter registry that disagreed with the query-side registry does
+/// not error, it silently returns zero rows (see that crate's docs). Re-exported
+/// here so existing callers keep working.
+pub use ros_madair_handlers::default_registry;
 
 pub fn emit(data_dir: &str, out_dir: &str, base_uri: &str) -> Result<EmitSummary, EmitError> {
     let registry = default_registry();
@@ -320,6 +314,11 @@ pub fn emit_with_options(
         base_uri: base_uri.to_string(),
         min_client_version: "0.1.0".to_string(),
         tier: options.tier.clone(),
+        // I6: the artifact explains its own handler set. Derived from the
+        // registry ACTUALLY used for this emit, so the query side can rebuild
+        // exactly it (ros_madair_handlers::registry_from_declarations) instead
+        // of guessing a default that may not match what was indexed.
+        handlers: ros_madair_handlers::describe_registry(registry),
         models: manifest_models,
         artifacts,
         budgets: Budgets {

@@ -17,8 +17,8 @@ path = "src/main.rs"
 
 [dependencies]
 alizarin-core.workspace = true
-alizarin-clm-core = { path = "../../../alizarin-sandbox/crates/alizarin-clm-core" }
 ros-madair-query = { path = "../ros-madair-query" }
+ros-madair-handlers = { path = "../ros-madair-handlers" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 rusqlite = { version = "0.32", features = ["bundled"] }

@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 [package]
-name = "ros-madair-query"
+name = "ros-madair-handlers"
 version.workspace = true
 authors.workspace = true
 edition.workspace = true
@@ -9,12 +9,16 @@ repository.workspace = true
 homepage.workspace = true
 keywords.workspace = true
 categories.workspace = true
-description = "Schema-validated query IR + SQL compiler against the Rós Madair static-assets head schema"
+description = "The single source of the Rós Madair extension-type registry: handler declarations shared by emitter and query side (WASM-buildable)"
 
 [dependencies]
+# HARD CONSTRAINT: this crate must build for wasm32-unknown-unknown — a
+# browser consumer queries a snapshot and needs the same registry that
+# produced it, without dragging in the emitter's SQLite writer. Keep the
+# dependency set to the governance core + the handler providers.
 alizarin-core.workspace = true
+alizarin-clm-core = { path = "../../../alizarin-sandbox/crates/alizarin-clm-core" }
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
 
 # WASM: alizarin-core pulls uuid v4 → getrandom 0.2, which refuses to build for
 # wasm32-unknown-unknown unless told where randomness comes from. Enabling the

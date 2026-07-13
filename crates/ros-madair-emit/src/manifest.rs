@@ -6,13 +6,16 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use ros_madair_handlers::HandlerDecl;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 
 use crate::chunks::hex;
 use crate::EmitError;
 
-pub(crate) const MANIFEST_VERSION: u32 = 3;
+/// 4: adds the `handlers` block — the artifact declares the extension-type
+/// handler set it was emitted with (I6).
+pub(crate) const MANIFEST_VERSION: u32 = 4;
 
 #[derive(Serialize)]
 pub struct Manifest {
@@ -25,6 +28,12 @@ pub struct Manifest {
     /// compiler can check tier permissions from the manifest alone.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tier: Option<TierManifest>,
+    /// The extension-type handlers this artifact was emitted with (I6). The
+    /// query side rebuilds its registry from these rather than assuming a
+    /// default: a registry mismatch is otherwise silent — a field that was
+    /// never indexed (handler absent at emit) still compiles to valid SQL for
+    /// a compiler that has the handler, and returns zero rows.
+    pub handlers: Vec<HandlerDecl>,
     pub models: Vec<ModelManifest>,
     pub artifacts: Vec<ArtifactEntry>,
     pub budgets: Budgets,
@@ -97,9 +106,7 @@ pub struct EmitSummary {
 
 /// Hash every artifact under `out`; the snapshot id is derived from the
 /// hash set. Returns the artifact entries and the snapshot id.
-pub(crate) fn hash_artifacts(
-    out: &Path,
-) -> Result<(Vec<ArtifactEntry>, String), EmitError> {
+pub(crate) fn hash_artifacts(out: &Path) -> Result<(Vec<ArtifactEntry>, String), EmitError> {
     let mut artifacts = Vec::new();
     let mut hasher_all = Sha256::new();
     let mut paths: Vec<PathBuf> = vec![out.join("head.sqlite"), out.join("closure.json")];

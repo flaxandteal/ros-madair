@@ -1,6 +1,7 @@
 [workspace]
 members = [
     # v2 static-assets stack (head-schema query compiler + emitter)
+    "crates/ros-madair-handlers",
     "crates/ros-madair-query",
     "crates/ros-madair-emit",
     "crates/ros-madair-python",
@@ -18,6 +19,7 @@ members = [
 # of the workspace — the v2 static-assets stack and the remaining v1 crates —
 # builds and tests cleanly. Build it explicitly with `-p` if ever needed.
 default-members = [
+    "crates/ros-madair-handlers",
     "crates/ros-madair-query",
     "crates/ros-madair-emit",
     "crates/ros-madair-core",

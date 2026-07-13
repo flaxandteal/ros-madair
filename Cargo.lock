@@ -25,7 +25,7 @@ dependencies = [
 
 [[package]]
 name = "alizarin-clm-core"
-version = "2.0.0-alpha.120"
+version = "2.0.0-alpha.121"
 dependencies = [
  "alizarin-core",
  "regex",
@@ -35,7 +35,7 @@ dependencies = [
 
 [[package]]
 name = "alizarin-core"
-version = "2.0.0-alpha.120"
+version = "2.0.0-alpha.121"
 dependencies = [
  "chrono",
  "csv",
@@ -1235,14 +1235,24 @@ dependencies = [
 name = "ros-madair-emit"
 version = "0.1.0-alpha.15"
 dependencies = [
- "alizarin-clm-core",
  "alizarin-core",
  "rmp-serde",
+ "ros-madair-handlers",
  "ros-madair-query",
  "rusqlite",
  "serde",
  "serde_json",
  "sha2",
+]
+
+[[package]]
+name = "ros-madair-handlers"
+version = "0.1.0-alpha.15"
+dependencies = [
+ "alizarin-clm-core",
+ "alizarin-core",
+ "getrandom 0.2.17",
+ "serde",
 ]
 
 [[package]]
@@ -1262,9 +1272,9 @@ dependencies = [
 name = "ros-madair-python"
 version = "0.1.0-alpha.15"
 dependencies = [
- "alizarin-clm-core",
  "alizarin-core",
  "pyo3",
+ "ros-madair-handlers",
  "ros-madair-query",
  "serde_json",
 ]
@@ -1274,6 +1284,7 @@ name = "ros-madair-query"
 version = "0.1.0-alpha.15"
 dependencies = [
  "alizarin-core",
+ "getrandom 0.2.17",
  "serde",
  "serde_json",
 ]

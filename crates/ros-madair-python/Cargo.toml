@@ -26,6 +26,6 @@ crate-type = ["cdylib"]
 # abi3 level (one wheel for py39+).
 pyo3 = { version = "0.22", features = ["extension-module", "abi3-py39"] }
 alizarin-core.workspace = true
-alizarin-clm-core = { path = "../../../alizarin-sandbox/crates/alizarin-clm-core" }
 ros-madair-query = { path = "../ros-madair-query" }
+ros-madair-handlers = { path = "../ros-madair-handlers" }
 serde_json = "1"
