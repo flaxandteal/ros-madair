@@ -310,13 +310,19 @@ pub fn emit_with_options(
     let closure_bytes = serde_json::to_vec_pretty(&closure)?;
     fs::write(out.join("closure.json"), &closure_bytes)?;
 
-    // Manifest: hash every artifact, snapshot id from the hash set.
-    let (artifacts, snapshot_id) = manifest::hash_artifacts(out)?;
+    // Manifest: hash every artifact, then hash the manifest itself, and derive
+    // the snapshot id from the whole set. The id is left EMPTY while the
+    // manifest is built — it is an input to its own digest, and the
+    // self-reference is resolved by hashing the id-less form (see
+    // manifest::manifest_digest_bytes). A manifest-only change (handler set,
+    // tier, declared field classes) therefore MOVES the id: two deployments
+    // that answer differently cannot share an identity.
+    let artifacts = manifest::hash_artifacts(out)?;
 
     let head_db_bytes = fs::metadata(out.join("head.sqlite"))?.len();
-    let manifest = Manifest {
+    let mut manifest = Manifest {
         manifest_version: MANIFEST_VERSION,
-        snapshot_id: snapshot_id.clone(),
+        snapshot_id: String::new(),
         base_uri: base_uri.to_string(),
         min_client_version: "0.1.0".to_string(),
         tier: options.tier.clone(),
@@ -332,6 +338,11 @@ pub fn emit_with_options(
             max_group_count: 500,
         },
     };
+    let snapshot_id = manifest::snapshot_id(
+        &manifest.artifacts,
+        &manifest::manifest_digest_bytes(&manifest)?,
+    );
+    manifest.snapshot_id = snapshot_id.clone();
     fs::write(
         out.join("manifest.json"),
         serde_json::to_vec_pretty(&manifest)?,

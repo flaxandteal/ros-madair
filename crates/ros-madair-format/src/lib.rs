@@ -36,7 +36,13 @@ use serde::{Deserialize, Serialize};
 ///
 /// 4: adds the `handlers` block — the artifact declares the extension-type
 /// handler set it was emitted with (I6).
-pub const MANIFEST_VERSION: u32 = 4;
+/// 5: the snapshot id now covers the manifest itself (id-excluded), so a
+/// manifest-only change — handler set, tier, declared field classes — moves
+/// the id. Snapshot ids from version-4 emits are NOT comparable with these;
+/// nothing was ever published from that digest, so there is no compatibility
+/// path and none is wanted (a back-compat "legacy id" would enshrine a digest
+/// that ignores half the artifact).
+pub const MANIFEST_VERSION: u32 = 5;
 
 /// `manifest.json` — the layout/compatibility contract of one snapshot.
 #[derive(Debug, Clone, Serialize, Deserialize)]
