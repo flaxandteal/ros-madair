@@ -1237,12 +1237,26 @@ version = "0.1.0-alpha.15"
 dependencies = [
  "alizarin-core",
  "rmp-serde",
+ "ros-madair-format",
  "ros-madair-handlers",
  "ros-madair-query",
+ "ros-madair-read",
  "rusqlite",
  "serde",
  "serde_json",
  "sha2",
+]
+
+[[package]]
+name = "ros-madair-format"
+version = "0.1.0-alpha.15"
+dependencies = [
+ "alizarin-core",
+ "getrandom 0.2.17",
+ "rmp-serde",
+ "ros-madair-handlers",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -1286,6 +1300,18 @@ dependencies = [
  "alizarin-core",
  "getrandom 0.2.17",
  "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "ros-madair-read"
+version = "0.1.0-alpha.15"
+dependencies = [
+ "alizarin-core",
+ "rmp-serde",
+ "ros-madair-emit",
+ "ros-madair-format",
+ "rusqlite",
  "serde_json",
 ]
 

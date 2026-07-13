@@ -49,8 +49,14 @@ mod input;
 mod manifest;
 
 pub use closure::{build_closure, Closure, ClosureEntry};
-pub use manifest::{
-    ArtifactEntry, Budgets, EmitSummary, FieldEntry, Manifest, ModelManifest, TierManifest,
+/// The artifact FORMAT types (manifest contract + chunk-tile wire shape) live
+/// in `ros-madair-format` — WASM-buildable, so a browser/Tauri READER can parse
+/// what this crate writes without linking the emitter (and without a
+/// hand-mirrored copy of the wire format, which is how they drift). Re-exported
+/// here so existing callers keep working.
+pub use ros_madair_format::{
+    ArtifactEntry, Budgets, ChunkTile, EmitSummary, FieldEntry, Manifest, ModelManifest,
+    TierManifest, MANIFEST_VERSION,
 };
 
 pub type EmitError = Box<dyn std::error::Error>;
@@ -309,7 +315,7 @@ pub fn emit_with_options(
 
     let head_db_bytes = fs::metadata(out.join("head.sqlite"))?.len();
     let manifest = Manifest {
-        manifest_version: manifest::MANIFEST_VERSION,
+        manifest_version: MANIFEST_VERSION,
         snapshot_id: snapshot_id.clone(),
         base_uri: base_uri.to_string(),
         min_client_version: "0.1.0".to_string(),

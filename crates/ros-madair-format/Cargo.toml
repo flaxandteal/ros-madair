@@ -1,0 +1,31 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+[package]
+name = "ros-madair-format"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
+description = "The Rós Madair static-artifact FORMAT: manifest contract types and the msgpack chunk-tile encoding, shared by writer and readers (WASM-buildable)"
+
+[dependencies]
+# HARD CONSTRAINT: this crate must build for wasm32-unknown-unknown — a
+# browser consumer READS the artifact format (manifest, chunk tiles) but
+# never emits it. No rusqlite, no filesystem: format types only.
+alizarin-core.workspace = true
+ros-madair-handlers = { path = "../ros-madair-handlers" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[dev-dependencies]
+rmp-serde = "1"
+
+# WASM: alizarin-core pulls uuid v4 → getrandom 0.2, which refuses to build for
+# wasm32-unknown-unknown unless told where randomness comes from. Enabling the
+# `js` feature here (feature unification) makes the browser target build without
+# patching alizarin-core. Native targets are unaffected.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+getrandom = { version = "0.2", features = ["js"] }

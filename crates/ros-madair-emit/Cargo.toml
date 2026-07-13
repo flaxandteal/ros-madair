@@ -19,8 +19,14 @@ path = "src/main.rs"
 alizarin-core.workspace = true
 ros-madair-query = { path = "../ros-madair-query" }
 ros-madair-handlers = { path = "../ros-madair-handlers" }
+ros-madair-format = { path = "../ros-madair-format" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 rusqlite = { version = "0.32", features = ["bundled"] }
 rmp-serde = "1"
 sha2 = "0.10"
+
+[dev-dependencies]
+# The `hydrate_entry` example is a driver over the library read path — it does
+# not (any more) re-implement it. Dev-only: the emitter itself never reads.
+ros-madair-read = { path = "../ros-madair-read" }

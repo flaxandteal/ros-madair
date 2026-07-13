@@ -13,7 +13,7 @@ use rusqlite::{Connection, Transaction};
 
 use crate::chunks::ChunkSink;
 use crate::closure::Closure;
-use crate::manifest::FieldEntry;
+use ros_madair_format::FieldEntry;
 use crate::{EmitError, FieldClassError};
 
 // ---------------------------------------------------------------------------

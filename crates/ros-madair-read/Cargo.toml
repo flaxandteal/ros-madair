@@ -1,0 +1,30 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+[package]
+name = "ros-madair-read"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
+description = "Native read path for Rós Madair static artifacts: resolve a resource UUID through the head DB and hydrate its tiles into a schema-aware JSON tree"
+
+[dependencies]
+# NATIVE BY DESIGN (like ros-madair-emit): rusqlite + std::fs. A browser
+# consumer does NOT use this crate — it fetches head pages over HTTP and
+# decodes chunks with `ros-madair-format` (WASM-buildable), which is exactly
+# why the format types were split out of here.
+alizarin-core.workspace = true
+ros-madair-format = { path = "../ros-madair-format" }
+rusqlite = { version = "0.32", features = ["bundled"] }
+rmp-serde = "1"
+serde_json = "1"
+
+[dev-dependencies]
+# The integration test emits a REAL snapshot with the real writer and reads it
+# back with this crate: emit/read drift then fails a test instead of failing a
+# user. Dev-dependencies do not propagate, so the bundled SQLite *writer* still
+# never reaches a consumer of this crate (and never reaches WASM at all).
+ros-madair-emit = { path = "../ros-madair-emit" }

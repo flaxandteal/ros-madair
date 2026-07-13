@@ -7,46 +7,13 @@ use std::fs;
 use std::path::PathBuf;
 
 use alizarin_core::StaticTile;
-use serde::Serialize;
+use ros_madair_format::ChunkTile;
 use sha2::{Digest, Sha256};
 
 use crate::head::Interner;
 use crate::EmitError;
 
 pub(crate) const CHUNK_MAX_TILES: usize = 256;
-
-/// Deterministic msgpack view of a tile: same named fields as
-/// `StaticTile`, but `data` is a BTreeMap so key order (and hence the
-/// chunk content hash) is run-stable. `StaticTile.data` is a HashMap —
-/// serializing it directly makes every chunk hash random per process.
-#[derive(Serialize)]
-struct ChunkTile<'a> {
-    data: BTreeMap<&'a str, &'a serde_json::Value>,
-    nodegroup_id: &'a str,
-    resourceinstance_id: &'a str,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    tileid: Option<&'a str>,
-    parenttile_id: Option<&'a str>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    sortorder: Option<i32>,
-}
-
-impl<'a> From<&'a StaticTile> for ChunkTile<'a> {
-    fn from(tile: &'a StaticTile) -> Self {
-        ChunkTile {
-            data: tile
-                .data
-                .iter()
-                .map(|(k, v)| (k.as_str(), v))
-                .collect(),
-            nodegroup_id: &tile.nodegroup_id,
-            resourceinstance_id: &tile.resourceinstance_id,
-            tileid: tile.tileid.as_deref(),
-            parenttile_id: tile.parenttile_id.as_deref(),
-            sortorder: tile.sortorder,
-        }
-    }
-}
 
 pub(crate) struct ChunkSink {
     chunks_dir: PathBuf,

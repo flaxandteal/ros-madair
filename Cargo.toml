@@ -2,8 +2,10 @@
 members = [
     # v2 static-assets stack (head-schema query compiler + emitter)
     "crates/ros-madair-handlers",
+    "crates/ros-madair-format",
     "crates/ros-madair-query",
     "crates/ros-madair-emit",
+    "crates/ros-madair-read",
     "crates/ros-madair-python",
     # v1 — SPARQL/page-index stack.
     "crates/ros-madair-core",
@@ -20,8 +22,10 @@ members = [
 # builds and tests cleanly. Build it explicitly with `-p` if ever needed.
 default-members = [
     "crates/ros-madair-handlers",
+    "crates/ros-madair-format",
     "crates/ros-madair-query",
     "crates/ros-madair-emit",
+    "crates/ros-madair-read",
     "crates/ros-madair-core",
     "crates/ros-madair-builder",
     "crates/ros-madair-client",
