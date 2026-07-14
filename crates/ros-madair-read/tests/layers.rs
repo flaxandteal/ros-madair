@@ -60,6 +60,10 @@ const TITLE_NG: &str = "7d8e443d-1ae0-11f0-8c5c-8fd6f4eb1a02";
 /// A SECOND concept node, added by these tests to their copy of the Talk model.
 /// The decisive partial-layer case needs a field only the base carries.
 const REGION_NG: &str = "5e910000-0000-4000-8000-000000000001";
+/// A cardinality-N concept node. Layers ACCUMULATE here rather than overriding:
+/// the merge keeps every layer's tiles, so a value the base wrote must survive an
+/// overlay writing to the same node. The override rule would silently drop it.
+const TAG_NG: &str = "5e920000-0000-4000-8000-000000000001";
 /// The collection `topics` draws on; `region` reuses it, so the same vocabulary
 /// (and the same DFS intervals) serve both.
 const RDM_COLLECTION: &str = "10f1b99b-80c8-49a6-b825-440d8d2ced37";
@@ -130,18 +134,25 @@ fn scratch(tag: &str) -> PathBuf {
     dir
 }
 
-/// Add the `region` concept node to the corpus's copy of the Talk model: a clone
-/// of `topics` (same datatype, same collection) in its own cardinality-1
-/// nodegroup, hung off the same root.
-fn add_region_node(graph_path: &Path) {
+/// Add a concept node to the corpus's copy of the Talk model: a clone of `topics`
+/// (same datatype, same collection) in its own nodegroup, hung off the same root.
+///
+/// The tests add two, and the CARDINALITY is the point of the second:
+///
+/// - `region`, cardinality **1** — an OVERRIDE field, and the one the overlay
+///   never mentions (which is how the partial-layer bug is caught);
+/// - `tag`, cardinality **n** — an ADDITIVE field, where the merge keeps EVERY
+///   layer's tiles, so the composed values are the union and a lower layer's
+///   value must survive a higher layer writing to the same node.
+fn add_concept_node(graph_path: &Path, ng: &str, alias: &str, cardinality: &str, edge: &str) {
     let mut doc: serde_json::Value =
         serde_json::from_slice(&std::fs::read(graph_path).unwrap()).unwrap();
     let g = &mut doc["graph"][0];
     g["nodes"].as_array_mut().unwrap().push(json!({
-        "nodeid": REGION_NG,
-        "nodegroup_id": REGION_NG,
-        "name": "Region",
-        "alias": "region",
+        "nodeid": ng,
+        "nodegroup_id": ng,
+        "name": alias,
+        "alias": alias,
         "datatype": "concept-list",
         "config": { "rdmCollection": RDM_COLLECTION },
         "graph_id": TALK_GRAPH,
@@ -153,17 +164,34 @@ fn add_region_node(graph_path: &Path) {
         "sortorder": 0,
     }));
     g["nodegroups"].as_array_mut().unwrap().push(json!({
-        "nodegroupid": REGION_NG,
-        "cardinality": "1",
+        "nodegroupid": ng,
+        "cardinality": cardinality,
         "parentnodegroup_id": null,
     }));
     g["edges"].as_array_mut().unwrap().push(json!({
-        "edgeid": "5e910000-0000-4000-8000-0000000000ee",
+        "edgeid": edge,
         "domainnode_id": TALK_ROOT,
-        "rangenode_id": REGION_NG,
+        "rangenode_id": ng,
         "graph_id": TALK_GRAPH,
     }));
     std::fs::write(graph_path, serde_json::to_vec_pretty(&doc).unwrap()).unwrap();
+}
+
+fn extend_talk_model(graph_path: &Path) {
+    add_concept_node(
+        graph_path,
+        REGION_NG,
+        "region",
+        "1",
+        "5e910000-0000-4000-8000-0000000000ee",
+    );
+    add_concept_node(
+        graph_path,
+        TAG_NG,
+        "tag",
+        "n",
+        "5e920000-0000-4000-8000-0000000000ee",
+    );
 }
 
 fn concept_tile(
@@ -219,7 +247,7 @@ fn corpus(
     let dir = scratch(tag);
     copy_dir(&demo.join("graphs"), &dir.join("graphs"));
     copy_dir(&demo.join("vocabularies"), &dir.join("vocabularies"));
-    add_region_node(&dir.join("graphs").join(format!("{TALK_GRAPH}.json")));
+    extend_talk_model(&dir.join("graphs").join(format!("{TALK_GRAPH}.json")));
     if keep_other_models {
         copy_dir(&demo.join("resources"), &dir.join("resources"));
     }
@@ -270,6 +298,15 @@ fn base_corpus(demo: &Path) -> PathBuf {
                         TALK_A,
                         "aaaa1111-0000-4000-8000-000000000003",
                         REGION_NG,
+                        Some(&[VALUE_MISC]),
+                    ),
+                    // A cardinality-N field. The overlay will ALSO write a tag
+                    // tile for Talk A — a SEPARATE tile, which the merge keeps
+                    // alongside this one. Both values must remain findable.
+                    concept_tile(
+                        TALK_A,
+                        "aaaa1111-0000-4000-8000-000000000004",
+                        TAG_NG,
                         Some(&[VALUE_MISC]),
                     ),
                 ],
@@ -340,12 +377,23 @@ fn overlay_corpus(demo: &Path) -> PathBuf {
             resource(
                 TALK_A,
                 "3 W's of UI",
-                vec![concept_tile(
-                    TALK_A,
-                    "9999ffff-0000-4000-8000-00000000000a",
-                    TOPICS_NG,
-                    Some(&[VALUE_UI]),
-                )],
+                vec![
+                    concept_tile(
+                        TALK_A,
+                        "9999ffff-0000-4000-8000-00000000000a",
+                        TOPICS_NG,
+                        Some(&[VALUE_UI]),
+                    ),
+                    // Cardinality-N: this ADDS a tag; it does not replace the
+                    // base's. Both tiles survive the merge, so both concepts are
+                    // in the composed view — and a query must find EITHER.
+                    concept_tile(
+                        TALK_A,
+                        "9999ffff-0000-4000-8000-00000000000c",
+                        TAG_NG,
+                        Some(&[VALUE_JS]),
+                    ),
+                ],
             ),
             resource(
                 TALK_B,
@@ -457,7 +505,7 @@ fn every_resource(f: &Fixture) -> BTreeSet<String> {
 /// user is looking at are two different things, which is the entire bug class.
 fn by_hydration(
     f: &Fixture,
-    pred: impl Fn(&BTreeSet<String>, &BTreeSet<String>) -> bool,
+    pred: impl Fn(&BTreeSet<String>, &BTreeSet<String>, &BTreeSet<String>) -> bool,
 ) -> BTreeSet<String> {
     every_resource(f)
         .into_iter()
@@ -465,6 +513,7 @@ fn by_hydration(
             pred(
                 &composed_concepts(f, u, TOPICS_NG),
                 &composed_concepts(f, u, REGION_NG),
+                &composed_concepts(f, u, TAG_NG),
             )
         })
         .collect()
@@ -475,7 +524,7 @@ fn by_hydration(
 fn agreed(
     f: &Fixture,
     query: &Query,
-    pred: impl Fn(&BTreeSet<String>, &BTreeSet<String>) -> bool,
+    pred: impl Fn(&BTreeSet<String>, &BTreeSet<String>, &BTreeSet<String>) -> bool,
 ) -> usize {
     let fast = f.layers.count(query, &f.graph, None).expect("count");
     let union = f
@@ -545,9 +594,11 @@ fn a_filter_on_a_field_the_overlay_does_not_carry_reads_from_the_base() {
         "precondition: the composed Talk A really does still have region = MISC"
     );
 
-    let n = agreed(&f, &query(is_concept("region", CONCEPT_MISC)), |_t, r| {
-        r.contains(CONCEPT_MISC)
-    });
+    let n = agreed(
+        &f,
+        &query(is_concept("region", CONCEPT_MISC)),
+        |_t, r, _g| r.contains(CONCEPT_MISC),
+    );
     assert_eq!(
         n, 1,
         "Talk A matches on a field only the BASE carries, though an overlay \
@@ -570,13 +621,55 @@ fn an_and_across_fields_owned_by_different_layers_matches() {
         is_concept("region", CONCEPT_MISC), // the BASE owns region for Talk A
     ]));
 
-    let n = agreed(&f, &q, |t, r| {
+    let n = agreed(&f, &q, |t, r, _g| {
         t.contains(CONCEPT_UI) && r.contains(CONCEPT_MISC)
     });
     assert_eq!(
         n, 1,
         "Talk A satisfies both conjuncts in the composed view — one from each layer"
     );
+}
+
+/// **Cardinality-N is ADDITIVE, and "topmost defining layer wins" would be a
+/// second silent wrong answer.**
+///
+/// `tag` is a cardinality-n nodegroup. The base gives Talk A a tag tile carrying
+/// `MISC`; the overlay gives it a SEPARATE tag tile carrying `JS`. The merge never
+/// collapses cardinality-n tiles, so BOTH survive and the composed Talk A carries
+/// both tags — which is what the user sees.
+///
+/// A composed query must therefore find Talk A under EITHER. If it applied the
+/// override rule here — "the overlay defines `tag`, so ask only the overlay" — it
+/// would answer `tag = MISC` with a flat no, while the hydrated resource plainly
+/// shows MISC. Same class of bug as per-resource precedence, one level down: the
+/// composition rule has to be chosen by CARDINALITY, from the graph, which is the
+/// same source alizarin's merge reads it from.
+#[test]
+fn a_cardinality_n_field_accumulates_across_layers_rather_than_overriding() {
+    fixture!(f);
+
+    // What the user sees: both tags, one from each layer.
+    assert_eq!(
+        composed_concepts(&f, TALK_A, TAG_NG),
+        BTreeSet::from([CONCEPT_MISC.to_string(), CONCEPT_JS.to_string()]),
+        "precondition: cardinality-n keeps BOTH layers' tiles"
+    );
+
+    // The BASE's tag must still be findable, though the overlay also wrote a tag.
+    let n = agreed(&f, &query(is_concept("tag", CONCEPT_MISC)), |_t, _r, g| {
+        g.contains(CONCEPT_MISC)
+    });
+    assert_eq!(
+        n, 1,
+        "the base's tag survives the overlay writing to the same node — \
+         additive, not override"
+    );
+
+    // And the overlay's, obviously.
+    let n = agreed(&f, &query(is_concept("tag", CONCEPT_JS)), |_t, _r, g| {
+        g.contains(CONCEPT_JS)
+    });
+    assert_eq!(n, 1, "and so does the overlay's");
 }
 
 /// A null value is a RETRACTION, not silence. Talk D's overlay tile sets `topics`
@@ -628,7 +721,7 @@ fn a_resource_matching_in_two_layers_is_counted_once_and_base_only_matches_survi
         "base alone: Talk A, Talk C and Talk D"
     );
 
-    let n = agreed(&f, &query(is_concept("topics", CONCEPT_UI)), |t, _r| {
+    let n = agreed(&f, &query(is_concept("topics", CONCEPT_UI)), |t, _r, _g| {
         t.contains(CONCEPT_UI)
     });
     assert_eq!(
@@ -654,7 +747,7 @@ fn a_resource_the_overlay_flipped_out_of_the_filter_is_not_counted() {
         "the base, alone, really does still say Talk B is a JS talk"
     );
 
-    let n = agreed(&f, &query(is_concept("topics", CONCEPT_JS)), |t, _r| {
+    let n = agreed(&f, &query(is_concept("topics", CONCEPT_JS)), |t, _r, _g| {
         t.contains(CONCEPT_JS)
     });
     assert_eq!(n, 0, "but the composed view has no JS talks");
@@ -672,15 +765,19 @@ fn a_resource_the_overlay_flipped_out_of_the_filter_is_not_counted() {
 fn a_concept_the_overlay_dropped_from_a_field_it_owns_is_not_counted() {
     fixture!(f);
 
-    let n = agreed(&f, &query(is_concept("topics", CONCEPT_MISC)), |t, _r| {
-        t.contains(CONCEPT_MISC)
-    });
+    let n = agreed(
+        &f,
+        &query(is_concept("topics", CONCEPT_MISC)),
+        |t, _r, _g| t.contains(CONCEPT_MISC),
+    );
     assert_eq!(n, 0, "the overlay owns topics, and its topics have no MISC");
 
     // …while MISC on `region`, which the overlay does NOT own, still matches.
-    let n = agreed(&f, &query(is_concept("region", CONCEPT_MISC)), |_t, r| {
-        r.contains(CONCEPT_MISC)
-    });
+    let n = agreed(
+        &f,
+        &query(is_concept("region", CONCEPT_MISC)),
+        |_t, r, _g| r.contains(CONCEPT_MISC),
+    );
     assert_eq!(n, 1);
 }
 
@@ -720,7 +817,7 @@ fn a_hierarchical_filter_composes() {
     });
 
     // The parent spans UI and JS, but NOT misc.
-    let n = agreed(&f, &q, |t, _r| {
+    let n = agreed(&f, &q, |t, _r, _g| {
         t.contains(CONCEPT_UI) || t.contains(CONCEPT_JS)
     });
     assert_eq!(n, 3, "Talks A, B and C — D's topics were retracted");
@@ -786,13 +883,17 @@ fn the_head_records_which_nodes_each_layer_carries() {
 
     assert_eq!(
         nodes_for(&f.base_head, TALK_A),
-        BTreeSet::from([TOPICS_NG.to_string(), REGION_NG.to_string()]),
-        "the base carries both filterable fields of Talk A"
+        BTreeSet::from([
+            TOPICS_NG.to_string(),
+            REGION_NG.to_string(),
+            TAG_NG.to_string()
+        ]),
+        "the base carries all three filterable fields of Talk A"
     );
     assert_eq!(
         nodes_for(&f.overlay_head, TALK_A),
-        BTreeSet::from([TOPICS_NG.to_string()]),
-        "the overlay carries ONLY topics — it says nothing about region, and \
+        BTreeSet::from([TOPICS_NG.to_string(), TAG_NG.to_string()]),
+        "the overlay carries topics and tag — but says NOTHING about region, and \
          that silence is what the base's verdict survives on"
     );
     assert_eq!(

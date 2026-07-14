@@ -118,6 +118,19 @@ enum Plan {
     Not(Box<Plan>),
     Leaf {
         node_id: String,
+        /// Does this leaf's nodegroup **accumulate** across layers?
+        ///
+        /// Cardinality-1 is an OVERRIDE: the topmost layer that defines the node
+        /// replaces the value below it. Cardinality-n is ADDITIVE: the merge
+        /// leaves every layer's tiles standing, so the composed value set is the
+        /// UNION across layers — and a predicate matches if ANY layer's values
+        /// match, including a layer that some higher layer also wrote to.
+        ///
+        /// Two different rules, and using the override rule on an additive
+        /// nodegroup silently DROPS the lower layers' values, which the hydrator
+        /// is still showing. The cardinality comes from the graph, which is the
+        /// same place alizarin's merge reads it from — so the two cannot drift.
+        additive: bool,
         probe: CompiledStatement,
     },
 }
@@ -336,7 +349,11 @@ impl Layers {
                     ..query.clone()
                 };
                 let probe = compile_match_probe(&one, graph, registry).map_err(ReadError::Query)?;
-                Plan::Leaf { node_id, probe }
+                Plan::Leaf {
+                    additive: is_additive(graph, &node_id),
+                    node_id,
+                    probe,
+                }
             }
         })
     }
@@ -357,6 +374,24 @@ impl Layers {
     /// A leaf no layer defines is **false**: the resource has no value for that
     /// node, so it cannot match a predicate on it. (No probe is issued — the
     /// answer is already known.)
+    ///
+    /// # Override vs ADDITIVE — two rules, chosen by cardinality
+    ///
+    /// "Topmost defining layer wins" is the **cardinality-1** rule, and applying
+    /// it to a **cardinality-n** nodegroup would be a second silent wrong answer.
+    /// Cardinality-n tiles are never collapsed by the merge — every layer's tiles
+    /// survive — so the composed value set is the UNION across layers, and the
+    /// predicate matches if ANY layer's values match. Taking only the topmost
+    /// layer that happened to touch the node would DROP the base's values while
+    /// the hydrator went on showing them.
+    ///
+    /// So: cardinality-1 → the topmost layer that defines the node answers.
+    /// Cardinality-n → OR across every layer. `node_presence` is not even
+    /// consulted for the additive case: nothing is being overridden, so there is
+    /// nothing to be authoritative about. (And no retraction, either — an overlay
+    /// cannot delete a base tile from a multi-valued nodegroup. The format has no
+    /// tombstone, and the id space is what enforces it: cardinality-n ids are
+    /// unguessable, so a standalone layer can only ADD.)
     fn matches(
         &self,
         plan: &Plan,
@@ -382,7 +417,23 @@ impl Layers {
                 Ok(false)
             }
             Plan::Not(x) => Ok(!self.matches(x, uuid, model_layers, graph)?),
-            Plan::Leaf { node_id, probe } => {
+            // ADDITIVE (cardinality-n): the merge keeps every layer's tiles, so
+            // the composed values are the union. Match if ANY layer matches.
+            Plan::Leaf {
+                additive: true,
+                probe,
+                ..
+            } => {
+                for &i in model_layers.iter() {
+                    if self.probe(i, probe, uuid)? {
+                        return Ok(true);
+                    }
+                }
+                Ok(false)
+            }
+            // OVERRIDE (cardinality-1): the topmost layer that defines the node
+            // replaces what is below it, and is the only one asked.
+            Plan::Leaf { node_id, probe, .. } => {
                 for &i in model_layers.iter().rev() {
                     if self.defines_node(i, graph, uuid, node_id)? {
                         return self.probe(i, probe, uuid);
@@ -750,6 +801,27 @@ fn as_resource(uuid: &str, graph: &StaticGraph, tiles: Vec<StaticTile>) -> Stati
         scopes: None,
         tiles_loaded: Some(true),
     }
+}
+
+/// Does this node sit in a cardinality-n nodegroup — i.e. do layers ACCUMULATE
+/// values for it rather than override them?
+///
+/// Read from the graph, which is where `unify_cardinality_one_tiles` reads it
+/// too: the query's composition rule and the tile merge's composition rule are
+/// then the same rule, from the same source, and cannot drift apart.
+///
+/// An unknown node, or a node whose nodegroup the graph does not know, is treated
+/// as **not** additive. That is the safe default here: it falls back to the
+/// override rule, which consults `node_presence` and answers from exactly one
+/// layer. The alternative — assuming additive — would OR across layers and could
+/// resurrect a value a higher layer had overridden.
+fn is_additive(graph: &StaticGraph, node_id: &str) -> bool {
+    graph
+        .get_node_by_id(node_id)
+        .and_then(|n| n.nodegroup_id.as_deref())
+        .and_then(|ng| graph.get_nodegroup_by_id(ng))
+        .and_then(|ng| ng.cardinality.as_deref())
+        == Some("n")
 }
 
 fn bind(params: &[Param]) -> Vec<SqlValue> {
