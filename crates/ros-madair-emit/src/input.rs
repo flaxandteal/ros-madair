@@ -37,10 +37,7 @@ fn slugify(name: &str) -> String {
 }
 
 fn graph_name(raw: &serde_json::Value) -> String {
-    let obj = raw
-        .get("graph")
-        .and_then(|g| g.get(0))
-        .unwrap_or(raw);
+    let obj = raw.get("graph").and_then(|g| g.get(0)).unwrap_or(raw);
     match obj.get("name") {
         Some(serde_json::Value::String(s)) => s.clone(),
         Some(serde_json::Value::Object(m)) => m

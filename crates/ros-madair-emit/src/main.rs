@@ -121,8 +121,13 @@ fn main() -> ExitCode {
     // Register the CLM reference handler so the plain CLI path indexes
     // `reference` fields (core knows no `reference` — the handler does).
     let registry = ros_madair_emit::default_registry();
-    match ros_madair_emit::emit_with_options(&positional[0], &out_dir, &base_uri, &options, &registry)
-    {
+    match ros_madair_emit::emit_with_options(
+        &positional[0],
+        &out_dir,
+        &base_uri,
+        &options,
+        &registry,
+    ) {
         Ok(summary) => {
             println!("{}", serde_json::to_string_pretty(&summary).unwrap());
             ExitCode::SUCCESS

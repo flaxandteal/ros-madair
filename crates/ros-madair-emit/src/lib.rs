@@ -125,7 +125,13 @@ pub use ros_madair_handlers::default_registry;
 
 pub fn emit(data_dir: &str, out_dir: &str, base_uri: &str) -> Result<EmitSummary, EmitError> {
     let registry = default_registry();
-    emit_with_options(data_dir, out_dir, base_uri, &EmitOptions::default(), &registry)
+    emit_with_options(
+        data_dir,
+        out_dir,
+        base_uri,
+        &EmitOptions::default(),
+        &registry,
+    )
 }
 
 /// M1.5 tier splitting (model half): drop excluded models before field
@@ -225,7 +231,10 @@ pub fn emit_with_options(
     for spine_table in &spine_tables {
         head::create_spine_table(&conn, spine_table)?;
     }
-    let ctxs: Vec<head::ModelCtx> = models.iter().map(|m| head::ModelCtx::new(&m.graph)).collect();
+    let ctxs: Vec<head::ModelCtx> = models
+        .iter()
+        .map(|m| head::ModelCtx::new(&m.graph))
+        .collect();
     let by_graph: HashMap<&str, usize> = models
         .iter()
         .enumerate()
@@ -260,9 +269,7 @@ pub fn emit_with_options(
             }
         };
         for mut resource in parsed {
-            let Some(&idx) = by_graph
-                .get(resource.resourceinstance.graph_id.as_str())
-            else {
+            let Some(&idx) = by_graph.get(resource.resourceinstance.graph_id.as_str()) else {
                 continue;
             };
             // Tier nodegroup exclusion (single exclusion point, per P: the

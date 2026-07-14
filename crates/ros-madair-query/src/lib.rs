@@ -50,9 +50,12 @@ use alizarin_core::graph::{StaticGraph, StaticNode};
 /// (mirrors the emitted manifest's default `max_result_rows` budget).
 pub const DEFAULT_SELECT_LIMIT: u32 = 1000;
 
-/// The SQL table-name qualifier for a single-layer compile: none. Layered
-/// compiles ([`compile_layered_count`]) pass `"l0."`, `"l1."`, … so each arm
-/// resolves its tables — crucially its `dict` — inside its own layer.
+/// The SQL table-name qualifier: none. Every statement this crate compiles runs
+/// against ONE layer's schema, and resolves its tables — crucially its `dict` —
+/// inside it. Nothing here spans layers: composition is `ros_madair_read`'s job,
+/// and it composes RESULTS, never SQL. (A previous `compile_layered_count`
+/// ATTACHed the layers and UNIONed per-layer arms. It is gone: its precedence
+/// was per-RESOURCE, and the truth is per-NODE.)
 const MAIN: &str = "";
 
 // ---------------------------------------------------------------------------
@@ -165,8 +168,8 @@ pub enum QueryError {
     NegatedCoarsePredicate { path: String },
     /// `measures` was empty — nothing to compile.
     EmptyMeasures,
-    /// [`compile_layered_count`] was handed no layers. A layered count over
-    /// zero layers is not 0, it is a caller bug.
+    /// A layered operation was handed no layers. Over zero layers the answer is
+    /// not 0, it is a caller bug.
     NoLayers,
 }
 
@@ -358,9 +361,7 @@ pub fn compile_with_registry(
             )?),
             None => None,
         };
-        let where_clause = where_sql
-            .map(|w| format!(" WHERE {w}"))
-            .unwrap_or_default();
+        let where_clause = where_sql.map(|w| format!(" WHERE {w}")).unwrap_or_default();
         let sql = match measure {
             Measure::CountRecords => {
                 format!("SELECT COUNT(*) FROM {spine_table} s{where_clause}")
@@ -387,131 +388,6 @@ pub fn compile_with_registry(
 // ---------------------------------------------------------------------------
 // Layered composition (R1): one statement over several ATTACHed layers
 // ---------------------------------------------------------------------------
-
-/// Compile a **layered** `CountRecords` as one statement over several ATTACHed
-/// layer databases: the number of distinct resource UUIDs matching the filter
-/// in the **composed** view of `schemas` (ordered, base first).
-///
-/// # Why counts cannot be summed, and why they cannot be summed cleverly either
-///
-/// Layers do not share a dictionary — an overlay is emitted on-device, long
-/// after the base shipped — so the same URI has DIFFERENT `term_id`s in
-/// different layers and **nothing keyed on `term_id` may cross a layer
-/// boundary**. The only cross-layer identity is the UUID *string* in
-/// `dict.term`. Two consequences:
-///
-/// 1. `Σ COUNT(*)` double-counts any resource present in two layers.
-/// 2. The obvious repair — "each layer counts only the resources it
-///    *originates*, then sum" — is **wrong**, and quietly so. Origination is
-///    stable across layers but *match status is not*: a base resource with
-///    `type = Church` that an overlay overrides to `Chapel` is originated by
-///    the base, so the base counts it for `type = Church`, and the overlay does
-///    not (it originates nothing) — total wrongly includes it, though the
-///    composed view says Chapel. An overlay can flip a base resource *into* or
-///    *out of* a filter.
-///
-/// # Precedence (P13), stated
-///
-/// **The topmost layer that DEFINES a resource decides that resource's match
-/// status.** "Defines" = the resource has a row in that layer's spine. Later
-/// layers override earlier ones; a base verdict on a resource an overlay has
-/// redefined is stale and must be discarded, not unioned.
-///
-/// This is why every arm below carries a `NOT EXISTS` against the dictionaries
-/// of the layers *above* it — and note that that anti-join is on `dd.term =
-/// d.term`, a **string** comparison. It is the only kind of cross-layer join
-/// that exists in this design.
-///
-/// This semantics presumes the composition contract: **an overlay that carries
-/// a resource carries it in full** (a complete restatement of its tiles). A
-/// partial restatement would leave a base tile visible to hydration but
-/// invisible to the overlay's index, and the two would disagree.
-///
-/// # Shape
-///
-/// ```sql
-/// SELECT COUNT(DISTINCT uuid) FROM (
-///     SELECT d.term AS uuid FROM l0.spine_talk s
-///       JOIN l0.dict d ON d.term_id = s.term_id
-///      WHERE <F over l0>
-///        AND NOT EXISTS (SELECT 1 FROM l1.spine_talk ss
-///                          JOIN l1.dict dd ON dd.term_id = ss.term_id
-///                         WHERE dd.term = d.term)      -- redefined above
-///     UNION ALL
-///     SELECT d.term AS uuid FROM l1.spine_talk s
-///       JOIN l1.dict d ON d.term_id = s.term_id
-///      WHERE <F over l1>
-/// )
-/// ```
-///
-/// Each arm resolves its `dict`, `concept_tags` and `vocab` **within its own
-/// layer**: the identical predicate, independently interned. No `term_id`
-/// crosses a schema.
-///
-/// # Cost, honestly
-///
-/// Strictly more expensive than a single-layer count. The single-layer count
-/// fast paths — the `rollup_concept_counts` point lookup and the index-only
-/// `COUNT(DISTINCT rid)` — are **unusable in a layered count**: they return a
-/// number, and a number cannot be de-duplicated or precedence-filtered against
-/// another layer. Every arm here must therefore materialise its matching ids
-/// (the concept arms still ride the covering `idx_ct`, but N rows flow where
-/// one row would have). Cost is O(result size), not O(overlay size).
-///
-/// `ros_madair_read::Layers::count` therefore does **not** use this by default:
-/// it uses a base-count-plus-correction plan whose cost is O(overlay size). This
-/// statement exists as the SQL-side path (single connection, SQLite does the
-/// de-dup) and as the cross-check oracle. Note that ATTACH under browser
-/// wa-sqlite is unproven, which is the other reason it is not the only path.
-pub fn compile_layered_count(
-    query: &Query,
-    graph: &StaticGraph,
-    registry: Option<&ExtensionTypeRegistry>,
-    schemas: &[&str],
-) -> Result<CompiledStatement, QueryError> {
-    let slug = check_model(&query.model, graph)?;
-    if schemas.is_empty() {
-        return Err(QueryError::NoLayers);
-    }
-    let spine_table = format!("spine_{}", slug.replace('-', "_"));
-    let resolver = PathResolver::new(graph);
-
-    let mut params = ParamBuilder::default();
-    let mut coarse = false;
-    let mut arms = Vec::with_capacity(schemas.len());
-    for (i, schema) in schemas.iter().enumerate() {
-        let ids = ids_subquery(
-            &query.r#where,
-            &resolver,
-            &mut params,
-            &format!("{schema}."),
-            &spine_table,
-            &mut coarse,
-            registry,
-        )?;
-        // P13: discard this layer's verdict on any resource a HIGHER layer
-        // redefines. String anti-join — the only legal cross-layer link.
-        let mut arm = ids;
-        for above in &schemas[i + 1..] {
-            arm.push_str(&format!(
-                " AND NOT EXISTS (SELECT 1 FROM {above}.{spine_table} ss \
-                 JOIN {above}.dict dd ON dd.term_id = ss.term_id \
-                 WHERE dd.term = d.term)"
-            ));
-        }
-        arms.push(arm);
-    }
-    Ok(CompiledStatement {
-        measure: Measure::CountRecords,
-        sql: format!(
-            "SELECT COUNT(DISTINCT uuid) FROM ({})",
-            arms.join(" UNION ALL ")
-        ),
-        params: params.params,
-        coarse,
-    })
-}
-
 /// Compile a **match probe**: "does resource `?N` match this filter, *in this
 /// one layer*?" — `SELECT EXISTS(…)`, answering 0 or 1.
 ///
@@ -526,6 +402,45 @@ pub fn compile_layered_count(
 /// only. The SQL carries ONE further placeholder, `?{params.len()+1}`, for the
 /// resource UUID; bind `params ++ [uuid]` per probe and re-use the prepared
 /// statement across probes.
+/// The node id a **leaf** predicate reads — `None` for the boolean connectives.
+///
+/// Layer composition needs this and cannot get it any other way. Precedence
+/// between layers is per **NODE**, because the tile merge is per key: an overlay
+/// that restates a nodegroup but omits one of its nodes leaves the lower layer's
+/// value for that node standing. So to evaluate a leaf in the composed view, the
+/// composer must know *which node the leaf reads* in order to find the topmost
+/// layer that defines it — and only this crate knows how a `path` resolves.
+///
+/// It is deliberately per-leaf rather than per-query: two leaves of one filter
+/// routinely read nodes owned by *different* layers, which is exactly the case a
+/// per-resource precedence rule gets wrong.
+pub fn leaf_node_id(
+    expr: &Expr,
+    graph: &StaticGraph,
+    registry: Option<&ExtensionTypeRegistry>,
+) -> Result<Option<String>, QueryError> {
+    let resolver = PathResolver::new(graph);
+    Ok(match expr {
+        Expr::Concept { path, .. } => Some(
+            resolve_concept_node(path, &resolver, registry)?
+                .nodeid
+                .clone(),
+        ),
+        Expr::HasLink { path, .. } => {
+            let node = resolver.resolve(path)?;
+            if is_concept_class(node, registry) {
+                return Err(QueryError::DatatypeMismatch {
+                    path: path.clone(),
+                    expected: "resource-instance".to_string(),
+                    datatype: node.datatype.clone(),
+                });
+            }
+            Some(node.nodeid.clone())
+        }
+        Expr::All(_) | Expr::Any(_) | Expr::Not(_) => None,
+    })
+}
+
 pub fn compile_match_probe(
     query: &Query,
     graph: &StaticGraph,
@@ -563,63 +478,6 @@ pub fn compile_match_probe(
         params: params.params,
         coarse,
     })
-}
-
-/// One layer's matching-UUID subquery: `SELECT d.term AS uuid FROM …` with no
-/// `ORDER BY` and no `LIMIT` (the caller is counting a composed set; a per-arm
-/// limit would silently truncate it). Takes the concept fast paths where the
-/// shape allows, so the arm is still an index-only scan of `concept_tags`.
-///
-/// Always exposes the spine alias `s` and the dict alias `d`, because the
-/// caller appends `NOT EXISTS (… WHERE dd.term = d.term)` precedence clauses.
-/// The `DescendantOrSelfOf` arm can repeat a uuid (one rid can carry several
-/// descendant concepts); `COUNT(DISTINCT uuid)` absorbs that.
-fn ids_subquery(
-    where_expr: &Option<Expr>,
-    resolver: &PathResolver,
-    params: &mut ParamBuilder,
-    schema: &str,
-    spine_table: &str,
-    coarse: &mut bool,
-    registry: Option<&ExtensionTypeRegistry>,
-) -> Result<String, QueryError> {
-    if let Some(Expr::Concept { path, op, value }) = where_expr {
-        let node = resolve_concept_node(path, resolver, registry)?;
-        let node_p = params.text(&node.nodeid);
-        let value_p = params.text(value);
-        return Ok(match op {
-            ConceptOp::Is => format!(
-                "SELECT d.term AS uuid FROM {schema}concept_tags ct \
-                 JOIN {schema}{spine_table} s ON s.rid = ct.rid \
-                 JOIN {schema}dict d ON d.term_id = s.term_id \
-                 WHERE ct.node = (SELECT term_id FROM {schema}dict WHERE term = {node_p}) \
-                 AND ct.concept = (SELECT term_id FROM {schema}dict WHERE term = {value_p})"
-            ),
-            ConceptOp::DescendantOrSelfOf => format!(
-                "SELECT d.term AS uuid FROM {schema}concept_tags ct \
-                 JOIN {schema}{spine_table} s ON s.rid = ct.rid \
-                 JOIN {schema}dict d ON d.term_id = s.term_id \
-                 WHERE ct.node = (SELECT term_id FROM {schema}dict WHERE term = {node_p}) \
-                 AND ct.concept BETWEEN \
-                 (SELECT vv.dfs_enter FROM {schema}vocab vv \
-                  JOIN {schema}dict dd ON dd.term_id = vv.concept WHERE dd.term = {value_p}) \
-                 AND \
-                 (SELECT vv.dfs_leave FROM {schema}vocab vv \
-                  JOIN {schema}dict dd ON dd.term_id = vv.concept WHERE dd.term = {value_p})"
-            ),
-        });
-    }
-    let where_clause = match where_expr {
-        Some(expr) => format!(
-            " WHERE {}",
-            compile_expr(expr, resolver, params, schema, coarse, registry)?
-        ),
-        None => " WHERE 1=1".to_string(),
-    };
-    Ok(format!(
-        "SELECT d.term AS uuid FROM {schema}{spine_table} s \
-         JOIN {schema}dict d ON d.term_id = s.term_id{where_clause}"
-    ))
 }
 
 // ---------------------------------------------------------------------------
@@ -750,7 +608,11 @@ fn closest(target: &str, candidates: &[&str]) -> Vec<String> {
         .collect();
     ranked.sort_by(|a, b| a.1.cmp(&b.1).then_with(|| a.0.cmp(b.0)));
     ranked.dedup_by(|a, b| a.0 == b.0);
-    ranked.into_iter().take(3).map(|(c, _)| c.to_string()).collect()
+    ranked
+        .into_iter()
+        .take(3)
+        .map(|(c, _)| c.to_string())
+        .collect()
 }
 
 fn levenshtein(a: &str, b: &str) -> usize {
@@ -783,7 +645,10 @@ fn node_config_value(node: &StaticNode) -> Option<serde_json::Value> {
         return None;
     }
     Some(serde_json::Value::Object(
-        node.config.iter().map(|(k, v)| (k.clone(), v.clone())).collect(),
+        node.config
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect(),
     ))
 }
 
@@ -1370,8 +1235,12 @@ mod tests {
              JOIN spine_group s ON s.rid = ct.rid \
              JOIN dict d ON d.term_id = s.term_id WHERE "
         ));
-        assert!(stmt.sql.contains("ct.node = (SELECT term_id FROM dict WHERE term = ?1)"));
-        assert!(stmt.sql.contains("ct.concept = (SELECT term_id FROM dict WHERE term = ?2)"));
+        assert!(stmt
+            .sql
+            .contains("ct.node = (SELECT term_id FROM dict WHERE term = ?1)"));
+        assert!(stmt
+            .sql
+            .contains("ct.concept = (SELECT term_id FROM dict WHERE term = ?2)"));
         assert!(stmt.sql.ends_with("ORDER BY ct.rid LIMIT ?3"));
         assert!(!stmt.sql.contains("EXISTS"));
         assert_eq!(stmt.params[2], Param::Int(25));
@@ -1404,7 +1273,10 @@ mod tests {
     fn one_statement_per_measure_with_independent_params() {
         let graph = load_group_graph();
         let stmts = compile(
-            &concept_query(ConceptOp::Is, vec![Measure::CountRecords, Measure::SelectIds]),
+            &concept_query(
+                ConceptOp::Is,
+                vec![Measure::CountRecords, Measure::SelectIds],
+            ),
             &graph,
         )
         .expect("should compile");
@@ -1440,7 +1312,10 @@ mod tests {
                 assert_eq!(path, "group_typ");
                 assert_eq!(component, "group_typ");
                 assert!(siblings.len() <= 3 && !siblings.is_empty());
-                assert_eq!(siblings[0], "group_type", "closest alias first: {siblings:?}");
+                assert_eq!(
+                    siblings[0], "group_type",
+                    "closest alias first: {siblings:?}"
+                );
             }
             other => panic!("expected UnknownPath, got {other:?}"),
         }
@@ -1470,8 +1345,12 @@ mod tests {
                 assert_eq!(component, "nam");
                 // Siblings are basic_info's children (name, image, source).
                 assert_eq!(siblings[0], "name");
-                assert!(siblings.iter().all(|s| ["name", "image", "source"].contains(&s.as_str())),
-                    "siblings restricted to the failing level: {siblings:?}");
+                assert!(
+                    siblings
+                        .iter()
+                        .all(|s| ["name", "image", "source"].contains(&s.as_str())),
+                    "siblings restricted to the failing level: {siblings:?}"
+                );
             }
             other => panic!("expected UnknownPath, got {other:?}"),
         }
@@ -1541,9 +1420,13 @@ mod tests {
         let stmts = compile(&query, &graph).expect("should compile");
         let stmt = &stmts[0];
         assert!(stmt.coarse, "link predicates are chunk-coarse");
-        assert!(stmt.sql.contains("JOIN chunk_link_summary cls ON cls.chunk = fd.chunk"));
+        assert!(stmt
+            .sql
+            .contains("JOIN chunk_link_summary cls ON cls.chunk = fd.chunk"));
         assert!(stmt.sql.contains("fd.rid = s.rid"));
-        assert!(stmt.sql.contains("BETWEEN cls.min_target AND cls.max_target"));
+        assert!(stmt
+            .sql
+            .contains("BETWEEN cls.min_target AND cls.max_target"));
         // has_link on a concept node is a mismatch the other way.
         let bad = Query {
             r#where: Some(Expr::HasLink {
@@ -1639,12 +1522,18 @@ mod tests {
             "limit": 10
         });
         let query: Query = serde_json::from_value(json.clone()).expect("IR deserializes");
-        assert_eq!(query.measures, vec![Measure::CountRecords, Measure::SelectIds]);
+        assert_eq!(
+            query.measures,
+            vec![Measure::CountRecords, Measure::SelectIds]
+        );
         match query.r#where.as_ref().unwrap() {
             Expr::All(exprs) => {
                 assert!(matches!(
                     &exprs[0],
-                    Expr::Concept { op: ConceptOp::DescendantOrSelfOf, .. }
+                    Expr::Concept {
+                        op: ConceptOp::DescendantOrSelfOf,
+                        ..
+                    }
                 ));
                 assert!(matches!(&exprs[1], Expr::HasLink { target: None, .. }));
             }
@@ -1680,8 +1569,14 @@ mod tests {
         assert_eq!(stmts[0].sql, "SELECT COUNT(*) FROM spine_group s");
         assert!(stmts[0].params.is_empty());
 
-        let empty = Query { measures: vec![], ..query };
-        assert_eq!(compile(&empty, &graph).unwrap_err(), QueryError::EmptyMeasures);
+        let empty = Query {
+            measures: vec![],
+            ..query
+        };
+        assert_eq!(
+            compile(&empty, &graph).unwrap_err(),
+            QueryError::EmptyMeasures
+        );
     }
 
     // --- Extension-datatype routing (proves the capability seam) ---------

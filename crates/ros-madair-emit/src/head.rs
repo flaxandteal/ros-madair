@@ -13,8 +13,8 @@ use rusqlite::{Connection, Transaction};
 
 use crate::chunks::ChunkSink;
 use crate::closure::Closure;
-use ros_madair_format::FieldEntry;
 use crate::{EmitError, FieldClassError};
+use ros_madair_format::FieldEntry;
 
 // ---------------------------------------------------------------------------
 // Dictionary interning (dictionary.bin minus the parser — P0-corollary)
@@ -106,9 +106,7 @@ pub(crate) fn preintern_concepts(
 /// and extension handlers expect), or `None` when the node has no config.
 /// This is what lets a handler (e.g. the CLM reference handler) resolve its
 /// own collection — the emitter never inspects config keys directly.
-fn node_config_value(
-    config: &HashMap<String, serde_json::Value>,
-) -> Option<serde_json::Value> {
+fn node_config_value(config: &HashMap<String, serde_json::Value>) -> Option<serde_json::Value> {
     if config.is_empty() {
         return None;
     }
@@ -139,6 +137,34 @@ pub(crate) fn create_schema(conn: &Connection) -> Result<(), EmitError> {
          CREATE TABLE concept_tags (rid INTEGER NOT NULL,
              node INTEGER NOT NULL, concept INTEGER NOT NULL,
              UNIQUE(rid, node, concept));
+         -- Which FILTERABLE nodes this layer actually carries a value for,
+         -- per resource. Layers are PARTIAL, and precedence between them is
+         -- per-NODE, because the tile merge is per-key: an overlay that
+         -- restates a nodegroup but omits one node leaves the lower layer
+         -- value for that node standing. Without this table a composed query
+         -- cannot tell a layer saying NO from a layer not saying anything,
+         -- and the two have opposite meanings.
+         --
+         -- A row exists even when the value is NULL. A null IS an answer: the
+         -- merge sees the key as present and lets it win, so a null is how a
+         -- layer RETRACTS a lower layer value. Recording only non-nulls would
+         -- make a retraction indistinguishable from silence.
+         --
+         -- Only FILTERABLE (concept/link) nodes: they are the only ones a query
+         -- can name. Text, numbers, dates and geometry never appear here, so
+         -- this is one row per (resource, filterable node) — the same order as
+         -- concept_tags, not the same order as the tiles. (It is NOT strictly
+         -- smaller than concept_tags: that table has a row per CONCEPT, this one
+         -- a row per NODE, and it also covers link nodes, which concept_tags
+         -- does not. On the demo corpus: 9 rows here to 3 there.)
+         --
+         -- COST NOTE, unbuilt: the BOTTOM layer's rows are never read. Presence
+         -- answers only add they define this above me?, and nothing sits above
+         -- the base. On a large shipped base this table is dead weight, and an
+         -- emit that knew its layer position could skip it.
+         CREATE TABLE node_presence (rid INTEGER NOT NULL,
+             node INTEGER NOT NULL,
+             PRIMARY KEY (rid, node)) WITHOUT ROWID;
          CREATE TABLE fragment_dir (rid INTEGER NOT NULL,
              nodegroup INTEGER NOT NULL, chunk INTEGER NOT NULL,
              tile_count INTEGER NOT NULL);
@@ -180,7 +206,9 @@ pub(crate) fn field_plan(
     let mut fields: BTreeMap<String, FieldEntry> = BTreeMap::new();
     let mut detail_only: HashSet<String> = HashSet::new();
     for node in graph.nodes_slice() {
-        let Some(alias) = node.alias.clone() else { continue };
+        let Some(alias) = node.alias.clone() else {
+            continue;
+        };
         if node.nodegroup_id.is_none() {
             continue;
         }
@@ -324,8 +352,8 @@ pub(crate) fn process_resource(
         "INSERT OR REPLACE INTO {spine_table} (rid, term_id, display_name)
              VALUES (?1, ?2, ?3)"
     ))?;
-    let mut stmt_ct =
-        tx.prepare_cached("INSERT OR IGNORE INTO concept_tags VALUES (?1,?2,?3)")?;
+    let mut stmt_ct = tx.prepare_cached("INSERT OR IGNORE INTO concept_tags VALUES (?1,?2,?3)")?;
+    let mut stmt_np = tx.prepare_cached("INSERT OR IGNORE INTO node_presence VALUES (?1,?2)")?;
 
     let res_id = resource.resourceinstance.resourceinstanceid.clone();
     let rid = *next_rid;
@@ -342,9 +370,6 @@ pub(crate) fn process_resource(
         let mut data: Vec<(&String, &serde_json::Value)> = tile.data.iter().collect();
         data.sort_by_key(|(k, _)| k.as_str());
         for (node_id, value) in data {
-            if value.is_null() {
-                continue;
-            }
             let dt = ctx
                 .node_datatype
                 .get(node_id.as_str())
@@ -365,12 +390,29 @@ pub(crate) fn process_resource(
             // returned keys and picks the head table per IndexClass.
             let cfg = ctx.node_config.get(node_id.as_str());
             let spec = datatype_index_spec(dt, value, cfg, Some(registry));
+
+            // PRESENCE, before the null check. The node is filterable and this
+            // layer carries a value for it — even if that value is null, which
+            // is not silence but a RETRACTION: the tile merge sees the key as
+            // present and lets it win over a lower layer's. A composed query
+            // that could not see the null would keep answering from the layer
+            // underneath, and disagree with what the user is looking at.
+            //
+            // (`spec.class` is datatype-driven, so it is meaningful for a null
+            // value; `spec.keys` is simply empty, which is the point.)
+            if !matches!(spec.class, IndexClass::DetailOnly) {
+                let node_int = interner.intern(node_id);
+                stmt_np.execute((rid, node_int))?;
+            }
+            if value.is_null() {
+                continue;
+            }
+
             match spec.class {
                 IndexClass::ConceptHierarchical { .. } => {
                     let node_int = interner.intern(node_id);
                     for vid in spec.keys {
-                        let concept_id =
-                            closure.value_map.get(&vid).cloned().unwrap_or(vid);
+                        let concept_id = closure.value_map.get(&vid).cloned().unwrap_or(vid);
                         // Concepts were pre-interned in DFS order, so this id
                         // sits inside its subtree's [dfs_enter, dfs_leave]
                         // interval — no ancestor expansion needed (P10).
@@ -407,6 +449,7 @@ pub(crate) fn process_resource(
     // does not touch the connection, but keep the borrow scope tight).
     drop(stmt_spine);
     drop(stmt_ct);
+    drop(stmt_np);
     sink.add_resource_tiles(rid, tiles, interner)?;
     Ok(())
 }
@@ -421,8 +464,7 @@ pub(crate) fn insert_bulk(
 ) -> Result<(), EmitError> {
     let tx = conn.transaction()?;
     {
-        let mut stmt =
-            tx.prepare_cached("INSERT INTO dict (term_id, term) VALUES (?1, ?2)")?;
+        let mut stmt = tx.prepare_cached("INSERT INTO dict (term_id, term) VALUES (?1, ?2)")?;
         let mut terms: Vec<(&String, &i64)> = interner.map.iter().collect();
         terms.sort_by_key(|(_, id)| **id);
         for (term, id) in terms {
@@ -434,23 +476,20 @@ pub(crate) fn insert_bulk(
         for row in vocab_rows {
             stmt.execute(*row)?;
         }
-        let mut stmt =
-            tx.prepare_cached("INSERT INTO chunks (chunk, hash) VALUES (?1, ?2)")?;
+        let mut stmt = tx.prepare_cached("INSERT INTO chunks (chunk, hash) VALUES (?1, ?2)")?;
         for (chunk, hash) in &sink.chunk_rows {
             stmt.execute((chunk, hash))?;
         }
-        let mut stmt =
-            tx.prepare_cached("INSERT INTO chunk_summary VALUES (?1,?2,?3,?4,?5)")?;
+        let mut stmt = tx.prepare_cached("INSERT INTO chunk_summary VALUES (?1,?2,?3,?4,?5)")?;
         for row in &sink.summary_rows {
             stmt.execute(*row)?;
         }
-        let mut stmt = tx
-            .prepare_cached("INSERT INTO chunk_link_summary VALUES (?1,?2,?3,?4,?5)")?;
+        let mut stmt =
+            tx.prepare_cached("INSERT INTO chunk_link_summary VALUES (?1,?2,?3,?4,?5)")?;
         for row in &sink.link_summary_rows {
             stmt.execute(*row)?;
         }
-        let mut stmt =
-            tx.prepare_cached("INSERT INTO fragment_dir VALUES (?1,?2,?3,?4)")?;
+        let mut stmt = tx.prepare_cached("INSERT INTO fragment_dir VALUES (?1,?2,?3,?4)")?;
         for row in &sink.fragment_rows {
             stmt.execute(*row)?;
         }

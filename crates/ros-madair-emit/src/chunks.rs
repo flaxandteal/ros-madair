@@ -115,10 +115,7 @@ impl ChunkSink {
         let chunk_id = if let Some(&id) = self.chunk_by_hash.get(&hash) {
             id
         } else {
-            fs::write(
-                self.chunks_dir.join(format!("{hash}.msgpack")),
-                &bytes,
-            )?;
+            fs::write(self.chunks_dir.join(format!("{hash}.msgpack")), &bytes)?;
             let id = self.chunk_by_hash.len() as i64 + 1;
             self.chunk_by_hash.insert(hash.clone(), id);
             self.chunk_rows.push((id, hash));

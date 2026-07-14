@@ -43,9 +43,14 @@ fn main() -> ExitCode {
     }
 }
 
-fn run(graph_path: &str, query_arg: &str, head_path: &str) -> Result<ExitCode, Box<dyn std::error::Error>> {
+fn run(
+    graph_path: &str,
+    query_arg: &str,
+    head_path: &str,
+) -> Result<ExitCode, Box<dyn std::error::Error>> {
     // Load graph: {"graph": [...]} export; first graph in the array.
-    let graph_json: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(graph_path)?)?;
+    let graph_json: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(graph_path)?)?;
     let graph_value = graph_json
         .get("graph")
         .and_then(|g| g.get(0))
@@ -94,11 +99,10 @@ fn run(graph_path: &str, query_arg: &str, head_path: &str) -> Result<ExitCode, B
         let started = Instant::now();
         let result = match stmt.measure {
             Measure::CountRecords => {
-                let count: i64 = conn.query_row(
-                    &stmt.sql,
-                    rusqlite::params_from_iter(bound.iter()),
-                    |row| row.get(0),
-                )?;
+                let count: i64 =
+                    conn.query_row(&stmt.sql, rusqlite::params_from_iter(bound.iter()), |row| {
+                        row.get(0)
+                    })?;
                 serde_json::json!(count)
             }
             Measure::SelectIds => {

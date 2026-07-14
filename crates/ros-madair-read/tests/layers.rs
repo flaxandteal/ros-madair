@@ -2,39 +2,48 @@
 //! **Multi-layer composition (R1), end to end.** Two REAL snapshots, emitted by
 //! the real emitter from two real corpora, read back as one composed view.
 //!
-//! No hand-built head, and no hand-built expectations: every number here is
-//! cross-checked against [`Layers::count_by_union`], which computes the same
-//! answer the slow, obvious way (resolve the composed id set, take its size).
-//! The union is the ORACLE — it is the definition of the answer — and
-//! `Layers::count` is an optimisation of it. If they ever disagree, the
-//! optimisation is wrong.
+//! # The oracle
+//!
+//! Every count is cross-checked against what the user would actually SEE: the
+//! filter, evaluated against the **composed hydrated tiles**. That oracle shares
+//! no code with the head, the index, or the query compiler — it merges tiles and
+//! reads values. **Query and hydration agreeing is the whole invariant**, and it
+//! is precisely what per-resource precedence broke.
 //!
 //! # The corpus, and why it is shaped like this
 //!
-//! The demo Talk model has one concept-list node (`topics`) and every nodegroup
-//! is cardinality-1, which is precisely the interesting case.
+//! The demo Talk model has one concept node (`topics`). The tests add a second,
+//! `region`, to their own copy of the model — because the decisive case needs a
+//! field that **only the base carries**, on a resource the overlay **does**
+//! carry, and one filterable field cannot express it.
 //!
-//! | resource | BASE topics | OVERLAY topics |
+//! | resource | BASE | OVERLAY |
 //! |---|---|---|
-//! | Talk A (`3 W's of UI`) | `UI`, `MISC` | `UI` — **drops MISC** |
-//! | Talk B (`Javascript…`) | `JS` | `UI` — **flipped out of JS, into UI** |
-//! | Talk C (synthetic) | `UI` | *(absent — the overlay never mentions it)* |
+//! | Talk A | topics `UI`,`MISC` · region `MISC` · title | topics `UI` — *no region, no title* |
+//! | Talk B | topics `JS` · title | topics `UI` — **flipped out of JS** |
+//! | Talk C | topics `UI` · title | *(absent)* |
+//! | Talk D | topics `UI` · title | topics `null` — **retracted** |
 //!
-//! That single overlay exercises all three ways a naive composition breaks:
+//! This breaks every naive composition:
 //!
-//! 1. **Double counting.** Talk A matches `UI` in BOTH layers. `Σ per-layer
-//!    count` says 4 for `UI`; the truth is 3.
-//! 2. **Flipping OUT.** Talk B matched `JS` in the base and no longer does. A
-//!    union of per-layer matches would keep counting it forever. The truth is 0
-//!    — and the base, alone, still says 1. Same for Talk A and `MISC`.
-//! 3. **The base's verdict SURVIVING.** Talk C is not redefined by the overlay,
-//!    so the base remains authoritative for it. A composition that only trusted
-//!    the topmost layer would lose it.
-//!
-//! The overlay restates only the `topics` tile — not `title`, not `abstract`.
-//! **Layers are partial**, and its topics tiles carry FRESH, Arches-style
-//! tileids that collide with nothing. Composition must still override.
+//! 1. **Double counting** — Talk A matches `UI` in BOTH layers. `Σ per-layer
+//!    count` says 4; the truth is 3.
+//! 2. **Flipping OUT** — the base says Talk B is a `JS` talk and the overlay says
+//!    it is not. A union of per-layer matches counts it forever.
+//! 3. **The base's verdict SURVIVING** — Talk C is untouched, so the base stays
+//!    authoritative for it.
+//! 4. **PARTIAL layers (the bug this fixes)** — the overlay carries Talk A but
+//!    says NOTHING about its `region`. Under per-RESOURCE precedence the overlay
+//!    became authoritative for every field of Talk A, so `region = MISC` answered
+//!    "no" and the base's correct verdict was discarded. Worse, an `all` across
+//!    `topics` (overlay) and `region` (base) matched in NEITHER layer, though the
+//!    composed resource on screen satisfies both.
+//! 5. **RETRACTION** — Talk D's overlay tile sets `topics` to null. A null is not
+//!    silence: the merge sees the key and lets it win. If `node_presence` did not
+//!    record nulls, the composed query would fall through to the base and keep
+//!    matching a topic the user can no longer see.
 
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use alizarin_core::graph::StaticGraph;
@@ -45,16 +54,24 @@ use serde_json::json;
 const DEMO_DATA: &str = "/home/philtweir/Cód/Oscailte/magic/Clódóir/data";
 
 const TALK_GRAPH: &str = "a6c412db-72e0-4099-a690-ccc75ba841a9";
+const TALK_ROOT: &str = "5a037559-1ae0-11f0-b22a-8fd6f4eb1a02";
 const TOPICS_NG: &str = "3784d67d-1ae9-11f0-86d0-a32be8fb5c91";
 const TITLE_NG: &str = "7d8e443d-1ae0-11f0-8c5c-8fd6f4eb1a02";
+/// A SECOND concept node, added by these tests to their copy of the Talk model.
+/// The decisive partial-layer case needs a field only the base carries.
+const REGION_NG: &str = "5e910000-0000-4000-8000-000000000001";
+/// The collection `topics` draws on; `region` reuses it, so the same vocabulary
+/// (and the same DFS intervals) serve both.
+const RDM_COLLECTION: &str = "10f1b99b-80c8-49a6-b825-440d8d2ced37";
 
 const TALK_A: &str = "179b8583-3140-437e-bd0b-34d5aa2f1550";
 const TALK_B: &str = "97cc9a1b-ee42-412e-9fa5-203d98bff815";
 const TALK_C: &str = "0d1e2f3a-4b5c-6d7e-8f90-a1b2c3d4e5f6";
+const TALK_D: &str = "0d1e2f3a-4b5c-6d7e-8f90-a1b2c3d4e5f7";
 
 // A `concept-list` tile stores concept *value* ids; the emitter resolves them
-// through SKOS to *concept* ids, and it is the CONCEPT id a filter names. Two
-// different id spaces, and mixing them yields a silent zero.
+// through SKOS to *concept* ids, and it is the CONCEPT id a filter names. Two id
+// spaces, and mixing them yields a silent zero.
 const VALUE_UI: &str = "f71cff66-5421-4420-b06e-397376eb2f56";
 const VALUE_MISC: &str = "152fe3a0-f1de-43e4-9897-026587cee523";
 const VALUE_JS: &str = "08d28d3b-9c92-4004-b7ee-ed131a348e92";
@@ -62,8 +79,18 @@ const VALUE_JS: &str = "08d28d3b-9c92-4004-b7ee-ed131a348e92";
 const CONCEPT_UI: &str = "7c3226cf-4d13-41b4-8a9d-7c26a058fd44";
 const CONCEPT_MISC: &str = "de87aac2-8560-4609-9f54-5e27c990f9ce";
 const CONCEPT_JS: &str = "3cce47ca-eaec-4718-aca4-ba55902466c6";
-/// Ancestor of both `CONCEPT_UI` and `CONCEPT_JS` in the vocab's DFS interval.
+/// Ancestor of `CONCEPT_UI` and `CONCEPT_JS` in the vocab's DFS interval — but
+/// NOT of `CONCEPT_MISC`, which hangs off a different parent.
 const CONCEPT_PARENT: &str = "d6435de5-acdb-4ef3-8181-0bd035e5d5c6";
+
+fn concept_of(value: &str) -> &'static str {
+    match value {
+        VALUE_UI => CONCEPT_UI,
+        VALUE_MISC => CONCEPT_MISC,
+        VALUE_JS => CONCEPT_JS,
+        other => panic!("unmapped concept value {other}"),
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Fixture construction
@@ -103,18 +130,58 @@ fn scratch(tag: &str) -> PathBuf {
     dir
 }
 
-/// One tile of a `concept-list` node. `tileid` is caller-chosen precisely so the
-/// overlay can mint a FRESH one — an on-device edit that recreates a tile does
-/// not know the base's tileid, and composition must not depend on it.
-fn topics_tile(resource: &str, tileid: &str, values: &[&str]) -> serde_json::Value {
+/// Add the `region` concept node to the corpus's copy of the Talk model: a clone
+/// of `topics` (same datatype, same collection) in its own cardinality-1
+/// nodegroup, hung off the same root.
+fn add_region_node(graph_path: &Path) {
+    let mut doc: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(graph_path).unwrap()).unwrap();
+    let g = &mut doc["graph"][0];
+    g["nodes"].as_array_mut().unwrap().push(json!({
+        "nodeid": REGION_NG,
+        "nodegroup_id": REGION_NG,
+        "name": "Region",
+        "alias": "region",
+        "datatype": "concept-list",
+        "config": { "rdmCollection": RDM_COLLECTION },
+        "graph_id": TALK_GRAPH,
+        "istopnode": false,
+        "is_collector": true,
+        "isrequired": false,
+        "issearchable": true,
+        "exportable": false,
+        "sortorder": 0,
+    }));
+    g["nodegroups"].as_array_mut().unwrap().push(json!({
+        "nodegroupid": REGION_NG,
+        "cardinality": "1",
+        "parentnodegroup_id": null,
+    }));
+    g["edges"].as_array_mut().unwrap().push(json!({
+        "edgeid": "5e910000-0000-4000-8000-0000000000ee",
+        "domainnode_id": TALK_ROOT,
+        "rangenode_id": REGION_NG,
+        "graph_id": TALK_GRAPH,
+    }));
+    std::fs::write(graph_path, serde_json::to_vec_pretty(&doc).unwrap()).unwrap();
+}
+
+fn concept_tile(
+    resource: &str,
+    tileid: &str,
+    ng: &str,
+    values: Option<&[&str]>,
+) -> serde_json::Value {
     json!({
         "tileid": tileid,
-        "nodegroup_id": TOPICS_NG,
+        "nodegroup_id": ng,
         "parenttile_id": null,
         "resourceinstance_id": resource,
         "sortorder": 0,
         "provisionaledits": null,
-        "data": { TOPICS_NG: values },
+        // `None` writes an explicit NULL: the key is present, the value is not.
+        // That is a RETRACTION, and it must not read as silence.
+        "data": { ng: values },
     })
 }
 
@@ -143,8 +210,6 @@ fn resource(id: &str, name: &str, tiles: Vec<serde_json::Value>) -> serde_json::
     })
 }
 
-/// Write a corpus: the demo's graphs + vocabularies (so the Talk model and the
-/// SKOS hierarchy are real), with a Talk business-data file of our own.
 fn corpus(
     tag: &str,
     demo: &Path,
@@ -154,8 +219,8 @@ fn corpus(
     let dir = scratch(tag);
     copy_dir(&demo.join("graphs"), &dir.join("graphs"));
     copy_dir(&demo.join("vocabularies"), &dir.join("vocabularies"));
+    add_region_node(&dir.join("graphs").join(format!("{TALK_GRAPH}.json")));
     if keep_other_models {
-        // The base is a whole corpus; the overlay is deliberately Talk-only.
         copy_dir(&demo.join("resources"), &dir.join("resources"));
     }
     let talk_dir = dir.join("resources").join("talk");
@@ -180,7 +245,6 @@ fn emit(tag: &str, data: &Path) -> PathBuf {
     out
 }
 
-/// The base: Talk A (`UI` + `MISC`), Talk B (`JS`), Talk C (`UI`).
 fn base_corpus(demo: &Path) -> PathBuf {
     corpus(
         "base",
@@ -195,10 +259,18 @@ fn base_corpus(demo: &Path) -> PathBuf {
                         "aaaa1111-0000-4000-8000-000000000001",
                         "3 W's of UI",
                     ),
-                    topics_tile(
+                    concept_tile(
                         TALK_A,
                         "aaaa1111-0000-4000-8000-000000000002",
-                        &[VALUE_UI, VALUE_MISC],
+                        TOPICS_NG,
+                        Some(&[VALUE_UI, VALUE_MISC]),
+                    ),
+                    // The field the overlay will say NOTHING about.
+                    concept_tile(
+                        TALK_A,
+                        "aaaa1111-0000-4000-8000-000000000003",
+                        REGION_NG,
+                        Some(&[VALUE_MISC]),
                     ),
                 ],
             ),
@@ -211,7 +283,12 @@ fn base_corpus(demo: &Path) -> PathBuf {
                         "bbbb2222-0000-4000-8000-000000000001",
                         "Javascript, Typescript and Manuscript",
                     ),
-                    topics_tile(TALK_B, "bbbb2222-0000-4000-8000-000000000002", &[VALUE_JS]),
+                    concept_tile(
+                        TALK_B,
+                        "bbbb2222-0000-4000-8000-000000000002",
+                        TOPICS_NG,
+                        Some(&[VALUE_JS]),
+                    ),
                 ],
             ),
             resource(
@@ -223,7 +300,29 @@ fn base_corpus(demo: &Path) -> PathBuf {
                         "cccc3333-0000-4000-8000-000000000001",
                         "A talk the overlay never touches",
                     ),
-                    topics_tile(TALK_C, "cccc3333-0000-4000-8000-000000000002", &[VALUE_UI]),
+                    concept_tile(
+                        TALK_C,
+                        "cccc3333-0000-4000-8000-000000000002",
+                        TOPICS_NG,
+                        Some(&[VALUE_UI]),
+                    ),
+                ],
+            ),
+            resource(
+                TALK_D,
+                "A talk whose topics get retracted",
+                vec![
+                    title_tile(
+                        TALK_D,
+                        "dddd4444-0000-4000-8000-000000000001",
+                        "A talk whose topics get retracted",
+                    ),
+                    concept_tile(
+                        TALK_D,
+                        "dddd4444-0000-4000-8000-000000000002",
+                        TOPICS_NG,
+                        Some(&[VALUE_UI]),
+                    ),
                 ],
             ),
         ],
@@ -231,8 +330,8 @@ fn base_corpus(demo: &Path) -> PathBuf {
     )
 }
 
-/// The overlay: Talk A and Talk B, `topics` ONLY, both retagged to `UI`, with
-/// tileids that match nothing in the base.
+/// The overlay: `topics` ONLY, with tileids matching nothing in the base. It says
+/// nothing whatever about `region`, and nothing at all about Talk C.
 fn overlay_corpus(demo: &Path) -> PathBuf {
     corpus(
         "overlay",
@@ -241,19 +340,32 @@ fn overlay_corpus(demo: &Path) -> PathBuf {
             resource(
                 TALK_A,
                 "3 W's of UI",
-                vec![topics_tile(
+                vec![concept_tile(
                     TALK_A,
                     "9999ffff-0000-4000-8000-00000000000a",
-                    &[VALUE_UI],
+                    TOPICS_NG,
+                    Some(&[VALUE_UI]),
                 )],
             ),
             resource(
                 TALK_B,
                 "Javascript, Typescript and Manuscript",
-                vec![topics_tile(
+                vec![concept_tile(
                     TALK_B,
                     "9999ffff-0000-4000-8000-00000000000b",
-                    &[VALUE_UI],
+                    TOPICS_NG,
+                    Some(&[VALUE_UI]),
+                )],
+            ),
+            resource(
+                TALK_D,
+                "A talk whose topics get retracted",
+                // NULL: the key is present, the value is gone. A retraction.
+                vec![concept_tile(
+                    TALK_D,
+                    "9999ffff-0000-4000-8000-00000000000d",
+                    TOPICS_NG,
+                    None,
                 )],
             ),
         ],
@@ -261,9 +373,9 @@ fn overlay_corpus(demo: &Path) -> PathBuf {
     )
 }
 
-fn talk_graph(demo: &Path) -> StaticGraph {
+fn talk_graph(corpus_dir: &Path) -> StaticGraph {
     let raw: serde_json::Value = serde_json::from_slice(
-        &std::fs::read(demo.join("graphs").join(format!("{TALK_GRAPH}.json"))).unwrap(),
+        &std::fs::read(corpus_dir.join("graphs").join(format!("{TALK_GRAPH}.json"))).unwrap(),
     )
     .unwrap();
     let value = raw
@@ -274,51 +386,30 @@ fn talk_graph(demo: &Path) -> StaticGraph {
     serde_json::from_value(value).unwrap()
 }
 
-/// base + overlay, emitted and opened as a stack. `None` when the demo fixture
-/// is absent (the tests then skip, as `hydrate.rs` does).
-fn stack() -> Option<(Layers, PathBuf, PathBuf, StaticGraph)> {
+struct Fixture {
+    layers: Layers,
+    base_head: PathBuf,
+    overlay_head: PathBuf,
+    graph: StaticGraph,
+}
+
+fn stack() -> Option<Fixture> {
     let demo = demo_data()?;
-    let base = emit("base", &base_corpus(&demo));
-    let overlay = emit("overlay", &overlay_corpus(&demo));
-    let layers = Layers::open(&[base.as_path(), overlay.as_path()]).expect("open layers");
-    let graph = talk_graph(&demo);
-    Some((layers, base, overlay, graph))
-}
-
-fn is_concept(concept: &str) -> Query {
-    Query {
-        model: TALK_GRAPH.to_string(),
-        r#where: Some(Expr::Concept {
-            path: "topics".to_string(),
-            op: ConceptOp::Is,
-            value: concept.to_string(),
-        }),
-        measures: vec![Measure::CountRecords],
-        limit: None,
-    }
-}
-
-/// Count via the fast path, and assert the two independent slow paths agree.
-/// A composed count that only one implementation believes is not a fact.
-fn agreed_count(layers: &Layers, query: &Query, graph: &StaticGraph) -> usize {
-    let fast = layers.count(query, graph, None).expect("count");
-    let union = layers.count_by_union(query, graph, None).expect("union");
-    let sql = layers
-        .count_by_attached_sql(query, graph, None)
-        .expect("attached sql");
-    assert_eq!(
-        fast, union,
-        "the fast count disagrees with the union ORACLE — the optimisation is wrong"
-    );
-    assert_eq!(
-        sql, union,
-        "the ATTACH-in-SQL count disagrees with the union oracle"
-    );
-    fast
+    let base_data = base_corpus(&demo);
+    let overlay_data = overlay_corpus(&demo);
+    let base_head = emit("base", &base_data);
+    let overlay_head = emit("overlay", &overlay_data);
+    let layers = Layers::open(&[base_head.as_path(), overlay_head.as_path()]).expect("open layers");
+    Some(Fixture {
+        layers,
+        base_head,
+        overlay_head,
+        graph: talk_graph(&base_data),
+    })
 }
 
 macro_rules! fixture {
-    ($binding:pat) => {
+    ($binding:ident) => {
         let Some($binding) = stack() else {
             eprintln!("demo fixture absent — skipping");
             return;
@@ -327,19 +418,324 @@ macro_rules! fixture {
 }
 
 // ---------------------------------------------------------------------------
-// The premise: layers do not share a dictionary
+// The ORACLE: what the user actually sees
 // ---------------------------------------------------------------------------
 
-/// **The load-bearing premise of the whole module, asserted rather than assumed.**
+/// The concepts a resource carries on `node`, **in the composed view** — read out
+/// of the merged tiles, not out of any index.
 ///
-/// Each head interns its own terms sequentially, so the SAME uuid has DIFFERENT
-/// `term_id`s in different layers. Nothing may be joined across layers but the
-/// UUID *string*. If this test ever fails because the ids happen to coincide,
-/// that is luck, not a guarantee — but it documents why no code here joins on a
-/// `term_id`, an `rid`, a `chunk` or a `concept` id across a layer boundary.
+/// An absent tile and a null value both yield the empty set, which is right: a
+/// resource with no value for a node cannot match a predicate on it.
+fn composed_concepts(f: &Fixture, uuid: &str, node: &str) -> BTreeSet<String> {
+    let tiles = f
+        .layers
+        .resource_tiles(uuid, &f.graph)
+        .expect("compose tiles");
+    tiles
+        .iter()
+        .filter(|t| t.nodegroup_id == node)
+        .filter_map(|t| t.data.get(node))
+        .filter_map(|v| v.as_array())
+        .flatten()
+        .map(|v| concept_of(v.as_str().expect("concept value")).to_string())
+        .collect()
+}
+
+fn every_resource(f: &Fixture) -> BTreeSet<String> {
+    let mut all = BTreeSet::new();
+    for i in 0..f.layers.len() {
+        all.extend(f.layers.defined_uuids(i, &f.graph).expect("defined"));
+    }
+    all
+}
+
+/// **The independent oracle.** Evaluate the predicate against the composed
+/// HYDRATED tiles of every resource in the stack — the values on screen.
+///
+/// This shares no code with the head, the index or the query compiler. If the
+/// composed query and this disagree, then what the user filters by and what the
+/// user is looking at are two different things, which is the entire bug class.
+fn by_hydration(
+    f: &Fixture,
+    pred: impl Fn(&BTreeSet<String>, &BTreeSet<String>) -> bool,
+) -> BTreeSet<String> {
+    every_resource(f)
+        .into_iter()
+        .filter(|u| {
+            pred(
+                &composed_concepts(f, u, TOPICS_NG),
+                &composed_concepts(f, u, REGION_NG),
+            )
+        })
+        .collect()
+}
+
+/// Run a query three ways — the fast corrected count, the resolve-and-count
+/// reference, and the hydration oracle — and demand they all agree.
+fn agreed(
+    f: &Fixture,
+    query: &Query,
+    pred: impl Fn(&BTreeSet<String>, &BTreeSet<String>) -> bool,
+) -> usize {
+    let fast = f.layers.count(query, &f.graph, None).expect("count");
+    let union = f
+        .layers
+        .count_by_union(query, &f.graph, None)
+        .expect("count_by_union");
+    let mut ids = f.layers.resolve(query, &f.graph, None).expect("resolve");
+    ids.sort();
+
+    let oracle = by_hydration(f, pred);
+    let expected: Vec<String> = oracle.iter().cloned().collect();
+
+    assert_eq!(
+        ids, expected,
+        "the composed QUERY and the composed HYDRATION disagree about WHICH \
+         resources match — the user would filter by one thing and look at another"
+    );
+    assert_eq!(
+        fast,
+        oracle.len(),
+        "the fast corrected count disagrees with the hydration oracle"
+    );
+    assert_eq!(
+        union,
+        oracle.len(),
+        "the resolve-and-count reference disagrees with the hydration oracle"
+    );
+    fast
+}
+
+fn is_concept(path: &str, concept: &str) -> Expr {
+    Expr::Concept {
+        path: path.to_string(),
+        op: ConceptOp::Is,
+        value: concept.to_string(),
+    }
+}
+
+fn query(expr: Expr) -> Query {
+    Query {
+        model: TALK_GRAPH.to_string(),
+        r#where: Some(expr),
+        measures: vec![Measure::CountRecords],
+        limit: None,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// THE PARTIAL-LAYER BUG: precedence is per-NODE, not per-resource
+// ---------------------------------------------------------------------------
+
+/// **The bug, in one test.** The overlay carries Talk A — but says NOTHING about
+/// its `region`. The base's `region = MISC` must therefore stand.
+///
+/// Under per-RESOURCE precedence, the overlay "defined" Talk A and so became
+/// authoritative for every field of it. Its head never indexed `region` (it never
+/// saw a region tile), so the filter answered "no" there, and the base's correct
+/// verdict was DISCARDED. The composed count was 0 while the composed resource on
+/// screen plainly had `region = MISC`.
+#[test]
+fn a_filter_on_a_field_the_overlay_does_not_carry_reads_from_the_base() {
+    fixture!(f);
+
+    assert_eq!(
+        composed_concepts(&f, TALK_A, REGION_NG),
+        BTreeSet::from([CONCEPT_MISC.to_string()]),
+        "precondition: the composed Talk A really does still have region = MISC"
+    );
+
+    let n = agreed(&f, &query(is_concept("region", CONCEPT_MISC)), |_t, r| {
+        r.contains(CONCEPT_MISC)
+    });
+    assert_eq!(
+        n, 1,
+        "Talk A matches on a field only the BASE carries, though an overlay \
+         carries the resource"
+    );
+}
+
+/// **The other half of the bug.** An `all` across two fields owned by DIFFERENT
+/// layers: `topics` (the overlay's) and `region` (the base's).
+///
+/// Under per-resource precedence this matched in NEITHER layer — the overlay
+/// lacked `region`, the base's `topics` was stale — and so composed to zero,
+/// while the resource the user is looking at satisfies both conjuncts.
+#[test]
+fn an_and_across_fields_owned_by_different_layers_matches() {
+    fixture!(f);
+
+    let q = query(Expr::All(vec![
+        is_concept("topics", CONCEPT_UI), // the OVERLAY owns topics for Talk A
+        is_concept("region", CONCEPT_MISC), // the BASE owns region for Talk A
+    ]));
+
+    let n = agreed(&f, &q, |t, r| {
+        t.contains(CONCEPT_UI) && r.contains(CONCEPT_MISC)
+    });
+    assert_eq!(
+        n, 1,
+        "Talk A satisfies both conjuncts in the composed view — one from each layer"
+    );
+}
+
+/// A null value is a RETRACTION, not silence. Talk D's overlay tile sets `topics`
+/// to null; the merge lets the null win, so the composed resource has no topics
+/// and must not match one.
+///
+/// This is what forces `node_presence` to record NULL-valued nodes: without those
+/// rows, "the overlay retracted it" is indistinguishable from "the overlay never
+/// mentioned it", and the query would fall back to the base and keep matching a
+/// topic that is no longer on screen.
+#[test]
+fn a_null_in_an_overlay_retracts_rather_than_abstains() {
+    fixture!(f);
+
+    assert!(
+        composed_concepts(&f, TALK_D, TOPICS_NG).is_empty(),
+        "precondition: the composed Talk D has no topics left"
+    );
+
+    // Talk D had UI in the base. It must not be counted.
+    let ids = f
+        .layers
+        .resolve(&query(is_concept("topics", CONCEPT_UI)), &f.graph, None)
+        .unwrap();
+    assert!(
+        !ids.contains(&TALK_D.to_string()),
+        "a retracted topic must not still match: {ids:?}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// The three ways naive composition breaks
+// ---------------------------------------------------------------------------
+
+/// **Double counting** and **the base's verdict surviving**, in one query.
+///
+/// `UI` matches Talk A in BOTH layers (naively 2 + 3 = 5), Talk C only in the
+/// base (and must not be lost), and Talk D not at all (retracted).
+#[test]
+fn a_resource_matching_in_two_layers_is_counted_once_and_base_only_matches_survive() {
+    fixture!(f);
+
+    let base_only = Layers::open(&[f.base_head.as_path()]).unwrap();
+    assert_eq!(
+        base_only
+            .count(&query(is_concept("topics", CONCEPT_UI)), &f.graph, None)
+            .unwrap(),
+        3,
+        "base alone: Talk A, Talk C and Talk D"
+    );
+
+    let n = agreed(&f, &query(is_concept("topics", CONCEPT_UI)), |t, _r| {
+        t.contains(CONCEPT_UI)
+    });
+    assert_eq!(
+        n, 3,
+        "Talk A (both layers, ONCE), Talk B (overlay), Talk C (base only); \
+         Talk D retracted"
+    );
+}
+
+/// **Flipping OUT.** The base says Talk B is a `JS` talk. The overlay redefines
+/// its topics, and it is no longer one. A union of per-layer matches would keep
+/// counting it forever — and the stale hit looks exactly like a real one.
+#[test]
+fn a_resource_the_overlay_flipped_out_of_the_filter_is_not_counted() {
+    fixture!(f);
+
+    let base_only = Layers::open(&[f.base_head.as_path()]).unwrap();
+    assert_eq!(
+        base_only
+            .count(&query(is_concept("topics", CONCEPT_JS)), &f.graph, None)
+            .unwrap(),
+        1,
+        "the base, alone, really does still say Talk B is a JS talk"
+    );
+
+    let n = agreed(&f, &query(is_concept("topics", CONCEPT_JS)), |t, _r| {
+        t.contains(CONCEPT_JS)
+    });
+    assert_eq!(n, 0, "but the composed view has no JS talks");
+}
+
+/// A concept the overlay merely DROPPED, rather than replaced. Talk A had `MISC`
+/// in the base; the overlay's `topics` restatement omits it. Nothing announces
+/// the removal — the tile is simply different.
+///
+/// Note this is `topics`, where the overlay DOES speak. Contrast
+/// `a_filter_on_a_field_the_overlay_does_not_carry_reads_from_the_base`, where it
+/// does not, and the base survives. Same resource, same concept, opposite answers
+/// — and the ONLY thing that distinguishes them is per-node presence.
+#[test]
+fn a_concept_the_overlay_dropped_from_a_field_it_owns_is_not_counted() {
+    fixture!(f);
+
+    let n = agreed(&f, &query(is_concept("topics", CONCEPT_MISC)), |t, _r| {
+        t.contains(CONCEPT_MISC)
+    });
+    assert_eq!(n, 0, "the overlay owns topics, and its topics have no MISC");
+
+    // …while MISC on `region`, which the overlay does NOT own, still matches.
+    let n = agreed(&f, &query(is_concept("region", CONCEPT_MISC)), |_t, r| {
+        r.contains(CONCEPT_MISC)
+    });
+    assert_eq!(n, 1);
+}
+
+/// A single layer must compose to exactly itself — no precedence machinery may
+/// alter the answer when there is nothing to override. This is also the path a
+/// consumer takes before the user has any device layer at all, so a regression
+/// here breaks the common case, not the exotic one.
+#[test]
+fn one_layer_composes_to_itself() {
+    fixture!(f);
+    let solo = Layers::open(&[f.base_head.as_path()]).unwrap();
+
+    for (path, concept, expect) in [
+        ("topics", CONCEPT_UI, 3),
+        ("topics", CONCEPT_JS, 1),
+        ("topics", CONCEPT_MISC, 1),
+        ("region", CONCEPT_MISC, 1),
+    ] {
+        let q = query(is_concept(path, concept));
+        let fast = solo.count(&q, &f.graph, None).unwrap();
+        assert_eq!(fast, expect, "{path} is {concept}");
+        assert_eq!(fast, solo.count_by_union(&q, &f.graph, None).unwrap());
+    }
+}
+
+/// Hierarchy (DFS-interval `BETWEEN`) composes too — the base's fast path for a
+/// parent concept is a rollup point-lookup, and the corrections still apply on
+/// top of it.
+#[test]
+fn a_hierarchical_filter_composes() {
+    fixture!(f);
+
+    let q = query(Expr::Concept {
+        path: "topics".to_string(),
+        op: ConceptOp::DescendantOrSelfOf,
+        value: CONCEPT_PARENT.to_string(),
+    });
+
+    // The parent spans UI and JS, but NOT misc.
+    let n = agreed(&f, &q, |t, _r| {
+        t.contains(CONCEPT_UI) || t.contains(CONCEPT_JS)
+    });
+    assert_eq!(n, 3, "Talks A, B and C — D's topics were retracted");
+}
+
+// ---------------------------------------------------------------------------
+// Premises and structure
+// ---------------------------------------------------------------------------
+
+/// **The load-bearing premise, asserted rather than assumed.** Each head interns
+/// its own terms sequentially, so the same uuid has different `term_id`s in
+/// different layers. Nothing may be joined across layers but the UUID *string*.
 #[test]
 fn layers_do_not_share_a_dictionary() {
-    fixture!((_layers, base, overlay, _graph));
+    fixture!(f);
 
     let term_id = |head: &Path, term: &str| -> Option<i64> {
         let conn = rusqlite::Connection::open(head.join("head.sqlite")).unwrap();
@@ -349,15 +745,11 @@ fn layers_do_not_share_a_dictionary() {
         .ok()
     };
 
-    // The same resource, and the same concept, exist in both layers...
-    let base_talk = term_id(&base, TALK_B).expect("talk B is in the base dict");
-    let overlay_talk = term_id(&overlay, TALK_B).expect("talk B is in the overlay dict");
-    let base_concept = term_id(&base, CONCEPT_UI).expect("UI is in the base dict");
-    let overlay_concept = term_id(&overlay, CONCEPT_UI).expect("UI is in the overlay dict");
+    let base_talk = term_id(&f.base_head, TALK_B).expect("talk B in base dict");
+    let overlay_talk = term_id(&f.overlay_head, TALK_B).expect("talk B in overlay dict");
+    let base_concept = term_id(&f.base_head, CONCEPT_UI).expect("UI in base dict");
+    let overlay_concept = term_id(&f.overlay_head, CONCEPT_UI).expect("UI in overlay dict");
 
-    // ...and at least one of them is interned under a different id, because the
-    // overlay's corpus is smaller and interns in its own order. The point is not
-    // WHICH differs; it is that neither may be assumed to agree.
     assert!(
         base_talk != overlay_talk || base_concept != overlay_concept,
         "term ids coincided across layers ({base_talk}/{overlay_talk}, \
@@ -366,184 +758,84 @@ fn layers_do_not_share_a_dictionary() {
     );
 }
 
-// ---------------------------------------------------------------------------
-// The three ways naive composition breaks
-// ---------------------------------------------------------------------------
-
-/// **Double counting**, and **the base's verdict surviving**, in one query.
-///
-/// `UI` matches Talk A in the base AND in the overlay (2 + 2 = 4 the naive way),
-/// while Talk C matches only in the base and must not be lost. The truth is 3.
+/// `node_presence` is what makes per-node precedence possible, so pin what it
+/// actually records — including the NULL, which is the row that distinguishes a
+/// retraction from silence.
 #[test]
-fn a_resource_matching_in_two_layers_is_counted_once_and_base_only_matches_survive() {
-    fixture!((layers, base, _overlay, graph));
+fn the_head_records_which_nodes_each_layer_carries() {
+    fixture!(f);
 
-    // What each layer says ALONE, so the naive answers are on the record.
-    let base_only = Layers::open(&[base.as_path()]).unwrap();
-    assert_eq!(
-        base_only
-            .count(&is_concept(CONCEPT_UI), &graph, None)
-            .unwrap(),
-        2,
-        "base alone: Talk A and Talk C"
-    );
-
-    let composed = agreed_count(&layers, &is_concept(CONCEPT_UI), &graph);
-    assert_eq!(
-        composed, 3,
-        "Talk A (both layers, once), Talk B (overlay), Talk C (base only) — \
-         NOT 4, which is what summing the per-layer counts gives"
-    );
-
-    let mut ids = layers
-        .resolve(&is_concept(CONCEPT_UI), &graph, None)
-        .unwrap();
-    ids.sort();
-    let mut expected = vec![TALK_A.to_string(), TALK_B.to_string(), TALK_C.to_string()];
-    expected.sort();
-    assert_eq!(
-        ids, expected,
-        "and resolve() returns each resource exactly once"
-    );
-}
-
-/// **Flipping OUT.** The base says Talk B is a `JS` talk. The overlay redefines
-/// Talk B, and it is no longer one. A union of per-layer matches would keep
-/// counting it forever; the composed answer is zero.
-///
-/// This is the failure the whole precedence rule exists to prevent, and it is
-/// SILENT — a stale hit looks exactly like a real one.
-#[test]
-fn a_resource_the_overlay_flipped_out_of_the_filter_is_not_counted() {
-    fixture!((layers, base, _overlay, graph));
-
-    let base_only = Layers::open(&[base.as_path()]).unwrap();
-    assert_eq!(
-        base_only
-            .count(&is_concept(CONCEPT_JS), &graph, None)
-            .unwrap(),
-        1,
-        "the base, alone, really does still say Talk B is a JS talk"
-    );
-
-    assert_eq!(
-        agreed_count(&layers, &is_concept(CONCEPT_JS), &graph),
-        0,
-        "but the overlay redefined Talk B without JS, so the composed view has none"
-    );
-    assert!(layers
-        .resolve(&is_concept(CONCEPT_JS), &graph, None)
-        .unwrap()
-        .is_empty());
-}
-
-/// The same, for a concept the overlay merely DROPPED rather than replaced.
-/// Talk A had `MISC` in the base; the overlay's `topics` restatement omits it.
-/// Nothing announces the removal — the tile is simply different.
-#[test]
-fn a_concept_the_overlay_dropped_is_not_counted() {
-    fixture!((layers, base, _overlay, graph));
-
-    let base_only = Layers::open(&[base.as_path()]).unwrap();
-    assert_eq!(
-        base_only
-            .count(&is_concept(CONCEPT_MISC), &graph, None)
-            .unwrap(),
-        1
-    );
-    assert_eq!(agreed_count(&layers, &is_concept(CONCEPT_MISC), &graph), 0);
-}
-
-/// A single layer must compose to exactly itself — no precedence machinery may
-/// alter the answer when there is nothing to override. (This is also the path a
-/// consumer takes before the user has any device layer at all, so a regression
-/// here breaks the common case, not the exotic one.)
-#[test]
-fn one_layer_composes_to_itself() {
-    fixture!((_layers, base, _overlay, graph));
-    let solo = Layers::open(&[base.as_path()]).unwrap();
-
-    for concept in [CONCEPT_UI, CONCEPT_JS, CONCEPT_MISC] {
-        let q = is_concept(concept);
-        let fast = solo.count(&q, &graph, None).unwrap();
-        assert_eq!(fast, solo.count_by_union(&q, &graph, None).unwrap());
-        assert_eq!(fast, solo.count_by_attached_sql(&q, &graph, None).unwrap());
-    }
-    assert_eq!(
-        solo.count(&is_concept(CONCEPT_UI), &graph, None).unwrap(),
-        2
-    );
-    assert_eq!(
-        solo.count(&is_concept(CONCEPT_JS), &graph, None).unwrap(),
-        1
-    );
-}
-
-/// Hierarchy (DFS-interval `BETWEEN`) composes too — the fast path for a parent
-/// concept is a rollup point-lookup in the base, and the corrections still have
-/// to be applied on top of it.
-#[test]
-fn a_hierarchical_filter_composes() {
-    fixture!((layers, _base, _overlay, graph));
-
-    let q = Query {
-        model: TALK_GRAPH.to_string(),
-        r#where: Some(Expr::Concept {
-            path: "topics".to_string(),
-            op: ConceptOp::DescendantOrSelfOf,
-            value: CONCEPT_PARENT.to_string(),
-        }),
-        measures: vec![Measure::CountRecords],
-        limit: None,
+    let nodes_for = |head: &Path, uuid: &str| -> BTreeSet<String> {
+        let conn = rusqlite::Connection::open(head.join("head.sqlite")).unwrap();
+        let mut stmt = conn
+            .prepare(
+                "SELECT dn.term FROM node_presence np
+                   JOIN spine_talk s ON s.rid = np.rid
+                   JOIN dict dr ON dr.term_id = s.term_id
+                   JOIN dict dn ON dn.term_id = np.node
+                  WHERE dr.term = ?1",
+            )
+            .unwrap();
+        let rows = stmt
+            .query_map([uuid], |r| r.get::<_, String>(0))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        rows
     };
 
-    // The parent spans both UI and JS, so every talk qualifies in the composed
-    // view: A and B via the overlay's UI, C via the base's UI.
-    assert_eq!(agreed_count(&layers, &q, &graph), 3);
+    assert_eq!(
+        nodes_for(&f.base_head, TALK_A),
+        BTreeSet::from([TOPICS_NG.to_string(), REGION_NG.to_string()]),
+        "the base carries both filterable fields of Talk A"
+    );
+    assert_eq!(
+        nodes_for(&f.overlay_head, TALK_A),
+        BTreeSet::from([TOPICS_NG.to_string()]),
+        "the overlay carries ONLY topics — it says nothing about region, and \
+         that silence is what the base's verdict survives on"
+    );
+    assert_eq!(
+        nodes_for(&f.overlay_head, TALK_D),
+        BTreeSet::from([TOPICS_NG.to_string()]),
+        "a NULL topics still counts as CARRIED: it retracts, and a retraction \
+         that left no row would be indistinguishable from silence"
+    );
 }
 
-// ---------------------------------------------------------------------------
-// Tile composition (the hydration half), through the layered reader
-// ---------------------------------------------------------------------------
-
-/// The overlay's `topics` tile carries a tileid that appears nowhere in the base,
-/// and it must STILL override — composition collapses cardinality-1 scopes on
-/// the graph's CARDINALITY, not on tile identity. (Arches-minted ids never
-/// collide across layers; if override needed matching ids, it would never fire.)
-///
-/// And because layers are PARTIAL, the base's `title` — which the overlay never
-/// restates — has to survive.
+/// Tile composition: the overlay's `topics` tile carries a tileid that appears
+/// nowhere in the base and must STILL override — composition collapses
+/// cardinality-1 scopes on the graph's CARDINALITY, not on tile identity. And
+/// because layers are partial, the base's `title` and `region` survive.
 #[test]
 fn the_overlay_overrides_the_tile_it_restates_and_keeps_the_ones_it_does_not() {
-    fixture!((layers, _base, _overlay, graph));
+    fixture!(f);
 
-    let tree = layers.hydrate_resource(TALK_B, &graph).expect("hydrate");
+    let tree = f
+        .layers
+        .hydrate_resource(TALK_A, &f.graph)
+        .expect("hydrate");
 
-    // Overridden: the overlay's topics won, though its tileid matched nothing.
-    let topics = tree["topics"].as_array().expect("topics is a list");
-    let ids: Vec<&str> = topics
-        .iter()
-        .map(|t| t["value_id"].as_str().or_else(|| t.as_str()).unwrap_or(""))
-        .collect();
+    let topics = format!("{:?}", tree["topics"]);
     assert!(
-        !format!("{topics:?}").contains(VALUE_JS),
-        "the base's JS topic must not survive the overlay's restatement: {topics:?}"
+        !topics.contains(VALUE_MISC),
+        "the base's MISC topic must not survive the overlay's restatement: {topics}"
     );
     assert!(
-        format!("{topics:?}").contains(VALUE_UI),
-        "the overlay's UI topic must be present: {topics:?} (ids: {ids:?})"
+        topics.contains(VALUE_UI),
+        "the overlay's UI topic must be there"
     );
 
-    // Preserved: the overlay never mentioned `title`, so the base's stands.
     assert_eq!(
-        tree["title"]["en"]["value"], "Javascript, Typescript and Manuscript",
-        "a partial overlay must not blank the tiles it did not restate"
+        tree["title"]["en"]["value"], "3 W's of UI",
+        "a partial overlay must not blank a tile it did not restate"
+    );
+    assert!(
+        format!("{:?}", tree["region"]).contains(VALUE_MISC),
+        "nor a field it never mentioned"
     );
 
-    // Exactly one topics tile: a cardinality-1 nodegroup that ends up holding two
-    // is the silent-wrong-answer this composition exists to prevent (the hydrator
-    // would pick between them arbitrarily).
-    let tiles = layers.resource_tiles(TALK_B, &graph).unwrap();
+    let tiles = f.layers.resource_tiles(TALK_A, &f.graph).unwrap();
     assert_eq!(
         tiles.iter().filter(|t| t.nodegroup_id == TOPICS_NG).count(),
         1,
@@ -551,50 +843,26 @@ fn the_overlay_overrides_the_tile_it_restates_and_keeps_the_ones_it_does_not() {
     );
 }
 
-/// A resource only the BASE defines hydrates untouched through the stack.
-#[test]
-fn a_resource_the_overlay_does_not_carry_hydrates_from_the_base() {
-    fixture!((layers, _base, _overlay, graph));
-    let tree = layers.hydrate_resource(TALK_C, &graph).expect("hydrate");
-    assert_eq!(
-        tree["title"]["en"]["value"],
-        "A talk the overlay never touches"
-    );
-}
-
-/// `defined_uuids` is the precedence primitive — "the topmost layer that DEFINES
-/// a resource is authoritative for it" — so what each layer claims to define is
-/// worth pinning directly, not just through its consequences.
+/// `defined_uuids` bounds the cost of composition: everything expensive ranges
+/// over what the OVERLAYS touch, not over the corpus.
 #[test]
 fn each_layer_defines_exactly_what_it_carries() {
-    fixture!((layers, _base, _overlay, graph));
+    fixture!(f);
 
-    let base_defines = layers.defined_uuids(0, &graph).unwrap();
-    let overlay_defines = layers.defined_uuids(1, &graph).unwrap();
+    let base = f.layers.defined_uuids(0, &f.graph).unwrap();
+    let overlay = f.layers.defined_uuids(1, &f.graph).unwrap();
 
-    assert_eq!(base_defines.len(), 3, "the base carries all three talks");
-    assert!(base_defines.contains(TALK_C));
-
+    assert_eq!(base.len(), 4);
     assert_eq!(
-        overlay_defines.len(),
-        2,
-        "the overlay carries only the two it edited — this is what bounds the \
-         cost of the corrected count to O(overlay), not O(corpus)"
+        overlay.len(),
+        3,
+        "the overlay carries only what it edited — this is what bounds the \
+         corrected count to O(overlay), not O(corpus)"
     );
-    assert!(overlay_defines.contains(TALK_A) && overlay_defines.contains(TALK_B));
-    assert!(
-        !overlay_defines.contains(TALK_C),
-        "and Talk C is NOT redefined, which is why the base stays authoritative for it"
-    );
+    assert!(!overlay.contains(TALK_C), "and Talk C is untouched");
 }
 
-// ---------------------------------------------------------------------------
-// Refusing to compose the incomposable
-// ---------------------------------------------------------------------------
-
-/// Layers minting URIs under different bases are not the same corpus. Composing
-/// them would silently answer questions about a union of two unrelated worlds,
-/// so `open` refuses.
+/// Layers minting URIs under different bases are not the same corpus.
 #[test]
 fn layers_from_different_base_uris_are_refused() {
     let Some(demo) = demo_data() else {
@@ -603,7 +871,6 @@ fn layers_from_different_base_uris_are_refused() {
     };
     let base = emit("base-uri-a", &base_corpus(&demo));
 
-    // Same data, different base_uri.
     let other_data = overlay_corpus(&demo);
     let other = scratch("base-uri-b-head");
     ros_madair_emit::emit(
@@ -619,24 +886,21 @@ fn layers_from_different_base_uris_are_refused() {
         matches!(err, ReadError::Incompatible { ref what, .. } if what == "base_uri"),
         "{err}"
     );
-    assert!(err.to_string().contains("not composable"));
 }
 
 /// A manifest is REQUIRED per layer: without one there is nothing to check
 /// composability against, and silently composing two incompatible snapshots is
-/// the failure this crate exists to prevent. (The single-snapshot read path
-/// treats the manifest as an optional fast path — composition cannot.)
+/// the failure this crate exists to prevent.
 #[test]
 fn a_layer_without_a_manifest_is_refused() {
-    fixture!((_layers, base, _overlay, _graph));
+    fixture!(f);
 
     let crippled = scratch("no-manifest");
-    copy_dir(&base, &crippled);
+    copy_dir(&f.base_head, &crippled);
     std::fs::remove_file(crippled.join("manifest.json")).unwrap();
 
     let err = Layers::open(&[crippled.as_path()]).expect_err("no manifest must not compose");
     assert!(matches!(err, ReadError::MissingManifest(_)), "{err}");
-    assert!(err.to_string().contains("composition requires one per"));
 }
 
 /// An empty stack is a caller bug, and a typed one.
@@ -652,9 +916,8 @@ fn an_empty_stack_is_refused() {
 /// spine table that does not exist. Better a typed error than a SQLite one.
 #[test]
 fn a_model_in_no_layer_is_a_typed_error() {
-    fixture!((layers, _base, _overlay, _graph));
+    fixture!(f);
 
-    // A syntactically valid graph the stack has never heard of.
     let stranger: StaticGraph = serde_json::from_value(json!({
         "graphid": "11111111-2222-3333-4444-555555555555",
         "name": {"en": "Stranger"},
@@ -672,7 +935,8 @@ fn a_model_in_no_layer_is_a_typed_error() {
         measures: vec![Measure::CountRecords],
         limit: None,
     };
-    let err = layers
+    let err = f
+        .layers
         .count(&q, &stranger, None)
         .expect_err("a model in no layer must not silently answer 0");
     assert!(matches!(err, ReadError::ModelInNoLayer(_)), "{err}");

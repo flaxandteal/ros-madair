@@ -89,19 +89,17 @@ pub(crate) fn load_collections(
     data_dir: &Path,
     base_uri: &str,
 ) -> Result<Vec<SkosCollection>, EmitError> {
-    let mut collections: Vec<SkosCollection> =
-        if data_dir.join("reference_data").is_dir() {
-            PrebuildLoader::new(data_dir)
-                .and_then(|loader| loader.load_collections(base_uri))
-                .map_err(|e| format!("loading reference_data SKOS: {e}"))?
-        } else {
-            Vec::new()
-        };
+    let mut collections: Vec<SkosCollection> = if data_dir.join("reference_data").is_dir() {
+        PrebuildLoader::new(data_dir)
+            .and_then(|loader| loader.load_collections(base_uri))
+            .map_err(|e| format!("loading reference_data SKOS: {e}"))?
+    } else {
+        Vec::new()
+    };
     let vocab_dir = data_dir.join("vocabularies");
     if vocab_dir.is_dir() {
-        let extra =
-            load_collections_from_dir(vocab_dir.to_str().unwrap_or(""), base_uri)
-                .map_err(|e| format!("loading vocabularies SKOS: {e}"))?;
+        let extra = load_collections_from_dir(vocab_dir.to_str().unwrap_or(""), base_uri)
+            .map_err(|e| format!("loading vocabularies SKOS: {e}"))?;
         let seen: HashSet<String> = collections.iter().map(|c| c.id.clone()).collect();
         collections.extend(extra.into_iter().filter(|c| !seen.contains(&c.id)));
     }
@@ -121,10 +119,7 @@ fn walk_concepts(
         ClosureEntry {
             label: label_of(concept),
             collection_id: collection_id.to_string(),
-            parent: ancestors
-                .len()
-                .checked_sub(2)
-                .map(|i| ancestors[i].clone()),
+            parent: ancestors.len().checked_sub(2).map(|i| ancestors[i].clone()),
             ancestors: ancestors.clone(),
         },
     );

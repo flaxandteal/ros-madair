@@ -301,7 +301,10 @@ mod tests {
             !msg.contains("Arches"),
             "these ids ARE composable — blaming Arches misdiagnoses it: {msg}"
         );
-        assert_eq!(err.second_id, None, "same id: there is no second id to name");
+        assert_eq!(
+            err.second_id, None,
+            "same id: there is no second id to name"
+        );
     }
 
     /// Two tiles of the same nested cardinality-1 nodegroup under the SAME

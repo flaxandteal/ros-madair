@@ -36,47 +36,58 @@
 //! Layers are **ordered, base first, later overrides earlier**. The rule, made
 //! explicit rather than left to iteration order:
 //!
-//! > **The topmost layer that DEFINES a resource is authoritative for it.**
-//! > "Defines" = the resource has a row in that layer's spine.
+//! > **The topmost layer that defines a NODE is authoritative for that node.**
+//! > "Defines" = the layer carries a value for it — `node_presence` — *including
+//! > a null*, which retracts rather than abstains.
 //!
-//! A base verdict on a resource an overlay has redefined is *stale*, and is
-//! discarded — not unioned. This matters: an overlay can flip a base resource
-//! **into** a filter (edit `type` to `Church`) or **out of** one (edit `Church`
-//! to `Chapel`). A composed query that merely unioned the per-layer matches
-//! would keep counting the flipped-out resource forever.
+//! A base verdict on a node an overlay has redefined is *stale*, and is discarded
+//! — not unioned. This matters: an overlay can flip a base resource **into** a
+//! filter (edit `type` to `Church`) or **out of** one (edit `Church` to
+//! `Chapel`). A composed query that merely unioned the per-layer matches would
+//! keep counting the flipped-out resource forever.
 //!
-//! ## LAYERS ARE PARTIAL, and the index does not yet know it — READ THIS
+//! Read the next section before assuming this is the resource-level rule with
+//! extra words. It is not, and the resource-level version was wrong.
 //!
-//! An earlier draft of this module asserted a contract: *"an overlay that
-//! carries a resource carries it IN FULL."* **That contract is false and has
-//! been withdrawn.** Layers are inherently partial — a layer that adds an
-//! etymology to 180,000 resources cannot restate 180,000 resources, and
-//! requiring it to would defeat the point of layering.
+//! ## LAYERS ARE PARTIAL, and precedence is therefore PER-NODE
 //!
-//! [`Layers::resource_tiles`] is correct under partial layers: alizarin's
-//! unifier merges cardinality-1 tiles **per node**, so an overlay that sets one
-//! field keeps the base's other fields in the same nodegroup.
+//! An earlier draft asserted a contract: *"an overlay that carries a resource
+//! carries it IN FULL."* **It was false, and it is withdrawn.** Layers are
+//! inherently partial — a layer that adds an etymology to 180,000 resources
+//! cannot restate 180,000 resources, and requiring it to would defeat the point
+//! of layering. `tree_to_tiles` builds a tile from the keys the input tree
+//! actually set, so a partial overlay omits keys as a matter of course.
 //!
-//! **The QUERY path is not yet correct under partial layers, and this is the
-//! open R1 issue.** P13 below says the topmost *defining* layer is authoritative,
-//! and evaluates the filter against that layer's index alone. But a partial
-//! overlay's head only ever indexed the tiles the overlay carried, so:
+//! Everything follows from that:
 //!
-//! - a filter on a field the overlay does **not** carry answers "no match" in
-//!   the overlay, and P13 then *discards* the base's correct verdict;
-//! - an AND across two fields defined in **different** layers matches in neither,
-//!   though the composed resource the user sees satisfies both.
+//! > **The topmost layer that defines a NODE is authoritative for that node.**
+//! > Not the topmost layer that defines the RESOURCE.
 //!
-//! So query and hydration can disagree about the same resource. Until that is
-//! fixed, the safe stack is one where each filtered field is carried by exactly
-//! one layer, or where overlays *do* happen to restate what they touch (which an
-//! on-device edit naturally does). Do not read P13 as settled.
+//! This is not a refinement of the resource-level rule; it is a different rule,
+//! and the resource-level one was wrong. Under it, a partial overlay that carried
+//! a resource became authoritative for *every field of it*, so:
+//!
+//! - a filter on a field the overlay does **not** carry answered "no match" in
+//!   the overlay, and the base's correct verdict was discarded;
+//! - an `all` across two fields owned by **different** layers matched in neither,
+//!   though the composed resource the user is looking at satisfies both.
+//!
+//! Query and hydration disagreed about the same resource. They no longer do:
+//! per-node precedence is exactly what alizarin's tile merge already does (it
+//! merges cardinality-1 tiles **per key**), so [`Layers::resolve`] and
+//! [`Layers::resource_tiles`] now answer from the same rule. `tests/layers.rs`
+//! asserts they agree, by evaluating filters against composed HYDRATED tiles and
+//! demanding the same answer — an oracle that shares no code with the index path.
+//!
+//! The head carries `node_presence` for this, and for nothing else: it is the
+//! only way to tell **"this layer says NO"** from **"this layer does not say"**.
+//! Both look like an absent index row, and they mean opposite things.
 //!
 //! # Costs, honestly
 //!
 //! A layered count costs more than a single-layer count; see [`Layers::count`].
 
-use std::collections::{BTreeSet, HashSet};
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use alizarin_core::extension_type_registry::ExtensionTypeRegistry;
@@ -87,12 +98,29 @@ use alizarin_core::graph::{
 use alizarin_core::StaticTile;
 use ros_madair_format::Manifest;
 use ros_madair_query::{
-    compile_layered_count, compile_match_probe, compile_with_registry, CompiledStatement, Measure,
-    Param, Query,
+    compile_match_probe, compile_with_registry, CompiledStatement, Expr, Measure, Param, Query,
 };
-use rusqlite::{types::Value as SqlValue, Connection, OpenFlags};
+use rusqlite::{types::Value as SqlValue, Connection};
 
 use crate::{hydrate_tiles, open_head, resource_tiles_with_graph, ReadError};
+
+/// A filter tree whose leaves know which NODE they read and carry a compiled
+/// one-layer probe.
+///
+/// It mirrors [`Expr`] rather than reusing it because the whole point is the
+/// extra per-leaf information: composition resolves each leaf against the topmost
+/// layer that defines *that leaf's node*, so the node id has to survive down to
+/// the leaf. A per-query node would not do — two leaves of one filter routinely
+/// read nodes owned by different layers.
+enum Plan {
+    All(Vec<Plan>),
+    Any(Vec<Plan>),
+    Not(Box<Plan>),
+    Leaf {
+        node_id: String,
+        probe: CompiledStatement,
+    },
+}
 
 /// One layer: a head directory and its (version-checked) manifest.
 #[derive(Debug, Clone)]
@@ -215,40 +243,196 @@ impl Layers {
         Ok(rows.collect::<Result<_, _>>()?)
     }
 
-    /// The union of the defined sets of every layer ABOVE `index` (only layers
-    /// carrying this model contribute). Bounded by the overlays' sizes.
-    fn defined_above(
+    /// Every resource ANY overlay carries: the **candidate set**.
+    ///
+    /// A resource no overlay touches cannot have been changed by one, so the
+    /// base's verdict on it stands and it never needs composing. Everything
+    /// expensive below is therefore bounded by the OVERLAYS, not by the corpus —
+    /// an on-device edit touches a handful of resources, and this is the set that
+    /// makes the corrected count O(overlay) rather than O(corpus).
+    fn candidates(
         &self,
-        index: usize,
         model_layers: &[usize],
         graph: &StaticGraph,
-    ) -> Result<HashSet<String>, ReadError> {
-        let mut set = HashSet::new();
-        for &i in model_layers.iter().filter(|&&i| i > index) {
+    ) -> Result<BTreeSet<String>, ReadError> {
+        let mut set = BTreeSet::new();
+        for &i in model_layers.iter().skip(1) {
             set.extend(self.defined_uuids(i, graph)?);
         }
         Ok(set)
     }
 
-    /// Resolve a query to the resource UUIDs matching it in the **composed**
-    /// view: run the same compiled SQL against EVERY layer, then apply P13 —
-    /// a layer's hit survives only if no HIGHER layer defines that resource.
+    /// Does layer `index` carry a value for `node` on `uuid`?
     ///
-    /// Ordering is deterministic: layer order (base first), and within a layer
-    /// the order the SQL returned (rid order).
+    /// **This is the whole fix.** Precedence between layers is per-NODE, not
+    /// per-resource, because the tile merge is per key: an overlay that restates
+    /// a nodegroup while omitting one of its nodes leaves the lower layer's value
+    /// for that node standing (and `tree_to_tiles` builds a tile from the keys the
+    /// input tree actually set, so a partial overlay omits keys as a matter of
+    /// course — this is the common case, not a corner).
+    ///
+    /// The head's `node_presence` is the only thing that can answer it. Without
+    /// it, "this layer says NO" and "this layer does not say" are the same
+    /// observation — an absent index row — and they have opposite meanings.
+    ///
+    /// A NULL value still counts as carried: a null is not silence, it is how a
+    /// layer RETRACTS a lower layer's value (the merge sees the key as present
+    /// and lets it win). Emit records it for exactly that reason.
+    fn defines_node(
+        &self,
+        index: usize,
+        graph: &StaticGraph,
+        uuid: &str,
+        node_id: &str,
+    ) -> Result<bool, ReadError> {
+        let Some(spine) = self.spine_table(index, graph) else {
+            return Ok(false);
+        };
+        let conn = open_head(&self.layers[index].dir)?;
+        // One indexed point lookup: dict.term is UNIQUE, the spine is keyed by
+        // term_id, and node_presence is PRIMARY KEY (rid, node).
+        let found: i64 = conn.query_row(
+            &format!(
+                "SELECT EXISTS (
+                     SELECT 1 FROM node_presence np
+                       JOIN {spine} s ON s.rid = np.rid
+                       JOIN dict dr ON dr.term_id = s.term_id
+                       JOIN dict dn ON dn.term_id = np.node
+                      WHERE dr.term = ?1 AND dn.term = ?2)"
+            ),
+            (uuid, node_id),
+            |r| r.get(0),
+        )?;
+        Ok(found != 0)
+    }
+
+    /// A filter tree with each leaf compiled to a one-layer probe, and told which
+    /// NODE it reads.
+    ///
+    /// Compiled once per query and reused across every candidate: the probe SQL
+    /// is dictionary-agnostic (it resolves terms via `(SELECT term_id FROM dict
+    /// WHERE term = ?)`), so the SAME statement is correct in every layer. That
+    /// is what lets one plan be evaluated against whichever layer turns out to own
+    /// each leaf's node.
+    fn plan(
+        &self,
+        query: &Query,
+        expr: &Expr,
+        graph: &StaticGraph,
+        registry: Option<&ExtensionTypeRegistry>,
+    ) -> Result<Plan, ReadError> {
+        let sub = |e: &Expr| self.plan(query, e, graph, registry);
+        Ok(match expr {
+            Expr::All(v) => Plan::All(v.iter().map(sub).collect::<Result<_, _>>()?),
+            Expr::Any(v) => Plan::Any(v.iter().map(sub).collect::<Result<_, _>>()?),
+            Expr::Not(x) => Plan::Not(Box::new(sub(x)?)),
+            leaf => {
+                let node_id = ros_madair_query::leaf_node_id(leaf, graph, registry)
+                    .map_err(ReadError::Query)?
+                    .expect("a non-boolean Expr always reads a node");
+                let one = Query {
+                    r#where: Some(leaf.clone()),
+                    measures: vec![Measure::CountRecords],
+                    ..query.clone()
+                };
+                let probe = compile_match_probe(&one, graph, registry).map_err(ReadError::Query)?;
+                Plan::Leaf { node_id, probe }
+            }
+        })
+    }
+
+    /// Evaluate the filter for ONE resource in the composed view.
+    ///
+    /// Each leaf is answered by **the topmost layer that defines that leaf's
+    /// node** — which is not necessarily the topmost layer that defines the
+    /// resource, and that difference is the bug this replaces. Under the old
+    /// rule, a partial overlay that carried a resource became authoritative for
+    /// EVERY field of it, so:
+    ///
+    /// - a filter on a field the overlay does not carry answered "no" there, and
+    ///   the base's correct verdict was discarded;
+    /// - an `all` across two fields owned by DIFFERENT layers matched in neither,
+    ///   though the composed resource the user is looking at satisfies both.
+    ///
+    /// A leaf no layer defines is **false**: the resource has no value for that
+    /// node, so it cannot match a predicate on it. (No probe is issued — the
+    /// answer is already known.)
+    fn matches(
+        &self,
+        plan: &Plan,
+        uuid: &str,
+        model_layers: &[usize],
+        graph: &StaticGraph,
+    ) -> Result<bool, ReadError> {
+        match plan {
+            Plan::All(v) => {
+                for p in v {
+                    if !self.matches(p, uuid, model_layers, graph)? {
+                        return Ok(false);
+                    }
+                }
+                Ok(true)
+            }
+            Plan::Any(v) => {
+                for p in v {
+                    if self.matches(p, uuid, model_layers, graph)? {
+                        return Ok(true);
+                    }
+                }
+                Ok(false)
+            }
+            Plan::Not(x) => Ok(!self.matches(x, uuid, model_layers, graph)?),
+            Plan::Leaf { node_id, probe } => {
+                for &i in model_layers.iter().rev() {
+                    if self.defines_node(i, graph, uuid, node_id)? {
+                        return self.probe(i, probe, uuid);
+                    }
+                }
+                Ok(false)
+            }
+        }
+    }
+
+    /// "Does `uuid` match this leaf, according to layer `index`?" — one indexed
+    /// point lookup.
+    fn probe(
+        &self,
+        index: usize,
+        probe: &CompiledStatement,
+        uuid: &str,
+    ) -> Result<bool, ReadError> {
+        let conn = open_head(&self.layers[index].dir)?;
+        let mut bound = bind(&probe.params);
+        bound.push(SqlValue::Text(uuid.to_string()));
+        let hit: i64 =
+            conn.query_row(&probe.sql, rusqlite::params_from_iter(bound.iter()), |r| {
+                r.get(0)
+            })?;
+        Ok(hit != 0)
+    }
+
+    /// Resolve a query to the resource UUIDs matching it in the **composed** view.
+    ///
+    /// ```text
+    /// composed = (what the BASE matches, minus everything an overlay touched)
+    ///          ∪ (every touched resource that the COMPOSED evaluation matches)
+    /// ```
+    ///
+    /// The first arm is a single-layer query — the base's own plan, its own fast
+    /// paths — and is correct precisely because a resource no overlay touched
+    /// cannot have been changed by one. The second arm is where composition
+    /// happens, and it is bounded by the overlays.
+    ///
+    /// Ordering is deterministic: the base's matches in rid order, then the
+    /// composed candidates in UUID order.
     ///
     /// # The `limit`, precisely
     ///
-    /// `query.limit` is applied **per layer** and the composed result is then
-    /// truncated to it. A layered query whose base alone fills the limit can
-    /// therefore miss overlay matches beyond that window — the same truncation
-    /// hazard a single-layer `limit` already has, one layer per copy. Raise the
-    /// limit if you are composing and counting on completeness (or use
-    /// [`Layers::count`], which never truncates).
-    ///
-    /// `query.measures` is IGNORED: this executes an ids plan by construction,
-    /// because a count plan returns a number and numbers cannot be
-    /// precedence-filtered.
+    /// Applied to the COMPOSED result, after composition — never per layer. (It
+    /// therefore cannot hide an overlay match behind a full base window, which a
+    /// per-layer limit could.) `query.measures` is ignored: this executes an ids
+    /// plan by construction, because a count returns a number and numbers cannot
+    /// be precedence-filtered.
     pub fn resolve(
         &self,
         query: &Query,
@@ -262,9 +446,8 @@ impl Layers {
         Ok(ids.into_iter().take(limit).collect())
     }
 
-    /// [`Layers::resolve`] without the row cap — the oracle the counts are
-    /// checked against, and the honest thing to call when you need the whole
-    /// composed set.
+    /// [`Layers::resolve`] without the row cap — the honest thing to call when you
+    /// need the whole composed set, and what [`Layers::count_by_union`] counts.
     fn resolve_unlimited(
         &self,
         query: &Query,
@@ -275,24 +458,31 @@ impl Layers {
         if model_layers.is_empty() {
             return Err(ReadError::ModelInNoLayer(graph.graph_id().to_string()));
         }
-        // ONE compile: the SQL is dictionary-agnostic (it resolves terms via
-        // `(SELECT term_id FROM dict WHERE term = ?)`), so the same text is
-        // correct in every layer. Nothing about this statement is layer-bound.
-        let stmt = self.compile_ids(query, graph, registry)?;
+        let base = model_layers[0];
+        let candidates = self.candidates(&model_layers, graph)?;
 
-        let mut out: Vec<String> = Vec::new();
-        let mut seen: HashSet<String> = HashSet::new();
-        for &i in &model_layers {
-            let above = self.defined_above(i, &model_layers, graph)?;
-            let conn = open_head(&self.layers[i].dir)?;
-            for uuid in select_ids(&conn, &stmt)? {
-                // P13: a higher layer redefines this resource, so THIS layer's
-                // verdict on it is stale — the higher layer's own arm decides.
-                if above.contains(&uuid) {
-                    continue;
-                }
-                if seen.insert(uuid.clone()) {
-                    out.push(uuid);
+        // Arm 1: the base's own matches, minus anything an overlay touched.
+        let ids_stmt = self.compile_ids(query, graph, registry)?;
+        let base_conn = open_head(&self.layers[base].dir)?;
+        let mut out: Vec<String> = select_ids(&base_conn, &ids_stmt)?
+            .into_iter()
+            .filter(|u| !candidates.contains(u))
+            .collect();
+
+        // Arm 2: every touched resource, evaluated per-node across the stack.
+        if !candidates.is_empty() {
+            let plan = match &query.r#where {
+                Some(expr) => Some(self.plan(query, expr, graph, registry)?),
+                // No filter: every resource matches, so every candidate does.
+                None => None,
+            };
+            for uuid in &candidates {
+                let hit = match &plan {
+                    Some(plan) => self.matches(plan, uuid, &model_layers, graph)?,
+                    None => true,
+                };
+                if hit {
+                    out.push(uuid.clone());
                 }
             }
         }
@@ -300,7 +490,8 @@ impl Layers {
     }
 
     /// Compile the ids plan once, forcing `measures = [select_ids]` and lifting
-    /// the row cap to "no cap" for the internal, un-truncated resolve.
+    /// the row cap: the composed limit is applied after composition, so a
+    /// per-layer cap here would silently truncate the input to it.
     fn compile_ids(
         &self,
         query: &Query,
@@ -309,7 +500,7 @@ impl Layers {
     ) -> Result<CompiledStatement, ReadError> {
         let ids_query = Query {
             measures: vec![Measure::SelectIds],
-            limit: Some(query.limit.unwrap_or(u32::MAX)),
+            limit: Some(u32::MAX),
             ..query.clone()
         };
         let mut stmts =
@@ -317,43 +508,39 @@ impl Layers {
         Ok(stmts.remove(0))
     }
 
-    /// `|composed match set|` — a count of the composed view, **never** a sum
-    /// of per-layer counts.
+    /// `|composed match set|` — a count of the composed view, **never** a sum of
+    /// per-layer counts.
     ///
     /// # Why the obvious things are wrong
     ///
     /// - `Σ count_i` double-counts every resource present in two layers.
     /// - "each layer counts only what it originates, then sum" is subtly wrong:
-    ///   origination is stable across layers, **match status is not**. Base has
-    ///   `B: type = Church`; the overlay overrides `B` to `Chapel`. Counting
+    ///   origination is stable across layers, **match status is not**. The base
+    ///   has `B: type = Church`; an overlay edits it to `Chapel`. Counting
     ///   `type = Church`: the base originated `B` so it counts it; the overlay
-    ///   originates nothing so it counts nothing — and the total wrongly
-    ///   includes `B`, which is a Chapel in the composed view. Silent off-by-N.
+    ///   originates nothing so it counts nothing — and the total wrongly includes
+    ///   `B`, which is a Chapel in the composed view. Silent off-by-N.
     ///
-    /// # The plan actually used — O(overlay), not O(result)
+    /// # The plan — O(overlay), not O(result)
     ///
     /// ```text
-    /// total = count(F, base)                       // the single-layer FAST path survives
-    ///       - |{u ∈ redefined-above : base said u matched F}|   // one indexed probe each
-    ///       + Σ_{overlays} |{u ∈ matches(F, overlay) : u not redefined above overlay}|
+    /// total = count(F, base)                    // the single-layer FAST path survives
+    ///       - |{c ∈ touched : the BASE says c matches}|      // its verdict is now stale
+    ///       + |{c ∈ touched : the COMPOSED view says c matches}|
     /// ```
     ///
     /// The base keeps its point-lookup count (`rollup_concept_counts`, or the
-    /// index-only `COUNT(DISTINCT rid)`) — the thing a naive union destroys. The
-    /// corrections are bounded by the OVERLAY sizes: an on-device overlay holds
-    /// a handful of resources, so this is a base count plus a handful of probes,
-    /// not a haul of every matching UUID in the corpus. (On a 209K corpus with a
-    /// filter matching 15,773 resources, the union path drags 15,773 UUIDs out
-    /// of the base to de-duplicate them against an overlay of five. This does
-    /// not.) It degrades gracefully: an overlay the size of the corpus makes
-    /// this no worse than the union.
+    /// index-only `COUNT(DISTINCT rid)`) — the thing a naive union destroys. Both
+    /// corrections range over the resources the OVERLAYS touch, so this is a base
+    /// count plus a handful of indexed probes, not a haul of every matching UUID
+    /// in the corpus. (On a 209K corpus with a filter matching 15,773 resources,
+    /// the union path drags 15,773 UUIDs out of the base to de-duplicate them
+    /// against an overlay of five. This does not.) It degrades gracefully: an
+    /// overlay the size of the corpus makes this no worse than the union.
     ///
-    /// Still: a layered count costs strictly more than a single-layer count —
-    /// one extra id-scan per overlay, plus one probe per overridden resource.
-    /// That is the price of correctness, and it is paid per overlay.
-    ///
-    /// [`Layers::count_by_union`] is the same number computed the slow, obvious
-    /// way; the tests assert they agree, and the union is the oracle.
+    /// Still: a layered count costs strictly more than a single-layer count — a
+    /// base probe and a composed evaluation per touched resource. That is the
+    /// price of correctness, and it is paid per overlay, not per corpus.
     pub fn count(
         &self,
         query: &Query,
@@ -364,7 +551,9 @@ impl Layers {
         if model_layers.is_empty() {
             return Err(ReadError::ModelInNoLayer(graph.graph_id().to_string()));
         }
-        // Single layer: this IS a single-layer count. Fast paths intact.
+        let base = model_layers[0];
+        let base_conn = open_head(&self.layers[base].dir)?;
+
         let count_query = Query {
             measures: vec![Measure::CountRecords],
             ..query.clone()
@@ -374,119 +563,68 @@ impl Layers {
                 compile_with_registry(&count_query, graph, registry).map_err(ReadError::Query)?;
             s.remove(0)
         };
-        let base = model_layers[0];
-        let base_conn = open_head(&self.layers[base].dir)?;
-        let mut total = select_count(&base_conn, &count_stmt)?;
-        if model_layers.len() == 1 {
-            return Ok(total);
+        let mut total = select_count(&base_conn, &count_stmt)? as i64;
+
+        let candidates = self.candidates(&model_layers, graph)?;
+        if candidates.is_empty() {
+            // Single layer, or overlays that carry nothing for this model: this
+            // IS a single-layer count, fast paths intact.
+            return Ok(total.max(0) as usize);
         }
 
-        // Correction 1: the base's verdict on every resource an overlay
-        // redefines is stale. Probe the base for each (indexed point lookup)
-        // and subtract the ones the base had counted.
-        let above_base = self.defined_above(base, &model_layers, graph)?;
-        if !above_base.is_empty() {
+        // Correction 1: the base's verdict on every touched resource is stale.
+        // Probe the base for each and subtract the ones it had counted.
+        if let Some(expr) = &query.r#where {
             let probe = compile_match_probe(query, graph, registry).map_err(ReadError::Query)?;
-            let mut prepared = base_conn.prepare(&probe.sql)?;
-            for uuid in &above_base {
-                let mut bound = bind(&probe.params);
-                bound.push(SqlValue::Text(uuid.clone()));
-                let matched: i64 =
-                    prepared.query_row(rusqlite::params_from_iter(bound.iter()), |r| r.get(0))?;
-                if matched != 0 {
+            for uuid in &candidates {
+                if self.probe(base, &probe, uuid)? {
                     total -= 1;
                 }
             }
-        }
 
-        // Correction 2: each overlay contributes its own matches, minus any
-        // resource a still-higher layer redefines. Overlays are small: an ids
-        // scan over one is cheap, and no probe is needed.
-        let ids_stmt = self.compile_ids(query, graph, registry)?;
-        for &i in &model_layers[1..] {
-            let above = self.defined_above(i, &model_layers, graph)?;
-            let conn = open_head(&self.layers[i].dir)?;
-            for uuid in select_ids(&conn, &ids_stmt)? {
-                if !above.contains(&uuid) {
+            // Correction 2: add back the ones the COMPOSED view matches, each leaf
+            // answered by the layer that owns its node.
+            let plan = self.plan(query, expr, graph, registry)?;
+            for uuid in &candidates {
+                if self.matches(&plan, uuid, &model_layers, graph)? {
                     total += 1;
                 }
             }
+        } else {
+            // No filter: the count is |resources|, so composition is a set union.
+            // Every candidate matches; subtract only those the base already had.
+            let probe = compile_match_probe(query, graph, registry).map_err(ReadError::Query)?;
+            for uuid in &candidates {
+                if self.probe(base, &probe, uuid)? {
+                    total -= 1;
+                }
+            }
+            total += candidates.len() as i64;
         }
-        Ok(total)
+
+        Ok(total.max(0) as usize)
     }
 
     /// The count computed the obvious way: resolve the composed id set and take
     /// its size. O(result size) — it drags every matching UUID out of the base.
     ///
-    /// This is the **oracle**: it is the definition of the answer, and
+    /// This is the **reference**: it is the definition of the answer, and
     /// [`Layers::count`] is an optimisation of it. Kept public because a caller
-    /// that already wants the ids should not pay for a second plan, and because
-    /// a cross-check against the fast path is worth having.
+    /// that already wants the ids should not pay for a second plan, and because a
+    /// cross-check against the fast path is worth having.
+    ///
+    /// It is NOT an independent oracle, mind — it shares [`Layers::matches`] with
+    /// the fast path, so a bug in per-node precedence would fool both. The
+    /// independent check is that a composed QUERY agrees with a composed
+    /// HYDRATION, and that lives in `tests/layers.rs`.
     pub fn count_by_union(
         &self,
         query: &Query,
         graph: &StaticGraph,
         registry: Option<&ExtensionTypeRegistry>,
     ) -> Result<usize, ReadError> {
-        // No row cap: a count must not be truncated by `limit`.
-        let unlimited = Query {
-            limit: Some(u32::MAX),
-            ..query.clone()
-        };
-        Ok(self.resolve_unlimited(&unlimited, graph, registry)?.len())
+        Ok(self.resolve_unlimited(query, graph, registry)?.len())
     }
-
-    /// The count computed **in SQL**, over the layers ATTACHed into one
-    /// connection: `COUNT(DISTINCT uuid)` over a `UNION ALL` of per-layer arms,
-    /// each arm anti-joined (on the UUID **string**) against the dictionaries of
-    /// the layers above it. See [`ros_madair_query::compile_layered_count`].
-    ///
-    /// Nothing here joins on a `term_id` across a layer — each arm resolves its
-    /// terms in its own schema's `dict`, and the only cross-schema comparison is
-    /// `dd.term = d.term`, a string.
-    ///
-    /// Cost is O(result size), like [`Layers::count_by_union`], but SQLite does
-    /// the de-duplication and the ids never enter Rust. Offered as the
-    /// single-connection path and as a second cross-check.
-    ///
-    /// **Not the default**, for two reasons: it forfeits the base's point-lookup
-    /// count (see [`Layers::count`]), and ATTACH under browser wa-sqlite is
-    /// UNPROVEN — the spike was never run — so the native path must not become
-    /// the only path.
-    pub fn count_by_attached_sql(
-        &self,
-        query: &Query,
-        graph: &StaticGraph,
-        registry: Option<&ExtensionTypeRegistry>,
-    ) -> Result<usize, ReadError> {
-        let model_layers = self.model_layers(graph);
-        if model_layers.is_empty() {
-            return Err(ReadError::ModelInNoLayer(graph.graph_id().to_string()));
-        }
-        // A scratch in-memory main, with every layer ATTACHed read-only beside
-        // it: no layer is "main", so no layer is privileged or writable.
-        let conn = Connection::open_with_flags(
-            ":memory:",
-            OpenFlags::SQLITE_OPEN_READ_WRITE
-                | OpenFlags::SQLITE_OPEN_CREATE
-                | OpenFlags::SQLITE_OPEN_NO_MUTEX
-                | OpenFlags::SQLITE_OPEN_URI,
-        )?;
-        conn.execute_batch("PRAGMA query_only = 1;")?;
-        let names: Vec<String> = model_layers.iter().map(|i| format!("l{i}")).collect();
-        for (name, &i) in names.iter().zip(&model_layers) {
-            let path = self.layers[i].dir.join("head.sqlite");
-            // `mode=ro` needs URI filenames, which ATTACH honours because the
-            // connection was opened with SQLITE_OPEN_URI.
-            let uri = format!("file:{}?mode=ro", path.display());
-            conn.execute(&format!("ATTACH DATABASE ?1 AS {name}"), [uri])?;
-        }
-        let schemas: Vec<&str> = names.iter().map(String::as_str).collect();
-        let stmt =
-            compile_layered_count(query, graph, registry, &schemas).map_err(ReadError::Query)?;
-        select_count(&conn, &stmt)
-    }
-
     /// The tiles of one resource in the **composed** view: gathered from every
     /// layer that has it, merged with precedence (topmost layer wins).
     ///
