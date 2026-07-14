@@ -1311,6 +1311,7 @@ dependencies = [
  "rmp-serde",
  "ros-madair-emit",
  "ros-madair-format",
+ "ros-madair-query",
  "rusqlite",
  "serde_json",
 ]

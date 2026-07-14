@@ -18,6 +18,12 @@ description = "Native read path for Rós Madair static artifacts: resolve a reso
 # why the format types were split out of here.
 alizarin-core.workspace = true
 ros-madair-format = { path = "../ros-madair-format" }
+# Composition takes the query IR, not compiled SQL: a layered CountRecords must
+# execute an *ids* plan per layer (a count returns a number, and numbers cannot
+# be de-duplicated or precedence-filtered across layers), so the composer has to
+# be able to re-choose the measure. It cannot do that if it is handed finished
+# SQL. See `layers.rs`.
+ros-madair-query = { path = "../ros-madair-query" }
 rusqlite = { version = "0.32", features = ["bundled"] }
 rmp-serde = "1"
 serde_json = "1"

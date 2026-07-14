@@ -50,6 +50,11 @@ use alizarin_core::graph::{StaticGraph, StaticNode};
 /// (mirrors the emitted manifest's default `max_result_rows` budget).
 pub const DEFAULT_SELECT_LIMIT: u32 = 1000;
 
+/// The SQL table-name qualifier for a single-layer compile: none. Layered
+/// compiles ([`compile_layered_count`]) pass `"l0."`, `"l1."`, … so each arm
+/// resolves its tables — crucially its `dict` — inside its own layer.
+const MAIN: &str = "";
+
 // ---------------------------------------------------------------------------
 // IR types (M2.1)
 // ---------------------------------------------------------------------------
@@ -160,6 +165,9 @@ pub enum QueryError {
     NegatedCoarsePredicate { path: String },
     /// `measures` was empty — nothing to compile.
     EmptyMeasures,
+    /// [`compile_layered_count`] was handed no layers. A layered count over
+    /// zero layers is not 0, it is a caller bug.
+    NoLayers,
 }
 
 impl fmt::Display for QueryError {
@@ -207,6 +215,10 @@ impl fmt::Display for QueryError {
                 path
             ),
             QueryError::EmptyMeasures => write!(f, "query has no measures; nothing to compile"),
+            QueryError::NoLayers => write!(
+                f,
+                "layered count over zero layers: pass the layer schemas, base first"
+            ),
         }
     }
 }
@@ -284,7 +296,9 @@ pub fn compile_with_registry(
         // (node, ancestor) row in rollup_concept_counts — a two-key point
         // lookup instead of a correlated EXISTS over the entire spine.
         if *measure == Measure::CountRecords {
-            if let Some(sql) = try_rollup_count(&query.r#where, &resolver, &mut params, registry)? {
+            if let Some(sql) =
+                try_rollup_count(&query.r#where, &resolver, &mut params, MAIN, registry)?
+            {
                 statements.push(CompiledStatement {
                     measure: *measure,
                     sql,
@@ -296,7 +310,9 @@ pub fn compile_with_registry(
             // Fast path (covering idx_ct): a CountRecords whose whole
             // predicate is one exact `Is` concept filter is an index-only
             // COUNT(DISTINCT rid) over concept_tags — no spine scan.
-            if let Some(sql) = try_exact_count(&query.r#where, &resolver, &mut params, registry)? {
+            if let Some(sql) =
+                try_exact_count(&query.r#where, &resolver, &mut params, MAIN, registry)?
+            {
                 statements.push(CompiledStatement {
                     measure: *measure,
                     sql,
@@ -316,6 +332,7 @@ pub fn compile_with_registry(
                 &query.r#where,
                 &resolver,
                 &mut params,
+                MAIN,
                 &spine_table,
                 limit,
                 registry,
@@ -331,7 +348,14 @@ pub fn compile_with_registry(
         }
 
         let where_sql = match &query.r#where {
-            Some(expr) => Some(compile_expr(expr, &resolver, &mut params, &mut coarse, registry)?),
+            Some(expr) => Some(compile_expr(
+                expr,
+                &resolver,
+                &mut params,
+                MAIN,
+                &mut coarse,
+                registry,
+            )?),
             None => None,
         };
         let where_clause = where_sql
@@ -358,6 +382,244 @@ pub fn compile_with_registry(
         });
     }
     Ok(statements)
+}
+
+// ---------------------------------------------------------------------------
+// Layered composition (R1): one statement over several ATTACHed layers
+// ---------------------------------------------------------------------------
+
+/// Compile a **layered** `CountRecords` as one statement over several ATTACHed
+/// layer databases: the number of distinct resource UUIDs matching the filter
+/// in the **composed** view of `schemas` (ordered, base first).
+///
+/// # Why counts cannot be summed, and why they cannot be summed cleverly either
+///
+/// Layers do not share a dictionary — an overlay is emitted on-device, long
+/// after the base shipped — so the same URI has DIFFERENT `term_id`s in
+/// different layers and **nothing keyed on `term_id` may cross a layer
+/// boundary**. The only cross-layer identity is the UUID *string* in
+/// `dict.term`. Two consequences:
+///
+/// 1. `Σ COUNT(*)` double-counts any resource present in two layers.
+/// 2. The obvious repair — "each layer counts only the resources it
+///    *originates*, then sum" — is **wrong**, and quietly so. Origination is
+///    stable across layers but *match status is not*: a base resource with
+///    `type = Church` that an overlay overrides to `Chapel` is originated by
+///    the base, so the base counts it for `type = Church`, and the overlay does
+///    not (it originates nothing) — total wrongly includes it, though the
+///    composed view says Chapel. An overlay can flip a base resource *into* or
+///    *out of* a filter.
+///
+/// # Precedence (P13), stated
+///
+/// **The topmost layer that DEFINES a resource decides that resource's match
+/// status.** "Defines" = the resource has a row in that layer's spine. Later
+/// layers override earlier ones; a base verdict on a resource an overlay has
+/// redefined is stale and must be discarded, not unioned.
+///
+/// This is why every arm below carries a `NOT EXISTS` against the dictionaries
+/// of the layers *above* it — and note that that anti-join is on `dd.term =
+/// d.term`, a **string** comparison. It is the only kind of cross-layer join
+/// that exists in this design.
+///
+/// This semantics presumes the composition contract: **an overlay that carries
+/// a resource carries it in full** (a complete restatement of its tiles). A
+/// partial restatement would leave a base tile visible to hydration but
+/// invisible to the overlay's index, and the two would disagree.
+///
+/// # Shape
+///
+/// ```sql
+/// SELECT COUNT(DISTINCT uuid) FROM (
+///     SELECT d.term AS uuid FROM l0.spine_talk s
+///       JOIN l0.dict d ON d.term_id = s.term_id
+///      WHERE <F over l0>
+///        AND NOT EXISTS (SELECT 1 FROM l1.spine_talk ss
+///                          JOIN l1.dict dd ON dd.term_id = ss.term_id
+///                         WHERE dd.term = d.term)      -- redefined above
+///     UNION ALL
+///     SELECT d.term AS uuid FROM l1.spine_talk s
+///       JOIN l1.dict d ON d.term_id = s.term_id
+///      WHERE <F over l1>
+/// )
+/// ```
+///
+/// Each arm resolves its `dict`, `concept_tags` and `vocab` **within its own
+/// layer**: the identical predicate, independently interned. No `term_id`
+/// crosses a schema.
+///
+/// # Cost, honestly
+///
+/// Strictly more expensive than a single-layer count. The single-layer count
+/// fast paths — the `rollup_concept_counts` point lookup and the index-only
+/// `COUNT(DISTINCT rid)` — are **unusable in a layered count**: they return a
+/// number, and a number cannot be de-duplicated or precedence-filtered against
+/// another layer. Every arm here must therefore materialise its matching ids
+/// (the concept arms still ride the covering `idx_ct`, but N rows flow where
+/// one row would have). Cost is O(result size), not O(overlay size).
+///
+/// `ros_madair_read::Layers::count` therefore does **not** use this by default:
+/// it uses a base-count-plus-correction plan whose cost is O(overlay size). This
+/// statement exists as the SQL-side path (single connection, SQLite does the
+/// de-dup) and as the cross-check oracle. Note that ATTACH under browser
+/// wa-sqlite is unproven, which is the other reason it is not the only path.
+pub fn compile_layered_count(
+    query: &Query,
+    graph: &StaticGraph,
+    registry: Option<&ExtensionTypeRegistry>,
+    schemas: &[&str],
+) -> Result<CompiledStatement, QueryError> {
+    let slug = check_model(&query.model, graph)?;
+    if schemas.is_empty() {
+        return Err(QueryError::NoLayers);
+    }
+    let spine_table = format!("spine_{}", slug.replace('-', "_"));
+    let resolver = PathResolver::new(graph);
+
+    let mut params = ParamBuilder::default();
+    let mut coarse = false;
+    let mut arms = Vec::with_capacity(schemas.len());
+    for (i, schema) in schemas.iter().enumerate() {
+        let ids = ids_subquery(
+            &query.r#where,
+            &resolver,
+            &mut params,
+            &format!("{schema}."),
+            &spine_table,
+            &mut coarse,
+            registry,
+        )?;
+        // P13: discard this layer's verdict on any resource a HIGHER layer
+        // redefines. String anti-join — the only legal cross-layer link.
+        let mut arm = ids;
+        for above in &schemas[i + 1..] {
+            arm.push_str(&format!(
+                " AND NOT EXISTS (SELECT 1 FROM {above}.{spine_table} ss \
+                 JOIN {above}.dict dd ON dd.term_id = ss.term_id \
+                 WHERE dd.term = d.term)"
+            ));
+        }
+        arms.push(arm);
+    }
+    Ok(CompiledStatement {
+        measure: Measure::CountRecords,
+        sql: format!(
+            "SELECT COUNT(DISTINCT uuid) FROM ({})",
+            arms.join(" UNION ALL ")
+        ),
+        params: params.params,
+        coarse,
+    })
+}
+
+/// Compile a **match probe**: "does resource `?N` match this filter, *in this
+/// one layer*?" — `SELECT EXISTS(…)`, answering 0 or 1.
+///
+/// This is the correction primitive for the O(overlay-size) layered count: for
+/// each resource an overlay redefines, ask the base whether *the base* thought
+/// it matched, and subtract the hits. Probing is a point lookup (`dict.term` is
+/// unique-indexed, spine is keyed by `term_id`), so the correction costs one
+/// indexed probe per overridden resource — bounded by the overlay, not by the
+/// corpus.
+///
+/// **Binding contract**: the returned `params` are the filter's parameters
+/// only. The SQL carries ONE further placeholder, `?{params.len()+1}`, for the
+/// resource UUID; bind `params ++ [uuid]` per probe and re-use the prepared
+/// statement across probes.
+pub fn compile_match_probe(
+    query: &Query,
+    graph: &StaticGraph,
+    registry: Option<&ExtensionTypeRegistry>,
+) -> Result<CompiledStatement, QueryError> {
+    let slug = check_model(&query.model, graph)?;
+    let spine_table = format!("spine_{}", slug.replace('-', "_"));
+    let resolver = PathResolver::new(graph);
+
+    let mut params = ParamBuilder::default();
+    let mut coarse = false;
+    // The filter compiles against the spine alias `s`, exactly as in `compile`.
+    let filter = match &query.r#where {
+        Some(expr) => Some(compile_expr(
+            expr,
+            &resolver,
+            &mut params,
+            MAIN,
+            &mut coarse,
+            registry,
+        )?),
+        None => None,
+    };
+    // Allocate the UUID placeholder AFTER the filter's params, and do not push
+    // a value for it: the caller supplies one per probe.
+    let uuid_p = format!("?{}", params.params.len() + 1);
+    let filter_clause = filter.map(|f| format!(" AND {f}")).unwrap_or_default();
+    Ok(CompiledStatement {
+        measure: Measure::CountRecords,
+        sql: format!(
+            "SELECT EXISTS (SELECT 1 FROM {spine_table} s \
+             JOIN dict d ON d.term_id = s.term_id \
+             WHERE d.term = {uuid_p}{filter_clause})"
+        ),
+        params: params.params,
+        coarse,
+    })
+}
+
+/// One layer's matching-UUID subquery: `SELECT d.term AS uuid FROM …` with no
+/// `ORDER BY` and no `LIMIT` (the caller is counting a composed set; a per-arm
+/// limit would silently truncate it). Takes the concept fast paths where the
+/// shape allows, so the arm is still an index-only scan of `concept_tags`.
+///
+/// Always exposes the spine alias `s` and the dict alias `d`, because the
+/// caller appends `NOT EXISTS (… WHERE dd.term = d.term)` precedence clauses.
+/// The `DescendantOrSelfOf` arm can repeat a uuid (one rid can carry several
+/// descendant concepts); `COUNT(DISTINCT uuid)` absorbs that.
+fn ids_subquery(
+    where_expr: &Option<Expr>,
+    resolver: &PathResolver,
+    params: &mut ParamBuilder,
+    schema: &str,
+    spine_table: &str,
+    coarse: &mut bool,
+    registry: Option<&ExtensionTypeRegistry>,
+) -> Result<String, QueryError> {
+    if let Some(Expr::Concept { path, op, value }) = where_expr {
+        let node = resolve_concept_node(path, resolver, registry)?;
+        let node_p = params.text(&node.nodeid);
+        let value_p = params.text(value);
+        return Ok(match op {
+            ConceptOp::Is => format!(
+                "SELECT d.term AS uuid FROM {schema}concept_tags ct \
+                 JOIN {schema}{spine_table} s ON s.rid = ct.rid \
+                 JOIN {schema}dict d ON d.term_id = s.term_id \
+                 WHERE ct.node = (SELECT term_id FROM {schema}dict WHERE term = {node_p}) \
+                 AND ct.concept = (SELECT term_id FROM {schema}dict WHERE term = {value_p})"
+            ),
+            ConceptOp::DescendantOrSelfOf => format!(
+                "SELECT d.term AS uuid FROM {schema}concept_tags ct \
+                 JOIN {schema}{spine_table} s ON s.rid = ct.rid \
+                 JOIN {schema}dict d ON d.term_id = s.term_id \
+                 WHERE ct.node = (SELECT term_id FROM {schema}dict WHERE term = {node_p}) \
+                 AND ct.concept BETWEEN \
+                 (SELECT vv.dfs_enter FROM {schema}vocab vv \
+                  JOIN {schema}dict dd ON dd.term_id = vv.concept WHERE dd.term = {value_p}) \
+                 AND \
+                 (SELECT vv.dfs_leave FROM {schema}vocab vv \
+                  JOIN {schema}dict dd ON dd.term_id = vv.concept WHERE dd.term = {value_p})"
+            ),
+        });
+    }
+    let where_clause = match where_expr {
+        Some(expr) => format!(
+            " WHERE {}",
+            compile_expr(expr, resolver, params, schema, coarse, registry)?
+        ),
+        None => " WHERE 1=1".to_string(),
+    };
+    Ok(format!(
+        "SELECT d.term AS uuid FROM {schema}{spine_table} s \
+         JOIN {schema}dict d ON d.term_id = s.term_id{where_clause}"
+    ))
 }
 
 // ---------------------------------------------------------------------------
@@ -607,6 +869,7 @@ fn try_rollup_count(
     where_expr: &Option<Expr>,
     resolver: &PathResolver,
     params: &mut ParamBuilder,
+    schema: &str,
     registry: Option<&ExtensionTypeRegistry>,
 ) -> Result<Option<String>, QueryError> {
     let Some(Expr::Concept {
@@ -634,9 +897,9 @@ fn try_rollup_count(
     let node_p = params.text(&node.nodeid);
     let value_p = params.text(value);
     Ok(Some(format!(
-        "SELECT COALESCE((SELECT n FROM rollup_concept_counts \
-         WHERE node = (SELECT term_id FROM dict WHERE term = {node_p}) \
-         AND ancestor = (SELECT term_id FROM dict WHERE term = {value_p})), 0)"
+        "SELECT COALESCE((SELECT n FROM {schema}rollup_concept_counts \
+         WHERE node = (SELECT term_id FROM {schema}dict WHERE term = {node_p}) \
+         AND ancestor = (SELECT term_id FROM {schema}dict WHERE term = {value_p})), 0)"
     )))
 }
 
@@ -679,6 +942,7 @@ fn try_exact_count(
     where_expr: &Option<Expr>,
     resolver: &PathResolver,
     params: &mut ParamBuilder,
+    schema: &str,
     registry: Option<&ExtensionTypeRegistry>,
 ) -> Result<Option<String>, QueryError> {
     let Some(Expr::Concept {
@@ -693,9 +957,9 @@ fn try_exact_count(
     let node_p = params.text(&node.nodeid);
     let value_p = params.text(value);
     Ok(Some(format!(
-        "SELECT COUNT(DISTINCT rid) FROM concept_tags \
-         WHERE node = (SELECT term_id FROM dict WHERE term = {node_p}) \
-         AND concept = (SELECT term_id FROM dict WHERE term = {value_p})"
+        "SELECT COUNT(DISTINCT rid) FROM {schema}concept_tags \
+         WHERE node = (SELECT term_id FROM {schema}dict WHERE term = {node_p}) \
+         AND concept = (SELECT term_id FROM {schema}dict WHERE term = {value_p})"
     )))
 }
 
@@ -717,6 +981,7 @@ fn try_concept_select(
     where_expr: &Option<Expr>,
     resolver: &PathResolver,
     params: &mut ParamBuilder,
+    schema: &str,
     spine_table: &str,
     limit: i64,
     registry: Option<&ExtensionTypeRegistry>,
@@ -730,26 +995,26 @@ fn try_concept_select(
     let limit_p = params.int(limit);
     let sql = match op {
         ConceptOp::Is => format!(
-            "SELECT d.term FROM concept_tags ct \
-             JOIN {spine_table} s ON s.rid = ct.rid \
-             JOIN dict d ON d.term_id = s.term_id \
-             WHERE ct.node = (SELECT term_id FROM dict WHERE term = {node_p}) \
-             AND ct.concept = (SELECT term_id FROM dict WHERE term = {value_p}) \
+            "SELECT d.term FROM {schema}concept_tags ct \
+             JOIN {schema}{spine_table} s ON s.rid = ct.rid \
+             JOIN {schema}dict d ON d.term_id = s.term_id \
+             WHERE ct.node = (SELECT term_id FROM {schema}dict WHERE term = {node_p}) \
+             AND ct.concept = (SELECT term_id FROM {schema}dict WHERE term = {value_p}) \
              ORDER BY ct.rid LIMIT {limit_p}"
         ),
         ConceptOp::DescendantOrSelfOf => format!(
             "SELECT d.term FROM \
-             (SELECT DISTINCT rid FROM concept_tags \
-              WHERE node = (SELECT term_id FROM dict WHERE term = {node_p}) \
+             (SELECT DISTINCT rid FROM {schema}concept_tags \
+              WHERE node = (SELECT term_id FROM {schema}dict WHERE term = {node_p}) \
               AND concept BETWEEN \
-              (SELECT vv.dfs_enter FROM vocab vv \
-               JOIN dict dd ON dd.term_id = vv.concept WHERE dd.term = {value_p}) \
+              (SELECT vv.dfs_enter FROM {schema}vocab vv \
+               JOIN {schema}dict dd ON dd.term_id = vv.concept WHERE dd.term = {value_p}) \
               AND \
-              (SELECT vv.dfs_leave FROM vocab vv \
-               JOIN dict dd ON dd.term_id = vv.concept WHERE dd.term = {value_p}) \
+              (SELECT vv.dfs_leave FROM {schema}vocab vv \
+               JOIN {schema}dict dd ON dd.term_id = vv.concept WHERE dd.term = {value_p}) \
               ORDER BY rid LIMIT {limit_p}) x \
-             JOIN {spine_table} s ON s.rid = x.rid \
-             JOIN dict d ON d.term_id = s.term_id"
+             JOIN {schema}{spine_table} s ON s.rid = x.rid \
+             JOIN {schema}dict d ON d.term_id = s.term_id"
         ),
     };
     Ok(Some(sql))
@@ -759,6 +1024,7 @@ fn compile_expr(
     expr: &Expr,
     resolver: &PathResolver,
     params: &mut ParamBuilder,
+    schema: &str,
     coarse: &mut bool,
     registry: Option<&ExtensionTypeRegistry>,
 ) -> Result<String, QueryError> {
@@ -769,7 +1035,7 @@ fn compile_expr(
             }
             let parts = exprs
                 .iter()
-                .map(|e| compile_expr(e, resolver, params, coarse, registry))
+                .map(|e| compile_expr(e, resolver, params, schema, coarse, registry))
                 .collect::<Result<Vec<_>, _>>()?;
             Ok(format!("({})", parts.join(" AND ")))
         }
@@ -779,7 +1045,7 @@ fn compile_expr(
             }
             let parts = exprs
                 .iter()
-                .map(|e| compile_expr(e, resolver, params, coarse, registry))
+                .map(|e| compile_expr(e, resolver, params, schema, coarse, registry))
                 .collect::<Result<Vec<_>, _>>()?;
             Ok(format!("({})", parts.join(" OR ")))
         }
@@ -789,7 +1055,7 @@ fn compile_expr(
                     path: path.to_string(),
                 });
             }
-            let inner_sql = compile_expr(inner, resolver, params, coarse, registry)?;
+            let inner_sql = compile_expr(inner, resolver, params, schema, coarse, registry)?;
             Ok(format!("NOT ({inner_sql})"))
         }
         Expr::Concept { path, op, value } => {
@@ -811,24 +1077,24 @@ fn compile_expr(
             let value_p = params.text(value);
             match op {
                 ConceptOp::Is => Ok(format!(
-                    "EXISTS (SELECT 1 FROM concept_tags ct \
+                    "EXISTS (SELECT 1 FROM {schema}concept_tags ct \
                      WHERE ct.rid = s.rid \
-                     AND ct.node = (SELECT term_id FROM dict WHERE term = {node_p}) \
-                     AND ct.concept = (SELECT term_id FROM dict WHERE term = {value_p}))"
+                     AND ct.node = (SELECT term_id FROM {schema}dict WHERE term = {node_p}) \
+                     AND ct.concept = (SELECT term_id FROM {schema}dict WHERE term = {value_p}))"
                 )),
                 // P10 DFS intervals: descendant-or-self is a single BETWEEN
                 // against the exact concept_tags rows — no expanded table.
                 ConceptOp::DescendantOrSelfOf => Ok(format!(
-                    "EXISTS (SELECT 1 FROM concept_tags ct \
+                    "EXISTS (SELECT 1 FROM {schema}concept_tags ct \
                      WHERE ct.rid = s.rid \
-                     AND ct.node = (SELECT term_id FROM dict WHERE term = {node_p}) \
+                     AND ct.node = (SELECT term_id FROM {schema}dict WHERE term = {node_p}) \
                      AND ct.concept BETWEEN \
-                     (SELECT vv.dfs_enter FROM vocab vv \
-                      JOIN dict dd ON dd.term_id = vv.concept \
+                     (SELECT vv.dfs_enter FROM {schema}vocab vv \
+                      JOIN {schema}dict dd ON dd.term_id = vv.concept \
                       WHERE dd.term = {value_p}) \
                      AND \
-                     (SELECT vv.dfs_leave FROM vocab vv \
-                      JOIN dict dd ON dd.term_id = vv.concept \
+                     (SELECT vv.dfs_leave FROM {schema}vocab vv \
+                      JOIN {schema}dict dd ON dd.term_id = vv.concept \
                       WHERE dd.term = {value_p}))"
                 )),
             }
@@ -860,17 +1126,17 @@ fn compile_expr(
                 Some(t) => {
                     let target_p = params.text(t);
                     format!(
-                        " AND (SELECT term_id FROM dict WHERE term = {target_p}) \
+                        " AND (SELECT term_id FROM {schema}dict WHERE term = {target_p}) \
                          BETWEEN cls.min_target AND cls.max_target"
                     )
                 }
                 None => String::new(),
             };
             Ok(format!(
-                "EXISTS (SELECT 1 FROM fragment_dir fd \
-                 JOIN chunk_link_summary cls ON cls.chunk = fd.chunk \
+                "EXISTS (SELECT 1 FROM {schema}fragment_dir fd \
+                 JOIN {schema}chunk_link_summary cls ON cls.chunk = fd.chunk \
                  WHERE fd.rid = s.rid \
-                 AND cls.node = (SELECT term_id FROM dict WHERE term = {node_p})\
+                 AND cls.node = (SELECT term_id FROM {schema}dict WHERE term = {node_p})\
                  {target_clause})"
             ))
         }

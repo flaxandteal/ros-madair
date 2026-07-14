@@ -25,6 +25,14 @@
 //!    chunks are content-addressed and pack up to 256 tiles from *many*
 //!    resources;
 //! 5. hydrate with the partial-safe `alizarin_core::resource_tiles_to_tree`.
+//!
+//! # Composition
+//!
+//! Several snapshots read as one — a shipped base plus on-device overlays — is
+//! [`Layers`]. Layers do NOT share a dictionary, so nothing may be joined
+//! across them but the resource UUID string; see that module for the full
+//! consequences (P13 precedence, why counts cannot be summed, the tile merge
+//! rule).
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -34,6 +42,9 @@ use alizarin_core::json_conversion::resource_tiles_to_tree;
 use alizarin_core::StaticTile;
 use ros_madair_format::{ChunkTile, Manifest};
 use rusqlite::{Connection, OpenFlags};
+
+mod layers;
+pub use layers::{Layer, Layers};
 
 /// Everything that can go wrong reading a snapshot.
 #[derive(Debug)]
@@ -58,10 +69,33 @@ pub enum ReadError {
     /// it. (No version gate: nothing is published, nothing else in the system is
     /// versioned — head schema, chunk encoding and closure all move freely — and
     /// re-emit takes seconds. The hint is the whole fix.)
+    ///
+    /// It carries the `path`, which is also what composition needs: reading a
+    /// stack means reading several manifests, and "which one" is the first thing
+    /// you ask.
     Manifest {
         path: PathBuf,
         source: serde_json::Error,
     },
+    /// A layer directory has no `manifest.json`. Optional for a single-snapshot
+    /// read; REQUIRED for composition, which has nothing to validate without it.
+    MissingManifest(PathBuf),
+    /// Two layers cannot be composed: they disagree about something the
+    /// compiled SQL assumes is shared (see `Layers::open`).
+    Incompatible {
+        base: PathBuf,
+        layer: PathBuf,
+        what: String,
+        base_value: String,
+        layer_value: String,
+    },
+    /// `Layers::open` was handed no directories.
+    NoLayers,
+    /// No layer in the stack carries this model, so there is no spine table to
+    /// query and no composed view to speak of.
+    ModelInNoLayer(String),
+    /// The query did not compile against the graph.
+    Query(ros_madair_query::QueryError),
     /// No resource with this UUID in this snapshot (not in `dict`, or in
     /// `dict` but in no spine — e.g. it is a concept URI, or the resource was
     /// excluded by a tier).
@@ -72,6 +106,10 @@ pub enum ReadError {
     /// (usually: `build_indices()` was never called, or the graph is not the
     /// model these tiles belong to).
     Hydration(String),
+    /// Composing the layers' tiles for one resource failed in
+    /// `alizarin_core`'s merge — a data conflict the merge would not silently
+    /// resolve, not a bug in the layer stack.
+    Merge(String),
 }
 
 impl std::fmt::Display for ReadError {
@@ -90,6 +128,31 @@ impl std::fmt::Display for ReadError {
                  readable, only re-creatable)",
                 path.display()
             ),
+            ReadError::MissingManifest(dir) => write!(
+                f,
+                "layer {} has no manifest.json — composition requires one per \
+                 layer (there is nothing to check compatibility against without it)",
+                dir.display()
+            ),
+            ReadError::Incompatible {
+                base,
+                layer,
+                what,
+                base_value,
+                layer_value,
+            } => write!(
+                f,
+                "layers are not composable: {what} differs — {} says '{base_value}', \
+                 {} says '{layer_value}'",
+                base.display(),
+                layer.display()
+            ),
+            ReadError::NoLayers => write!(f, "no layers given"),
+            ReadError::ModelInNoLayer(graph_id) => write!(
+                f,
+                "no layer in this stack carries model '{graph_id}'"
+            ),
+            ReadError::Query(e) => write!(f, "query does not compile: {e}"),
             ReadError::UnknownResource(uuid) => {
                 write!(f, "resource '{uuid}' is not in this snapshot")
             }
@@ -98,6 +161,7 @@ impl std::fmt::Display for ReadError {
                 "head.sqlite has no spine_* table — not a Rós Madair head"
             ),
             ReadError::Hydration(e) => write!(f, "hydration failed: {e}"),
+            ReadError::Merge(e) => write!(f, "layer composition failed: {e}"),
         }
     }
 }
@@ -128,7 +192,8 @@ pub fn open_head(head_dir: &Path) -> Result<Connection, ReadError> {
 ///
 /// Absent is not an error: a head directory is usable without it (the spine
 /// tables are discoverable from `sqlite_master`), the manifest only makes the
-/// model → spine mapping explicit.
+/// model → spine mapping explicit. (Composition is stricter — see
+/// [`Layers::open`], which requires one.)
 ///
 /// PRESENT-BUT-UNPARSEABLE **is** an error, and an eager one: `spine_candidates`
 /// calls this on every hydrate, so a stale manifest takes the whole snapshot
