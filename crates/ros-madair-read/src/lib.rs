@@ -27,7 +27,7 @@
 //! 5. hydrate with the partial-safe `alizarin_core::resource_tiles_to_tree`.
 
 use std::collections::BTreeSet;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use alizarin_core::graph::{StaticGraph, StaticResourceMetadata};
 use alizarin_core::json_conversion::resource_tiles_to_tree;
@@ -48,8 +48,20 @@ pub enum ReadError {
         hash: String,
         source: rmp_serde::decode::Error,
     },
-    /// `manifest.json` exists but is not a manifest this build understands.
-    Manifest(serde_json::Error),
+    /// `manifest.json` exists but does not parse as one.
+    ///
+    /// The likeliest cause by far is a STALE ARTIFACT — the manifest gains and
+    /// loses fields as the format moves, so an older snapshot fails here with
+    /// something like `missing field 'handlers'`, which names neither the cause
+    /// nor the fix. `load_manifest` is eager and sits in the read path, so this
+    /// error takes the whole snapshot down; it therefore says what to do about
+    /// it. (No version gate: nothing is published, nothing else in the system is
+    /// versioned — head schema, chunk encoding and closure all move freely — and
+    /// re-emit takes seconds. The hint is the whole fix.)
+    Manifest {
+        path: PathBuf,
+        source: serde_json::Error,
+    },
     /// No resource with this UUID in this snapshot (not in `dict`, or in
     /// `dict` but in no spine — e.g. it is a concept URI, or the resource was
     /// excluded by a tier).
@@ -70,7 +82,14 @@ impl std::fmt::Display for ReadError {
             ReadError::Chunk { hash, source } => {
                 write!(f, "chunk {hash}.msgpack is not decodable as tiles: {source}")
             }
-            ReadError::Manifest(e) => write!(f, "manifest.json is not readable: {e}"),
+            ReadError::Manifest { path, source } => write!(
+                f,
+                "failed to parse manifest at {}: {source} — if the artifact \
+                 predates a format change, re-emit it with ros-madair-emit \
+                 (there is no compatibility path: old snapshots are not \
+                 readable, only re-creatable)",
+                path.display()
+            ),
             ReadError::UnknownResource(uuid) => {
                 write!(f, "resource '{uuid}' is not in this snapshot")
             }
@@ -110,15 +129,20 @@ pub fn open_head(head_dir: &Path) -> Result<Connection, ReadError> {
 /// Absent is not an error: a head directory is usable without it (the spine
 /// tables are discoverable from `sqlite_master`), the manifest only makes the
 /// model → spine mapping explicit.
+///
+/// PRESENT-BUT-UNPARSEABLE **is** an error, and an eager one: `spine_candidates`
+/// calls this on every hydrate, so a stale manifest takes the whole snapshot
+/// down. That is why the failure names the artifact and the fix rather than
+/// surfacing a bare `missing field 'handlers'` (see [`ReadError::Manifest`]).
 pub fn load_manifest(head_dir: &Path) -> Result<Option<Manifest>, ReadError> {
     let path = head_dir.join("manifest.json");
     if !path.is_file() {
         return Ok(None);
     }
-    let bytes = std::fs::read(path)?;
+    let bytes = std::fs::read(&path)?;
     serde_json::from_slice(&bytes)
         .map(Some)
-        .map_err(ReadError::Manifest)
+        .map_err(|source| ReadError::Manifest { path, source })
 }
 
 /// Spine tables to search for a resource, best candidate first.

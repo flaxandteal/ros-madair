@@ -57,7 +57,7 @@ pub use closure::{build_closure, Closure, ClosureEntry};
 /// here so existing callers keep working.
 pub use ros_madair_format::{
     ArtifactEntry, Budgets, ChunkTile, EmitSummary, FieldEntry, Manifest, ModelManifest,
-    TierManifest, MANIFEST_VERSION,
+    TierManifest,
 };
 
 pub type EmitError = Box<dyn std::error::Error>;
@@ -329,10 +329,8 @@ pub fn emit_with_options(
 
     let head_db_bytes = fs::metadata(out.join("head.sqlite"))?.len();
     let mut manifest = Manifest {
-        manifest_version: MANIFEST_VERSION,
         snapshot_id: String::new(),
         base_uri: base_uri.to_string(),
-        min_client_version: "0.1.0".to_string(),
         tier: options.tier.clone(),
         // I6: the artifact explains its own handler set. Derived from the
         // registry ACTUALLY used for this emit, so the query side can rebuild

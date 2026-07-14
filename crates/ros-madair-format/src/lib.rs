@@ -32,22 +32,33 @@ use alizarin_core::StaticTile;
 use ros_madair_handlers::HandlerDecl;
 use serde::{Deserialize, Serialize};
 
-/// Manifest schema version.
-///
-/// 4: adds the `handlers` block — the artifact declares the extension-type
-/// handler set it was emitted with (I6).
-/// 5: the snapshot id now covers the manifest itself (id-excluded), so a
-/// manifest-only change — handler set, tier, declared field classes — moves
-/// the id. Snapshot ids from version-4 emits are NOT comparable with these;
-/// nothing was ever published from that digest, so there is no compatibility
-/// path and none is wanted (a back-compat "legacy id" would enshrine a digest
-/// that ignores half the artifact).
-pub const MANIFEST_VERSION: u32 = 5;
-
 /// `manifest.json` — the layout/compatibility contract of one snapshot.
+///
+/// # There is deliberately no version field
+///
+/// There was one (`manifest_version`, bumped 1→5), and a `min_client_version`
+/// beside it. Both were WRITTEN AND NEVER READ. A version field nothing checks
+/// is worse than no version field: it advertises a compatibility discipline
+/// that does not exist, and the next reader will believe it.
+///
+/// It could not have been an honest discipline in any case, because the
+/// manifest is not the only thing that moves — the head's SQLite schema, the
+/// msgpack chunk encoding and the closure format all change freely, ungated.
+/// Versioning one artifact out of four is ceremony, not a contract.
+///
+/// What actually holds today, and is enough while nothing is published:
+///
+/// - **`snapshot_id` already captures format changes implicitly** — the digest
+///   covers the manifest (id-excluded), so any change of shape moves the id.
+/// - **A reader that cannot parse an artifact says so, actionably** — see
+///   `ros_madair_read::ReadError::Manifest`: re-emit. Re-emit takes seconds and
+///   there is nothing deployed to migrate.
+///
+/// **When the format ships to a real device it freezes, and a version field
+/// goes back in** — as one line, with gates applied coherently across EVERY
+/// artifact (head schema, chunks, closure), not just this one.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Manifest {
-    pub manifest_version: u32,
     /// The snapshot digest (hex, 16 chars).
     ///
     /// Serialization skips this field when empty, which is *load-bearing*: the
@@ -58,7 +69,6 @@ pub struct Manifest {
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub snapshot_id: String,
     pub base_uri: String,
-    pub min_client_version: String,
     /// Present when this artifact graph was emitted as a named tier
     /// (M1.5): records the tier name and what was excluded, so the M2
     /// compiler can check tier permissions from the manifest alone.
@@ -273,10 +283,8 @@ mod tests {
     #[test]
     fn manifest_omits_empty_snapshot_id() {
         let manifest = Manifest {
-            manifest_version: MANIFEST_VERSION,
             snapshot_id: String::new(),
             base_uri: "https://example.org/".to_string(),
-            min_client_version: "0.1.0".to_string(),
             tier: None,
             handlers: vec![],
             models: vec![],

@@ -60,8 +60,8 @@ fn registry_from_manifest(manifest_json: &str) -> PyResult<ExtensionTypeRegistry
         .map_err(|e| PyValueError::new_err(format!("manifest JSON is not valid JSON: {e}")))?;
     let handlers = manifest.get("handlers").ok_or_else(|| {
         PyValueError::new_err(
-            "manifest declares no `handlers` — it predates the self-describing handler set \
-(manifest_version >= 4); re-emit the snapshot, or omit manifest_json to accept the default registry",
+            "manifest declares no `handlers`, so the registry the snapshot was emitted with \
+cannot be derived from it — re-emit the snapshot, or omit manifest_json to use the default registry",
         )
     })?;
     let decls: Vec<HandlerDecl> = serde_json::from_value(handlers.clone()).map_err(|e| {
