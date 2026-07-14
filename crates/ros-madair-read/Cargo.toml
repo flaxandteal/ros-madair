@@ -34,3 +34,9 @@ serde_json = "1"
 # user. Dev-dependencies do not propagate, so the bundled SQLite *writer* still
 # never reaches a consumer of this crate (and never reaches WASM at all).
 ros-madair-emit = { path = "../ros-madair-emit" }
+# `tests/layers.rs` builds its own query IR, and asserts directly against the two
+# layers' `dict` tables that they do NOT share term ids (the premise the whole
+# composition rests on). Integration tests cannot reach the crate's own
+# dependencies, so both are named again here.
+ros-madair-query = { path = "../ros-madair-query" }
+rusqlite = { version = "0.32", features = ["bundled"] }

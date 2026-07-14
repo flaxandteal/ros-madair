@@ -85,10 +85,7 @@ fn hydrates_company_a_from_a_freshly_emitted_snapshot() {
     assert_eq!(tree["name"]["en"]["value"], "Company A");
     assert_eq!(tree["name"]["en"]["direction"], "ltr");
     assert_eq!(tree["location"]["type"], "FeatureCollection");
-    assert_eq!(
-        tree["location"]["features"][0]["geometry"]["type"],
-        "Point"
-    );
+    assert_eq!(tree["location"]["features"][0]["geometry"]["type"], "Point");
     assert!(tree["location"]["features"][0]["geometry"]["coordinates"]
         .as_array()
         .is_some_and(|c| c.len() == 2));

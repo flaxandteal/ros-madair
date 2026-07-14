@@ -118,7 +118,10 @@ impl std::fmt::Display for ReadError {
             ReadError::Sqlite(e) => write!(f, "head.sqlite: {e}"),
             ReadError::Io(e) => write!(f, "artifact read failed: {e}"),
             ReadError::Chunk { hash, source } => {
-                write!(f, "chunk {hash}.msgpack is not decodable as tiles: {source}")
+                write!(
+                    f,
+                    "chunk {hash}.msgpack is not decodable as tiles: {source}"
+                )
             }
             ReadError::Manifest { path, source } => write!(
                 f,
@@ -148,10 +151,9 @@ impl std::fmt::Display for ReadError {
                 layer.display()
             ),
             ReadError::NoLayers => write!(f, "no layers given"),
-            ReadError::ModelInNoLayer(graph_id) => write!(
-                f,
-                "no layer in this stack carries model '{graph_id}'"
-            ),
+            ReadError::ModelInNoLayer(graph_id) => {
+                write!(f, "no layer in this stack carries model '{graph_id}'")
+            }
             ReadError::Query(e) => write!(f, "query does not compile: {e}"),
             ReadError::UnknownResource(uuid) => {
                 write!(f, "resource '{uuid}' is not in this snapshot")

@@ -312,7 +312,8 @@ impl Layers {
             limit: Some(query.limit.unwrap_or(u32::MAX)),
             ..query.clone()
         };
-        let mut stmts = compile_with_registry(&ids_query, graph, registry).map_err(ReadError::Query)?;
+        let mut stmts =
+            compile_with_registry(&ids_query, graph, registry).map_err(ReadError::Query)?;
         Ok(stmts.remove(0))
     }
 
@@ -369,8 +370,8 @@ impl Layers {
             ..query.clone()
         };
         let count_stmt = {
-            let mut s = compile_with_registry(&count_query, graph, registry)
-                .map_err(ReadError::Query)?;
+            let mut s =
+                compile_with_registry(&count_query, graph, registry).map_err(ReadError::Query)?;
             s.remove(0)
         };
         let base = model_layers[0];
@@ -390,8 +391,8 @@ impl Layers {
             for uuid in &above_base {
                 let mut bound = bind(&probe.params);
                 bound.push(SqlValue::Text(uuid.clone()));
-                let matched: i64 = prepared
-                    .query_row(rusqlite::params_from_iter(bound.iter()), |r| r.get(0))?;
+                let matched: i64 =
+                    prepared.query_row(rusqlite::params_from_iter(bound.iter()), |r| r.get(0))?;
                 if matched != 0 {
                     total -= 1;
                 }
@@ -481,8 +482,8 @@ impl Layers {
             conn.execute(&format!("ATTACH DATABASE ?1 AS {name}"), [uri])?;
         }
         let schemas: Vec<&str> = names.iter().map(String::as_str).collect();
-        let stmt = compile_layered_count(query, graph, registry, &schemas)
-            .map_err(ReadError::Query)?;
+        let stmt =
+            compile_layered_count(query, graph, registry, &schemas).map_err(ReadError::Query)?;
         select_count(&conn, &stmt)
     }
 
