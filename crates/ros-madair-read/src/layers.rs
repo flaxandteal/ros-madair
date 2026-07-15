@@ -36,52 +36,59 @@
 //! Layers are **ordered, base first, later overrides earlier**. The rule, made
 //! explicit rather than left to iteration order:
 //!
-//! > **The topmost layer that defines a NODE is authoritative for that node.**
-//! > "Defines" = the layer carries a value for it — `node_presence` — *including
-//! > a null*, which retracts rather than abstains.
+//! > **The topmost layer that defines a NODEGROUP is authoritative for it.**
+//! > "Defines" = the layer carries a tile for it — a `fragment_dir` row —
+//! > *including an empty tile*, which retracts rather than abstains.
 //!
-//! A base verdict on a node an overlay has redefined is *stale*, and is discarded
-//! — not unioned. This matters: an overlay can flip a base resource **into** a
-//! filter (edit `type` to `Church`) or **out of** one (edit `Church` to
-//! `Chapel`). A composed query that merely unioned the per-layer matches would
+//! A base verdict on a nodegroup an overlay has redefined is *stale*, and is
+//! discarded — not unioned. This matters: an overlay can flip a base resource
+//! **into** a filter (edit `type` to `Church`) or **out of** one (edit `Church`
+//! to `Chapel`). A composed query that merely unioned the per-layer matches would
 //! keep counting the flipped-out resource forever.
 //!
 //! Read the next section before assuming this is the resource-level rule with
 //! extra words. It is not, and the resource-level version was wrong.
 //!
-//! ## LAYERS ARE PARTIAL, and precedence is therefore PER-NODE
+//! ## The unit of override is the NODEGROUP, by design
 //!
 //! An earlier draft asserted a contract: *"an overlay that carries a resource
 //! carries it IN FULL."* **It was false, and it is withdrawn.** Layers are
 //! inherently partial — a layer that adds an etymology to 180,000 resources
 //! cannot restate 180,000 resources, and requiring it to would defeat the point
-//! of layering. `tree_to_tiles` builds a tile from the keys the input tree
-//! actually set, so a partial overlay omits keys as a matter of course.
+//! of layering.
 //!
-//! Everything follows from that:
+//! But a partial *resource* is not the same as a partial *nodegroup*. A nodegroup
+//! is the atomic unit of information a layer adds or replaces — the same unit
+//! Arches edits as a card — and the composition rule is built on that:
 //!
-//! > **The topmost layer that defines a NODE is authoritative for that node.**
-//! > Not the topmost layer that defines the RESOURCE.
+//! > **The topmost layer that defines a NODEGROUP owns it, whole.**
+//! > Not the resource (too coarse — a thin overlay would shadow untouched cards),
+//! > and not the individual node (needlessly fine, and it would force a per-node
+//! > presence index the nodegroup grain gets for free from `fragment_dir`).
 //!
-//! This is not a refinement of the resource-level rule; it is a different rule,
-//! and the resource-level one was wrong. Under it, a partial overlay that carried
-//! a resource became authoritative for *every field of it*, so:
+//! Under the discarded resource-level rule, a partial overlay that carried a
+//! resource became authoritative for *every field of it*, so a filter on a card
+//! the overlay never touched answered "no" and the base's verdict was lost, and an
+//! `all` across cards owned by different layers matched in neither. The
+//! nodegroup rule fixes both: each card is answered by its owner.
 //!
-//! - a filter on a field the overlay does **not** carry answered "no match" in
-//!   the overlay, and the base's correct verdict was discarded;
-//! - an `all` across two fields owned by **different** layers matched in neither,
-//!   though the composed resource the user is looking at satisfies both.
+//! The cost of the nodegroup grain is a **modelling contract**: an overlay must
+//! restate a whole card, never a subset of one — which is what an on-device card
+//! edit produces naturally, and what a well-structured enrichment layer does by
+//! adding its *own* card rather than injecting a field into someone else's. A
+//! partial card in an overlay silently blanks the base's other fields in it; emit
+//! can lint that, but the schema is where it is prevented.
 //!
-//! Query and hydration disagreed about the same resource. They no longer do:
-//! per-node precedence is exactly what alizarin's tile merge already does (it
-//! merges cardinality-1 tiles **per key**), so [`Layers::resolve`] and
-//! [`Layers::resource_tiles`] now answer from the same rule. `tests/layers.rs`
-//! asserts they agree, by evaluating filters against composed HYDRATED tiles and
-//! demanding the same answer — an oracle that shares no code with the index path.
+//! Query and hydration answer from the *same* rule — whole-nodegroup override,
+//! [`TileMergeMode::PerNodegroup`] — so they cannot disagree. `tests/layers.rs`
+//! pins it by evaluating filters against composed HYDRATED tiles and demanding the
+//! same answer, an oracle that shares no code with the index path.
 //!
-//! The head carries `node_presence` for this, and for nothing else: it is the
-//! only way to tell **"this layer says NO"** from **"this layer does not say"**.
-//! Both look like an absent index row, and they mean opposite things.
+//! Presence needs no dedicated table: a `fragment_dir` `(rid, nodegroup)` row —
+//! which every emitted tile already produces — is exactly "this layer carries this
+//! nodegroup". It is the only way to tell **"this layer carries it, empty"** from
+//! **"this layer never mentioned it"**; both are otherwise an absent row, and they
+//! mean opposite things, which is why a retraction ships an *empty* tile.
 //!
 //! # Costs, honestly
 //!
@@ -93,7 +100,7 @@ use std::path::{Path, PathBuf};
 use alizarin_core::extension_type_registry::ExtensionTypeRegistry;
 use alizarin_core::graph::{
     merge_resources, unify_cardinality_one_tiles, StaticGraph, StaticResource,
-    StaticResourceMetadata,
+    StaticResourceMetadata, TileMergeMode,
 };
 use alizarin_core::StaticTile;
 use ros_madair_format::Manifest;
@@ -104,32 +111,34 @@ use rusqlite::{types::Value as SqlValue, Connection};
 
 use crate::{hydrate_tiles, open_head, resource_tiles_with_graph, ReadError};
 
-/// A filter tree whose leaves know which NODE they read and carry a compiled
+/// A filter tree whose leaves know which NODEGROUP they read and carry a compiled
 /// one-layer probe.
 ///
 /// It mirrors [`Expr`] rather than reusing it because the whole point is the
 /// extra per-leaf information: composition resolves each leaf against the topmost
-/// layer that defines *that leaf's node*, so the node id has to survive down to
-/// the leaf. A per-query node would not do — two leaves of one filter routinely
-/// read nodes owned by different layers.
+/// layer that defines *that leaf's nodegroup*, so the nodegroup id has to survive
+/// down to the leaf. A per-query nodegroup would not do — two leaves of one filter
+/// routinely read nodegroups owned by different layers.
 enum Plan {
     All(Vec<Plan>),
     Any(Vec<Plan>),
     Not(Box<Plan>),
     Leaf {
-        node_id: String,
+        /// The nodegroup this leaf's node belongs to — the granularity precedence
+        /// is decided at (see [`Layers::defines_nodegroup`]).
+        nodegroup_id: String,
         /// Does this leaf's nodegroup **accumulate** across layers?
         ///
-        /// Cardinality-1 is an OVERRIDE: the topmost layer that defines the node
-        /// replaces the value below it. Cardinality-n is ADDITIVE: the merge
-        /// leaves every layer's tiles standing, so the composed value set is the
-        /// UNION across layers — and a predicate matches if ANY layer's values
-        /// match, including a layer that some higher layer also wrote to.
+        /// Cardinality-1 is an OVERRIDE: the topmost layer that defines the
+        /// nodegroup replaces the whole thing below it. Cardinality-n is ADDITIVE:
+        /// the merge leaves every layer's tiles standing, so the composed value
+        /// set is the UNION across layers — and a predicate matches if ANY layer's
+        /// values match, including a layer that some higher layer also wrote to.
         ///
         /// Two different rules, and using the override rule on an additive
         /// nodegroup silently DROPS the lower layers' values, which the hydrator
         /// is still showing. The cardinality comes from the graph, which is the
-        /// same place alizarin's merge reads it from — so the two cannot drift.
+        /// same place the tile merge reads it from — so the two cannot drift.
         additive: bool,
         probe: CompiledStatement,
     },
@@ -275,58 +284,56 @@ impl Layers {
         Ok(set)
     }
 
-    /// Does layer `index` carry a value for `node` on `uuid`?
+    /// Does layer `index` carry `nodegroup` on `uuid`?
     ///
-    /// **This is the whole fix.** Precedence between layers is per-NODE, not
-    /// per-resource, because the tile merge is per key: an overlay that restates
-    /// a nodegroup while omitting one of its nodes leaves the lower layer's value
-    /// for that node standing (and `tree_to_tiles` builds a tile from the keys the
-    /// input tree actually set, so a partial overlay omits keys as a matter of
-    /// course — this is the common case, not a corner).
+    /// **This is the precedence primitive.** Precedence between layers is
+    /// per-NODEGROUP, not per-node and not per-resource, because a nodegroup is
+    /// the atomic unit a layer adds or replaces (see the module docs). So a
+    /// composed filter on a node is answered by the topmost layer that carries
+    /// that node's *nodegroup*, and lower layers are shadowed for it.
     ///
-    /// The head's `node_presence` is the only thing that can answer it. Without
-    /// it, "this layer says NO" and "this layer does not say" are the same
-    /// observation — an absent index row — and they have opposite meanings.
-    ///
-    /// A NULL value still counts as carried: a null is not silence, it is how a
-    /// layer RETRACTS a lower layer's value (the merge sees the key as present
-    /// and lets it win). Emit records it for exactly that reason.
-    fn defines_node(
+    /// `fragment_dir` already answers this — a `(rid, nodegroup)` row means the
+    /// layer emitted a tile for that nodegroup — so no dedicated presence table
+    /// is needed. Without such a row, "this layer carries the nodegroup, empty"
+    /// and "this layer never mentioned it" would be the same observation, and
+    /// they have opposite meanings — which is why a RETRACTION ships an *empty*
+    /// tile: an empty tile still produces a `fragment_dir` row.
+    fn defines_nodegroup(
         &self,
         index: usize,
         graph: &StaticGraph,
         uuid: &str,
-        node_id: &str,
+        nodegroup_id: &str,
     ) -> Result<bool, ReadError> {
         let Some(spine) = self.spine_table(index, graph) else {
             return Ok(false);
         };
         let conn = open_head(&self.layers[index].dir)?;
         // One indexed point lookup: dict.term is UNIQUE, the spine is keyed by
-        // term_id, and node_presence is PRIMARY KEY (rid, node).
+        // term_id, and fragment_dir is indexed on (rid, nodegroup).
         let found: i64 = conn.query_row(
             &format!(
                 "SELECT EXISTS (
-                     SELECT 1 FROM node_presence np
-                       JOIN {spine} s ON s.rid = np.rid
+                     SELECT 1 FROM fragment_dir fd
+                       JOIN {spine} s ON s.rid = fd.rid
                        JOIN dict dr ON dr.term_id = s.term_id
-                       JOIN dict dn ON dn.term_id = np.node
+                       JOIN dict dn ON dn.term_id = fd.nodegroup
                       WHERE dr.term = ?1 AND dn.term = ?2)"
             ),
-            (uuid, node_id),
+            (uuid, nodegroup_id),
             |r| r.get(0),
         )?;
         Ok(found != 0)
     }
 
     /// A filter tree with each leaf compiled to a one-layer probe, and told which
-    /// NODE it reads.
+    /// NODEGROUP it reads.
     ///
     /// Compiled once per query and reused across every candidate: the probe SQL
     /// is dictionary-agnostic (it resolves terms via `(SELECT term_id FROM dict
     /// WHERE term = ?)`), so the SAME statement is correct in every layer. That
     /// is what lets one plan be evaluated against whichever layer turns out to own
-    /// each leaf's node.
+    /// each leaf's nodegroup.
     fn plan(
         &self,
         query: &Query,
@@ -343,6 +350,7 @@ impl Layers {
                 let node_id = ros_madair_query::leaf_node_id(leaf, graph, registry)
                     .map_err(ReadError::Query)?
                     .expect("a non-boolean Expr always reads a node");
+                let (nodegroup_id, additive) = nodegroup_of(graph, &node_id);
                 let one = Query {
                     r#where: Some(leaf.clone()),
                     measures: vec![Measure::CountRecords],
@@ -350,8 +358,8 @@ impl Layers {
                 };
                 let probe = compile_match_probe(&one, graph, registry).map_err(ReadError::Query)?;
                 Plan::Leaf {
-                    additive: is_additive(graph, &node_id),
-                    node_id,
+                    nodegroup_id,
+                    additive,
                     probe,
                 }
             }
@@ -361,37 +369,28 @@ impl Layers {
     /// Evaluate the filter for ONE resource in the composed view.
     ///
     /// Each leaf is answered by **the topmost layer that defines that leaf's
-    /// node** — which is not necessarily the topmost layer that defines the
-    /// resource, and that difference is the bug this replaces. Under the old
-    /// rule, a partial overlay that carried a resource became authoritative for
-    /// EVERY field of it, so:
+    /// NODEGROUP** — not the topmost layer that defines the resource, and not the
+    /// topmost that defines the individual node. A nodegroup is the atomic unit a
+    /// layer adds or replaces (module docs), so:
     ///
-    /// - a filter on a field the overlay does not carry answered "no" there, and
-    ///   the base's correct verdict was discarded;
-    /// - an `all` across two fields owned by DIFFERENT layers matched in neither,
-    ///   though the composed resource the user is looking at satisfies both.
+    /// - a filter on a nodegroup the overlay does not carry reads from the layer
+    ///   below, which still owns it;
+    /// - an `all` across two nodegroups owned by DIFFERENT layers matches when the
+    ///   composed resource satisfies both, each conjunct answered by its owner.
     ///
-    /// A leaf no layer defines is **false**: the resource has no value for that
-    /// node, so it cannot match a predicate on it. (No probe is issued — the
-    /// answer is already known.)
+    /// A leaf whose nodegroup no layer defines is **false**: the resource has no
+    /// value for it, so it cannot match. (No probe issued — the answer is known.)
     ///
     /// # Override vs ADDITIVE — two rules, chosen by cardinality
     ///
-    /// "Topmost defining layer wins" is the **cardinality-1** rule, and applying
-    /// it to a **cardinality-n** nodegroup would be a second silent wrong answer.
-    /// Cardinality-n tiles are never collapsed by the merge — every layer's tiles
-    /// survive — so the composed value set is the UNION across layers, and the
-    /// predicate matches if ANY layer's values match. Taking only the topmost
-    /// layer that happened to touch the node would DROP the base's values while
-    /// the hydrator went on showing them.
-    ///
-    /// So: cardinality-1 → the topmost layer that defines the node answers.
-    /// Cardinality-n → OR across every layer. `node_presence` is not even
-    /// consulted for the additive case: nothing is being overridden, so there is
-    /// nothing to be authoritative about. (And no retraction, either — an overlay
-    /// cannot delete a base tile from a multi-valued nodegroup. The format has no
-    /// tombstone, and the id space is what enforces it: cardinality-n ids are
-    /// unguessable, so a standalone layer can only ADD.)
+    /// "Topmost defining layer wins" is the **cardinality-1** rule. A
+    /// **cardinality-n** nodegroup is never collapsed by the merge — every layer's
+    /// tiles survive — so the composed value set is the UNION across layers, and
+    /// the predicate matches if ANY layer's values match. Applying the override
+    /// rule there would DROP the base's values while the hydrator went on showing
+    /// them. So cardinality-n ORs the probe across every layer and does not consult
+    /// presence at all: nothing is overridden, so nothing is authoritative, and
+    /// there is no retraction (the id space makes multi-valued tiles add-only).
     fn matches(
         &self,
         plan: &Plan,
@@ -431,11 +430,15 @@ impl Layers {
                 }
                 Ok(false)
             }
-            // OVERRIDE (cardinality-1): the topmost layer that defines the node
-            // replaces what is below it, and is the only one asked.
-            Plan::Leaf { node_id, probe, .. } => {
+            // OVERRIDE (cardinality-1): the topmost layer that defines the
+            // NODEGROUP replaces what is below it, and is the only one asked.
+            Plan::Leaf {
+                nodegroup_id,
+                probe,
+                ..
+            } => {
                 for &i in model_layers.iter().rev() {
-                    if self.defines_node(i, graph, uuid, node_id)? {
+                    if self.defines_nodegroup(i, graph, uuid, nodegroup_id)? {
                         return self.probe(i, probe, uuid);
                     }
                 }
@@ -520,7 +523,7 @@ impl Layers {
             .filter(|u| !candidates.contains(u))
             .collect();
 
-        // Arm 2: every touched resource, evaluated per-node across the stack.
+        // Arm 2: every touched resource, evaluated per-nodegroup across the stack.
         if !candidates.is_empty() {
             let plan = match &query.r#where {
                 Some(expr) => Some(self.plan(query, expr, graph, registry)?),
@@ -634,7 +637,7 @@ impl Layers {
             }
 
             // Correction 2: add back the ones the COMPOSED view matches, each leaf
-            // answered by the layer that owns its node.
+            // answered by the layer that owns its nodegroup.
             let plan = self.plan(query, expr, graph, registry)?;
             for uuid in &candidates {
                 if self.matches(&plan, uuid, &model_layers, graph)? {
@@ -665,7 +668,7 @@ impl Layers {
     /// cross-check against the fast path is worth having.
     ///
     /// It is NOT an independent oracle, mind — it shares [`Layers::matches`] with
-    /// the fast path, so a bug in per-node precedence would fool both. The
+    /// the fast path, so a bug in per-nodegroup precedence would fool both. The
     /// independent check is that a composed QUERY agrees with a composed
     /// HYDRATION, and that lives in `tests/layers.rs`.
     pub fn count_by_union(
@@ -679,56 +682,51 @@ impl Layers {
     /// The tiles of one resource in the **composed** view: gathered from every
     /// layer that has it, merged with precedence (topmost layer wins).
     ///
-    /// # This does not implement a merge. Alizarin already has one.
+    /// # This does not implement a merge. Alizarin's does, in `PerNodegroup` mode.
     ///
-    /// `merge_resources` + `unify_cardinality_one_tiles` were written to merge
-    /// **co-equal shards** of a resource across business-data files, and they
-    /// turn out to be exactly layer composition — the same problem. So this
-    /// gathers the resource from each layer, hands the stack to alizarin
-    /// **topmost-first**, and gets the semantics back:
+    /// `merge_resources` + `unify_cardinality_one_tiles` are the same functions the
+    /// business-data shard merge uses; the ONLY thing layer composition needs
+    /// differently is whole-nodegroup override instead of per-key fill-in, which is
+    /// the [`TileMergeMode`] parameter. So this gathers the resource from each
+    /// layer **topmost-first** and hands the stack over:
     ///
     /// - **cardinality-1** — the unifier groups tiles by scope
-    ///   `(nodegroup_id, parenttile_id)`, reads the nodegroup's cardinality out
-    ///   of the *graph*, and collapses each over-full scope into the FIRST tile,
-    ///   merging the others' data into it **per key**. Topmost-first therefore
-    ///   means: **the topmost layer wins each node it sets, and lower layers
-    ///   fill in the nodes it omits.** This is a *field-level* override, which is
-    ///   strictly better than the whole-nodegroup replace this function used to
-    ///   do — a thin overlay that sets one node no longer blanks the rest of its
-    ///   nodegroup. **Layers are inherently partial** (an overlay adding
-    ///   etymology to 180k resources cannot restate them), so field-level is the
-    ///   only correct rule.
-    /// - **cardinality-n** — left alone, so the concatenation stands: **additive
-    ///   union**. Nothing here can silently replace a multi-valued tile.
-    /// - **children of a superseded cardinality-1 tile** — the unifier re-parents
-    ///   them onto the surviving tile (`tile_redirect`), so a cardinality-n
-    ///   nodegroup hanging off an overridden cardinality-1 parent **merges rather
-    ///   than vanishing**.
+    ///   `(nodegroup_id, parenttile_id)`, reads cardinality from the *graph*, and
+    ///   collapses each over-full scope into the FIRST (topmost) tile. In
+    ///   `PerNodegroup` mode the others are discarded WHOLE: the overlay's tile
+    ///   replaces the base's, and a field the base set but the overlay omitted is
+    ///   gone, not inherited. **This is the atomic-nodegroup rule** — a nodegroup
+    ///   is the unit a layer adds or replaces — and it is what lets query and
+    ///   hydration agree, because the composed query treats the overlay as owning
+    ///   the whole nodegroup (`fragment_dir`), so hydration must too.
+    /// - **cardinality-n** — left alone: **additive union**. Nothing here can
+    ///   silently replace a multi-valued tile.
+    /// - **children of a superseded cardinality-1 tile** — re-parented onto the
+    ///   survivor (`tile_redirect`), so a cardinality-n nodegroup under an
+    ///   overridden cardinality-1 parent **merges rather than vanishing**.
     ///
-    /// It collapses on **cardinality**, not on `tileid`, so it does not depend on
-    /// composable tile ids: two layers whose cardinality-1 tiles carry different
-    /// (e.g. Arches-minted) ids are still unified. Canonical tile ids make the
-    /// dedup cheaper and work without a graph; the graph is the safety net.
+    /// `merge_resources`' tileid-dedup already does the override for layers whose
+    /// cardinality-1 tiles share alizarin's *canonical* ids (topmost-first ⇒ the
+    /// topmost is kept). The `unify` pass is the safety net for the residual case
+    /// (Arches-minted differing ids), collapsing them whole so a cardinality-1
+    /// scope never hydrates two tiles.
     ///
-    /// **There is still no retraction.** An overlay cannot delete a base tile
-    /// from a cardinality-n nodegroup — the format has no tombstone.
-    ///
-    /// `graph` is load-bearing, not a hint: the unifier needs the cardinalities.
+    /// **Retraction** works here: an overlay ships an empty tile for a nodegroup,
+    /// its (shared canonical) id wins the dedup, and the composed resource shows
+    /// the empty tile — the base's is gone. (Cardinality-n still has no retraction:
+    /// the id space makes those add-only.)
     ///
     /// Descriptors are NOT recomputed here. A head carries no resource
-    /// descriptors (hydration synthesises the identity fields it needs), so
-    /// there is nothing stale to rebuild on this path — and a corpus-wide
+    /// descriptors, so there is nothing stale to rebuild — and a corpus-wide
     /// descriptor rebuild is the expensive operation this design exists to avoid.
-    /// Descriptors are computed at *emit*, by the layer that defines the
-    /// resource, over its own composed view.
+    /// Descriptors are computed at *emit*, by the layer that defines the resource.
     pub fn resource_tiles(
         &self,
         uuid: &str,
         graph: &StaticGraph,
     ) -> Result<Vec<StaticTile>, ReadError> {
-        // Gather the resource from every layer that has it, TOPMOST FIRST —
-        // which is what turns alizarin's "first occurrence wins" into
-        // "topmost layer wins".
+        // Gather the resource from every layer that has it, TOPMOST FIRST — which
+        // is what turns "first occurrence wins" into "topmost layer wins".
         let mut stack: Vec<StaticResource> = Vec::new();
         for layer in self.layers.iter().rev() {
             let tiles = match resource_tiles_with_graph(&layer.dir, uuid, Some(graph)) {
@@ -751,12 +749,12 @@ impl Layers {
         let merged = merge_resources(stack).map_err(ReadError::Merge)?;
         let mut tiles = merged.resource.tiles.unwrap_or_default();
 
-        // Then collapse any cardinality-1 scope that still holds more than one
-        // tile — the case tile ids alone cannot catch (Arches-minted ids, or a
-        // layer that recreated the tile). `strict: false`: a data conflict
-        // between layers is what an override IS, so it warns rather than fails;
-        // the topmost layer's value is the one kept.
-        unify_cardinality_one_tiles(&mut tiles, graph, false).map_err(ReadError::Merge)?;
+        // Collapse any cardinality-1 scope that still holds >1 tile (Arches-minted
+        // differing ids the dedup missed), WHOLE — never per-key: a partial overlay
+        // tile must not inherit the base's other fields, or hydration would show a
+        // field the composed query says the overlay dropped.
+        unify_cardinality_one_tiles(&mut tiles, graph, false, TileMergeMode::PerNodegroup)
+            .map_err(ReadError::Merge)?;
         Ok(tiles)
     }
 
@@ -803,25 +801,32 @@ fn as_resource(uuid: &str, graph: &StaticGraph, tiles: Vec<StaticTile>) -> Stati
     }
 }
 
-/// Does this node sit in a cardinality-n nodegroup — i.e. do layers ACCUMULATE
-/// values for it rather than override them?
+/// A node's `(nodegroup_id, is_additive)`: the nodegroup precedence is decided
+/// at, and whether that nodegroup ACCUMULATES across layers (cardinality-n) or is
+/// overridden whole (cardinality-1).
 ///
-/// Read from the graph, which is where `unify_cardinality_one_tiles` reads it
-/// too: the query's composition rule and the tile merge's composition rule are
-/// then the same rule, from the same source, and cannot drift apart.
+/// Cardinality is read from the graph, which is where the tile merge reads it too
+/// ([`composed_tiles`]): the query's composition rule and the merge's composition
+/// rule are then the same rule, from the same source, and cannot drift.
 ///
-/// An unknown node, or a node whose nodegroup the graph does not know, is treated
-/// as **not** additive. That is the safe default here: it falls back to the
-/// override rule, which consults `node_presence` and answers from exactly one
-/// layer. The alternative — assuming additive — would OR across layers and could
-/// resurrect a value a higher layer had overridden.
-fn is_additive(graph: &StaticGraph, node_id: &str) -> bool {
-    graph
+/// A node whose nodegroup the graph does not know falls back to `(node_id,
+/// not-additive)` — the safe default: override consults `fragment_dir` and answers
+/// from exactly one layer, whereas assuming additive would OR across layers and
+/// could resurrect a value a higher layer overrode. (Using the node id as its own
+/// nodegroup key is harmless here: an unknown node has no `fragment_dir` rows
+/// under either id, so the leaf is simply false.)
+fn nodegroup_of(graph: &StaticGraph, node_id: &str) -> (String, bool) {
+    match graph
         .get_node_by_id(node_id)
         .and_then(|n| n.nodegroup_id.as_deref())
         .and_then(|ng| graph.get_nodegroup_by_id(ng))
-        .and_then(|ng| ng.cardinality.as_deref())
-        == Some("n")
+    {
+        Some(ng) => (
+            ng.nodegroupid.clone(),
+            ng.cardinality.as_deref() == Some("n"),
+        ),
+        None => (node_id.to_string(), false),
+    }
 }
 
 fn bind(params: &[Param]) -> Vec<SqlValue> {

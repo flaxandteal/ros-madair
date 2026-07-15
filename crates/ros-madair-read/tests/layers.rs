@@ -12,17 +12,17 @@
 //!
 //! # The corpus, and why it is shaped like this
 //!
-//! The demo Talk model has one concept node (`topics`). The tests add a second,
-//! `region`, to their own copy of the model — because the decisive case needs a
-//! field that **only the base carries**, on a resource the overlay **does**
-//! carry, and one filterable field cannot express it.
+//! The demo Talk model has one concept card (`topics`). The tests add more to
+//! their own copy of the model: `region` (cardinality-1, its own card), `tag`
+//! (cardinality-n), and `topic_kind` — a SECOND node inside the `topics` card, the
+//! one shape where whole-nodegroup override differs from per-node.
 //!
 //! | resource | BASE | OVERLAY |
 //! |---|---|---|
-//! | Talk A | topics `UI`,`MISC` · region `MISC` · title | topics `UI` — *no region, no title* |
-//! | Talk B | topics `JS` · title | topics `UI` — **flipped out of JS** |
-//! | Talk C | topics `UI` · title | *(absent)* |
-//! | Talk D | topics `UI` · title | topics `null` — **retracted** |
+//! | Talk A | topics `UI`,`MISC` + topic_kind `JS` · region `MISC` · tag `MISC` | topics `UI` (card restated) · tag `JS` |
+//! | Talk B | topics `JS` | topics `UI` — **flipped out of JS** |
+//! | Talk C | topics `UI` | *(absent)* |
+//! | Talk D | topics `UI` | topics `null` — **retracted** |
 //!
 //! This breaks every naive composition:
 //!
@@ -30,18 +30,22 @@
 //!    count` says 4; the truth is 3.
 //! 2. **Flipping OUT** — the base says Talk B is a `JS` talk and the overlay says
 //!    it is not. A union of per-layer matches counts it forever.
-//! 3. **The base's verdict SURVIVING** — Talk C is untouched, so the base stays
+//! 3. **The base's verdict SURVIVING** — Talk C is untouched (its `region` card,
+//!    which the overlay never carries, stays the base's), so the base stays
 //!    authoritative for it.
-//! 4. **PARTIAL layers (the bug this fixes)** — the overlay carries Talk A but
-//!    says NOTHING about its `region`. Under per-RESOURCE precedence the overlay
-//!    became authoritative for every field of Talk A, so `region = MISC` answered
-//!    "no" and the base's correct verdict was discarded. Worse, an `all` across
-//!    `topics` (overlay) and `region` (base) matched in NEITHER layer, though the
-//!    composed resource on screen satisfies both.
-//! 5. **RETRACTION** — Talk D's overlay tile sets `topics` to null. A null is not
-//!    silence: the merge sees the key and lets it win. If `node_presence` did not
-//!    record nulls, the composed query would fall through to the base and keep
-//!    matching a topic the user can no longer see.
+//! 4. **RESOURCE-level precedence was wrong** — the overlay carries Talk A but
+//!    not its `region` card; under per-RESOURCE precedence the overlay owned every
+//!    field of Talk A, so `region = MISC` answered "no" and an `all` across cards
+//!    owned by different layers matched in neither. The nodegroup rule answers each
+//!    card by its owner.
+//! 5. **NODEGROUP is the unit, not the node** — the overlay restates the `topics`
+//!    card with `topics` only; its sibling `topic_kind` is BLANKED (whole-card
+//!    override), where per-node would have kept the base's. This is the one place
+//!    the granularity choice is observable.
+//! 6. **RETRACTION** — Talk D's overlay ships a `topics` tile with no value, which
+//!    still produces a `fragment_dir` row, so the overlay OWNS the (now empty)
+//!    card and the base's `topics` does not leak through. An empty/absent tile is
+//!    "carried, empty", distinct from "never mentioned".
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -57,6 +61,10 @@ const TALK_GRAPH: &str = "a6c412db-72e0-4099-a690-ccc75ba841a9";
 const TALK_ROOT: &str = "5a037559-1ae0-11f0-b22a-8fd6f4eb1a02";
 const TOPICS_NG: &str = "3784d67d-1ae9-11f0-86d0-a32be8fb5c91";
 const TITLE_NG: &str = "7d8e443d-1ae0-11f0-8c5c-8fd6f4eb1a02";
+/// A second filterable node sharing the TOPICS card with `topics`. Its whole
+/// point is to be a sibling the overlay does NOT restate, so a whole-nodegroup
+/// override blanks it — the one behaviour where atomic differs from per-node.
+const TOPIC_KIND: &str = "5eaa0000-0000-4000-8000-000000000001";
 /// A SECOND concept node, added by these tests to their copy of the Talk model.
 /// The decisive partial-layer case needs a field only the base carries.
 const REGION_NG: &str = "5e910000-0000-4000-8000-000000000001";
@@ -177,6 +185,39 @@ fn add_concept_node(graph_path: &Path, ng: &str, alias: &str, cardinality: &str,
     std::fs::write(graph_path, serde_json::to_vec_pretty(&doc).unwrap()).unwrap();
 }
 
+/// Add a SECOND filterable node into an existing nodegroup, so that nodegroup has
+/// two filterable fields sharing one card. This is the only shape where atomic
+/// (whole-nodegroup) override behaves differently from per-node: the card is the
+/// unit, so an overlay tile that sets one of the two blanks the other.
+fn add_sibling_node(graph_path: &Path, ng: &str, node_id: &str, alias: &str) {
+    let mut doc: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(graph_path).unwrap()).unwrap();
+    let g = &mut doc["graph"][0];
+    g["nodes"].as_array_mut().unwrap().push(json!({
+        "nodeid": node_id,
+        "nodegroup_id": ng,          // SAME nodegroup — a sibling in the card
+        "name": alias,
+        "alias": alias,
+        "datatype": "concept-list",
+        "config": { "rdmCollection": RDM_COLLECTION },
+        "graph_id": TALK_GRAPH,
+        "istopnode": false,
+        "is_collector": false,
+        "isrequired": false,
+        "issearchable": true,
+        "exportable": false,
+        "sortorder": 1,
+    }));
+    // The sibling hangs off the nodegroup's collector node.
+    g["edges"].as_array_mut().unwrap().push(json!({
+        "edgeid": format!("{node_id}-edge"),
+        "domainnode_id": ng,
+        "rangenode_id": node_id,
+        "graph_id": TALK_GRAPH,
+    }));
+    std::fs::write(graph_path, serde_json::to_vec_pretty(&doc).unwrap()).unwrap();
+}
+
 fn extend_talk_model(graph_path: &Path) {
     add_concept_node(
         graph_path,
@@ -192,6 +233,9 @@ fn extend_talk_model(graph_path: &Path) {
         "n",
         "5e920000-0000-4000-8000-0000000000ee",
     );
+    // `topic_kind` shares the TOPICS card with `topics` — the one nodegroup the
+    // overlay RESTATES, so a whole-card override there blanks this sibling.
+    add_sibling_node(graph_path, TOPICS_NG, TOPIC_KIND, "topic_kind");
 }
 
 fn concept_tile(
@@ -210,6 +254,27 @@ fn concept_tile(
         // `None` writes an explicit NULL: the key is present, the value is not.
         // That is a RETRACTION, and it must not read as silence.
         "data": { ng: values },
+    })
+}
+
+/// A tile for a nodegroup that carries TWO nodes — for exercising a shared card.
+fn two_node_tile(
+    resource: &str,
+    tileid: &str,
+    ng: &str,
+    node_a: &str,
+    values_a: &[&str],
+    node_b: &str,
+    values_b: &[&str],
+) -> serde_json::Value {
+    json!({
+        "tileid": tileid,
+        "nodegroup_id": ng,
+        "parenttile_id": null,
+        "resourceinstance_id": resource,
+        "sortorder": 0,
+        "provisionaledits": null,
+        "data": { node_a: values_a, node_b: values_b },
     })
 }
 
@@ -287,11 +352,17 @@ fn base_corpus(demo: &Path) -> PathBuf {
                         "aaaa1111-0000-4000-8000-000000000001",
                         "3 W's of UI",
                     ),
-                    concept_tile(
+                    // The topics CARD carries two nodes: topics AND topic_kind.
+                    // The overlay restates this card with topics only, so under
+                    // whole-nodegroup override topic_kind is blanked.
+                    two_node_tile(
                         TALK_A,
                         "aaaa1111-0000-4000-8000-000000000002",
                         TOPICS_NG,
-                        Some(&[VALUE_UI, VALUE_MISC]),
+                        TOPICS_NG,
+                        &[VALUE_UI, VALUE_MISC],
+                        TOPIC_KIND,
+                        &[VALUE_JS],
                     ),
                     // The field the overlay will say NOTHING about.
                     concept_tile(
@@ -475,13 +546,21 @@ macro_rules! fixture {
 /// An absent tile and a null value both yield the empty set, which is right: a
 /// resource with no value for a node cannot match a predicate on it.
 fn composed_concepts(f: &Fixture, uuid: &str, node: &str) -> BTreeSet<String> {
+    // Every filterable field in this fixture is the sole collector of its own
+    // nodegroup, EXCEPT topic_kind (a sibling in TOPICS_NG), so the general form
+    // takes both; the common case passes the node as its own nodegroup.
+    let nodegroup = if node == TOPIC_KIND { TOPICS_NG } else { node };
+    composed_concepts_in(f, uuid, nodegroup, node)
+}
+
+fn composed_concepts_in(f: &Fixture, uuid: &str, nodegroup: &str, node: &str) -> BTreeSet<String> {
     let tiles = f
         .layers
         .resource_tiles(uuid, &f.graph)
         .expect("compose tiles");
     tiles
         .iter()
-        .filter(|t| t.nodegroup_id == node)
+        .filter(|t| t.nodegroup_id == nodegroup)
         .filter_map(|t| t.data.get(node))
         .filter_map(|v| v.as_array())
         .flatten()
@@ -630,6 +709,54 @@ fn an_and_across_fields_owned_by_different_layers_matches() {
     );
 }
 
+/// **The atomic-nodegroup rule, at the one shape where it DIFFERS from per-node.**
+///
+/// `topics` and `topic_kind` share ONE card (nodegroup). Base Talk A carries both
+/// (`topics = [UI, MISC]`, `topic_kind = [JS]`); the overlay RESTATES that card
+/// with `topics = [UI]` and no `topic_kind`. Under whole-nodegroup override the
+/// overlay owns the whole card, so `topic_kind` is **blanked** — the sibling the
+/// overlay omitted is gone, exactly as it would be for a user editing the card in
+/// Arches and saving it.
+///
+/// Per-node precedence (the rejected alternative) would keep the base's
+/// `topic_kind = JS`, and query and hydration would then disagree with the card
+/// the user sees. This is the whole reason the choice mattered — every other test
+/// puts each field in its own nodegroup, where the two rules coincide.
+#[test]
+fn a_shared_card_partially_restated_blanks_the_omitted_sibling() {
+    fixture!(f);
+
+    // Hydration oracle: the composed topics card has no topic_kind left.
+    assert!(
+        composed_concepts(&f, TALK_A, TOPIC_KIND).is_empty(),
+        "the overlay restated the topics card, so its sibling topic_kind is gone"
+    );
+
+    // The base ALONE still finds it — so the overlay is what removes it, not a
+    // fixture accident.
+    let base_only = Layers::open(&[f.base_head.as_path()]).unwrap();
+    assert_eq!(
+        base_only
+            .count(&query(is_concept("topic_kind", CONCEPT_JS)), &f.graph, None)
+            .unwrap(),
+        1,
+        "the base alone has Talk A's topic_kind = JS"
+    );
+
+    // Composed query agrees with the composed card: nobody matches.
+    let q = query(is_concept("topic_kind", CONCEPT_JS));
+    let ids = f.layers.resolve(&q, &f.graph, None).unwrap();
+    assert!(
+        !ids.contains(&TALK_A.to_string()),
+        "a filter on the blanked sibling must not match Talk A: {ids:?}"
+    );
+    assert_eq!(
+        f.layers.count(&q, &f.graph, None).unwrap(),
+        0,
+        "whole-nodegroup override dropped topic_kind, so the composed count is 0"
+    );
+}
+
 /// **Cardinality-N is ADDITIVE, and "topmost defining layer wins" would be a
 /// second silent wrong answer.**
 ///
@@ -672,14 +799,15 @@ fn a_cardinality_n_field_accumulates_across_layers_rather_than_overriding() {
     assert_eq!(n, 1, "and so does the overlay's");
 }
 
-/// A null value is a RETRACTION, not silence. Talk D's overlay tile sets `topics`
-/// to null; the merge lets the null win, so the composed resource has no topics
-/// and must not match one.
+/// A tile with no value is a RETRACTION, not silence. Talk D's overlay ships a
+/// `topics` tile whose value is null; whole-nodegroup override lets that tile win,
+/// so the composed resource has no topics and must not match one.
 ///
-/// This is what forces `node_presence` to record NULL-valued nodes: without those
-/// rows, "the overlay retracted it" is indistinguishable from "the overlay never
-/// mentioned it", and the query would fall back to the base and keep matching a
-/// topic that is no longer on screen.
+/// The tile still produces a `fragment_dir` row, which is what keeps "the overlay
+/// retracted it" distinct from "the overlay never mentioned it": without the row
+/// the query would fall back to the base and keep matching a topic no longer on
+/// screen. (The row exists for an *empty* tile too, `{}` — null-valued and empty
+/// retract identically.)
 #[test]
 fn a_null_in_an_overlay_retracts_rather_than_abstains() {
     fixture!(f);
@@ -855,21 +983,25 @@ fn layers_do_not_share_a_dictionary() {
     );
 }
 
-/// `node_presence` is what makes per-node precedence possible, so pin what it
-/// actually records — including the NULL, which is the row that distinguishes a
-/// retraction from silence.
+/// `fragment_dir` doubles as the nodegroup-presence index that drives per-
+/// nodegroup precedence, so pin what it records — including the retraction tile,
+/// which is the row that distinguishes "carried, empty" from "never mentioned".
+///
+/// (Each of these node ids is also its nodegroup's id — every filterable field in
+/// this fixture is the sole collector of its own nodegroup — so the nodegroup
+/// terms and the node terms coincide.)
 #[test]
-fn the_head_records_which_nodes_each_layer_carries() {
+fn the_head_records_which_nodegroups_each_layer_carries() {
     fixture!(f);
 
-    let nodes_for = |head: &Path, uuid: &str| -> BTreeSet<String> {
+    let ngs_for = |head: &Path, uuid: &str| -> BTreeSet<String> {
         let conn = rusqlite::Connection::open(head.join("head.sqlite")).unwrap();
         let mut stmt = conn
             .prepare(
-                "SELECT dn.term FROM node_presence np
-                   JOIN spine_talk s ON s.rid = np.rid
+                "SELECT DISTINCT dn.term FROM fragment_dir fd
+                   JOIN spine_talk s ON s.rid = fd.rid
                    JOIN dict dr ON dr.term_id = s.term_id
-                   JOIN dict dn ON dn.term_id = np.node
+                   JOIN dict dn ON dn.term_id = fd.nodegroup
                   WHERE dr.term = ?1",
             )
             .unwrap();
@@ -881,26 +1013,33 @@ fn the_head_records_which_nodes_each_layer_carries() {
         rows
     };
 
+    // The base's fragment_dir carries every nodegroup, filterable or not; restrict
+    // to the three we filter on so the assertion is about presence, not layout.
+    let filterable = BTreeSet::from([
+        TOPICS_NG.to_string(),
+        REGION_NG.to_string(),
+        TAG_NG.to_string(),
+    ]);
+    let base = &ngs_for(&f.base_head, TALK_A) & &filterable;
     assert_eq!(
-        nodes_for(&f.base_head, TALK_A),
-        BTreeSet::from([
-            TOPICS_NG.to_string(),
-            REGION_NG.to_string(),
-            TAG_NG.to_string()
-        ]),
-        "the base carries all three filterable fields of Talk A"
+        base, filterable,
+        "the base carries all three filterable cards"
     );
+
+    let overlay = &ngs_for(&f.overlay_head, TALK_A) & &filterable;
     assert_eq!(
-        nodes_for(&f.overlay_head, TALK_A),
+        overlay,
         BTreeSet::from([TOPICS_NG.to_string(), TAG_NG.to_string()]),
         "the overlay carries topics and tag — but says NOTHING about region, and \
          that silence is what the base's verdict survives on"
     );
-    assert_eq!(
-        nodes_for(&f.overlay_head, TALK_D),
-        BTreeSet::from([TOPICS_NG.to_string()]),
-        "a NULL topics still counts as CARRIED: it retracts, and a retraction \
-         that left no row would be indistinguishable from silence"
+
+    // The retraction tile (Talk D's null topics) still produces a fragment_dir
+    // row: an empty/retracting tile is CARRIED, not silence.
+    assert!(
+        ngs_for(&f.overlay_head, TALK_D).contains(TOPICS_NG),
+        "a retraction is a carried nodegroup — without the row it would read as \
+         'never mentioned' and the base would leak through"
     );
 }
 

@@ -137,34 +137,16 @@ pub(crate) fn create_schema(conn: &Connection) -> Result<(), EmitError> {
          CREATE TABLE concept_tags (rid INTEGER NOT NULL,
              node INTEGER NOT NULL, concept INTEGER NOT NULL,
              UNIQUE(rid, node, concept));
-         -- Which FILTERABLE nodes this layer actually carries a value for,
-         -- per resource. Layers are PARTIAL, and precedence between them is
-         -- per-NODE, because the tile merge is per-key: an overlay that
-         -- restates a nodegroup but omits one node leaves the lower layer
-         -- value for that node standing. Without this table a composed query
-         -- cannot tell a layer saying NO from a layer not saying anything,
-         -- and the two have opposite meanings.
-         --
-         -- A row exists even when the value is NULL. A null IS an answer: the
-         -- merge sees the key as present and lets it win, so a null is how a
-         -- layer RETRACTS a lower layer value. Recording only non-nulls would
-         -- make a retraction indistinguishable from silence.
-         --
-         -- Only FILTERABLE (concept/link) nodes: they are the only ones a query
-         -- can name. Text, numbers, dates and geometry never appear here, so
-         -- this is one row per (resource, filterable node) — the same order as
-         -- concept_tags, not the same order as the tiles. (It is NOT strictly
-         -- smaller than concept_tags: that table has a row per CONCEPT, this one
-         -- a row per NODE, and it also covers link nodes, which concept_tags
-         -- does not. On the demo corpus: 9 rows here to 3 there.)
-         --
-         -- COST NOTE, unbuilt: the BOTTOM layer's rows are never read. Presence
-         -- answers only add they define this above me?, and nothing sits above
-         -- the base. On a large shipped base this table is dead weight, and an
-         -- emit that knew its layer position could skip it.
-         CREATE TABLE node_presence (rid INTEGER NOT NULL,
-             node INTEGER NOT NULL,
-             PRIMARY KEY (rid, node)) WITHOUT ROWID;
+         -- fragment_dir doubles as the layer-composition PRESENCE index: a
+         -- (rid, nodegroup) row means this layer carries this nodegroup for
+         -- this resource. Layer precedence is per-NODEGROUP, not per-node,
+         -- because a nodegroup is the atomic unit a layer adds or replaces
+         -- (see ros-madair-read layers module) — so no separate node-level
+         -- presence table is needed, and the row that already exists here for
+         -- every emitted tile is exactly the signal composition wants. An
+         -- overlay that RETRACTS a nodegroup ships an empty tile for it, which
+         -- still produces a fragment_dir row, so deleted and never-mentioned
+         -- stay distinguishable.
          CREATE TABLE fragment_dir (rid INTEGER NOT NULL,
              nodegroup INTEGER NOT NULL, chunk INTEGER NOT NULL,
              tile_count INTEGER NOT NULL);
@@ -353,7 +335,6 @@ pub(crate) fn process_resource(
              VALUES (?1, ?2, ?3)"
     ))?;
     let mut stmt_ct = tx.prepare_cached("INSERT OR IGNORE INTO concept_tags VALUES (?1,?2,?3)")?;
-    let mut stmt_np = tx.prepare_cached("INSERT OR IGNORE INTO node_presence VALUES (?1,?2)")?;
 
     let res_id = resource.resourceinstance.resourceinstanceid.clone();
     let rid = *next_rid;
@@ -383,6 +364,9 @@ pub(crate) fn process_resource(
                 // live in the tile chunks.
                 continue;
             }
+            if value.is_null() {
+                continue;
+            }
             // Datatype extraction routes through the core index-keys seam:
             // the registry (with the CLM reference handler registered) owns
             // extension datatypes; core's built-in match covers concept/link
@@ -390,24 +374,6 @@ pub(crate) fn process_resource(
             // returned keys and picks the head table per IndexClass.
             let cfg = ctx.node_config.get(node_id.as_str());
             let spec = datatype_index_spec(dt, value, cfg, Some(registry));
-
-            // PRESENCE, before the null check. The node is filterable and this
-            // layer carries a value for it — even if that value is null, which
-            // is not silence but a RETRACTION: the tile merge sees the key as
-            // present and lets it win over a lower layer's. A composed query
-            // that could not see the null would keep answering from the layer
-            // underneath, and disagree with what the user is looking at.
-            //
-            // (`spec.class` is datatype-driven, so it is meaningful for a null
-            // value; `spec.keys` is simply empty, which is the point.)
-            if !matches!(spec.class, IndexClass::DetailOnly) {
-                let node_int = interner.intern(node_id);
-                stmt_np.execute((rid, node_int))?;
-            }
-            if value.is_null() {
-                continue;
-            }
-
             match spec.class {
                 IndexClass::ConceptHierarchical { .. } => {
                     let node_int = interner.intern(node_id);
@@ -449,7 +415,6 @@ pub(crate) fn process_resource(
     // does not touch the connection, but keep the borrow scope tight).
     drop(stmt_spine);
     drop(stmt_ct);
-    drop(stmt_np);
     sink.add_resource_tiles(rid, tiles, interner)?;
     Ok(())
 }
