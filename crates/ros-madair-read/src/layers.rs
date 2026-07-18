@@ -872,20 +872,34 @@ fn check_composable(base: &Layer, layer: &Layer) -> Result<(), ReadError> {
             layer.manifest.base_uri.clone(),
         );
     }
-    // Handler sets must be identical: a field indexed under a handler the other
-    // layer lacks is a field that answers zero rows there, silently.
-    let handlers = |m: &Manifest| {
-        let mut names: Vec<String> = m
+    // Handler sets must match on WHAT indexes a datatype, not on the exact
+    // build that did it. A field indexed under a handler the other layer lacks
+    // answers zero rows there, silently — that is the real hazard, and it is
+    // identified by (datatype, provider). The handler `version` is provenance
+    // only (see `HandlerDecl`'s own doc); comparing it made a clm-core patch
+    // bump a hard `Incompatible`, so a device overlay built against a newer app
+    // could not compose with its OWN shipped base until that base was re-emitted
+    // — impossible on a deployed device. Version is therefore excluded from the
+    // composition identity. (If a version ever changes a datatype's on-disk
+    // format, that must move a format-level identifier, not lean on this string.)
+    let handler_ids = |m: &Manifest| {
+        let mut ids: Vec<(String, String)> = m
             .handlers
             .iter()
-            .map(|h| serde_json::to_string(h).unwrap_or_default())
+            .map(|h| (h.datatype.clone(), h.provider.clone()))
             .collect();
-        names.sort();
-        names
+        ids.sort();
+        ids
     };
-    let (hb, hl) = (handlers(&base.manifest), handlers(&layer.manifest));
+    let (hb, hl) = (handler_ids(&base.manifest), handler_ids(&layer.manifest));
     if hb != hl {
-        return incompatible("handlers", hb.join(","), hl.join(","));
+        let show = |v: &[(String, String)]| {
+            v.iter()
+                .map(|(d, p)| format!("{d}@{p}"))
+                .collect::<Vec<_>>()
+                .join(",")
+        };
+        return incompatible("handlers", show(&hb), show(&hl));
     }
     for model in &layer.manifest.models {
         let Some(base_model) = base.manifest.model_for_graph(&model.graph_id) else {

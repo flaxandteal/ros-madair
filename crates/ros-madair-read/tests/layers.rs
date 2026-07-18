@@ -1128,6 +1128,53 @@ fn layers_from_different_base_uris_are_refused() {
     );
 }
 
+/// **A5.** A handler-VERSION delta must NOT block composition; a
+/// handler-PROVIDER delta must.
+///
+/// Composition identity is `(datatype, provider)` — WHAT indexes a field, not
+/// the exact build that did it. `HandlerDecl.version` is provenance only. This
+/// is live for the on-device model: a device overlay built against a newer app
+/// (bumped clm-core) has to compose with its OWN shipped base, which it cannot
+/// re-emit. Exact-version matching made that a hard `Incompatible`.
+#[test]
+fn a_handler_version_delta_composes_but_a_provider_delta_does_not() {
+    fixture!(f);
+
+    // Two real heads of the same corpus; patch the overlay's handler `version`.
+    let overlay = scratch("hv-overlay");
+    copy_dir(&f.overlay_head, &overlay);
+
+    let patch_handlers = |dir: &Path, edit: &dyn Fn(&mut serde_json::Value)| {
+        let p = dir.join("manifest.json");
+        let mut m: serde_json::Value = serde_json::from_slice(&std::fs::read(&p).unwrap()).unwrap();
+        for h in m["handlers"].as_array_mut().expect("handlers array") {
+            edit(h);
+        }
+        std::fs::write(&p, serde_json::to_vec_pretty(&m).unwrap()).unwrap();
+    };
+
+    // A different VERSION — the clm-core patch-bump case — must still compose.
+    patch_handlers(&overlay, &|h| {
+        h["version"] = json!("99.99.99-does-not-matter")
+    });
+    Layers::open(&[f.base_head.as_path(), overlay.as_path()])
+        .expect("a handler version delta must NOT block composition");
+
+    // A different PROVIDER — a genuinely different thing indexing the field —
+    // must still refuse: that IS a real incompatibility.
+    let bad_provider = scratch("hv-bad-provider");
+    copy_dir(&f.overlay_head, &bad_provider);
+    patch_handlers(&bad_provider, &|h| {
+        h["provider"] = json!("some-other-crate")
+    });
+    let err = Layers::open(&[f.base_head.as_path(), bad_provider.as_path()])
+        .expect_err("a provider delta is a real incompatibility");
+    assert!(
+        matches!(err, ReadError::Incompatible { ref what, .. } if what == "handlers"),
+        "{err}"
+    );
+}
+
 /// A manifest is REQUIRED per layer: without one there is nothing to check
 /// composability against, and silently composing two incompatible snapshots is
 /// the failure this crate exists to prevent.
