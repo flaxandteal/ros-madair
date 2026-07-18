@@ -236,6 +236,14 @@ fn extend_talk_model(graph_path: &Path) {
     // `topic_kind` shares the TOPICS card with `topics` — the one nodegroup the
     // overlay RESTATES, so a whole-card override there blanks this sibling.
     add_sibling_node(graph_path, TOPICS_NG, TOPIC_KIND, "topic_kind");
+    // Make the name descriptor RESOLVE: the demo ships `<title>`, but the node is
+    // named `Title` and the match is case-sensitive. `<Title>` lets the composed
+    // display_name be recomputed to a real headword instead of falling back.
+    let mut doc: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(graph_path).unwrap()).unwrap();
+    doc["graph"][0]["functions_x_graphs"][0]["config"]["descriptor_types"]["name"]
+        ["string_template"] = json!("<Title>");
+    std::fs::write(graph_path, serde_json::to_vec_pretty(&doc).unwrap()).unwrap();
 }
 
 fn concept_tile(
@@ -1080,6 +1088,43 @@ fn the_overlay_overrides_the_tile_it_restates_and_keeps_the_ones_it_does_not() {
         tiles.iter().filter(|t| t.nodegroup_id == TOPICS_NG).count(),
         1,
         "cardinality-1 must hold exactly one tile after composition"
+    );
+}
+
+/// The composed `display_name` is RE-DERIVED from the composed tiles — so a
+/// resource whose headword lives only in a LOWER layer still gets its real name
+/// in the composed view, not a placeholder or the topmost layer's own descriptor.
+///
+/// This is the macbain shape: the overlay (topmost) restates Talk A's topics and
+/// tag but carries NO title card; the base does. Composed hydration recomputes
+/// the name descriptor (`<Title>`) over the MERGED tiles — which include the
+/// base's title — so `_name` is the real title. Proof it came from composition,
+/// not from the topmost layer: the overlay ALONE does not resolve to that name.
+#[test]
+fn the_composed_display_name_is_recomputed_from_the_composed_tiles() {
+    fixture!(f);
+
+    let composed = f
+        .layers
+        .hydrate_resource(TALK_A, &f.graph)
+        .expect("hydrate");
+    assert_eq!(
+        composed["_name"], "3 W's of UI",
+        "composed name is the descriptor of the merged tiles — the title from the \
+         base, though the overlay never carried it"
+    );
+
+    // The overlay alone has topics/tag but no title card for Talk A, so its own
+    // recomputed name does not resolve to the real title. The composed name is
+    // therefore genuinely a product of composition, not the topmost layer's.
+    let overlay_only = Layers::open(&[f.overlay_head.as_path()]).unwrap();
+    let solo = overlay_only
+        .hydrate_resource(TALK_A, &f.graph)
+        .expect("hydrate");
+    assert_ne!(
+        solo["_name"], "3 W's of UI",
+        "the overlay alone carries no title — the composed name is not just the \
+         topmost layer's descriptor"
     );
 }
 

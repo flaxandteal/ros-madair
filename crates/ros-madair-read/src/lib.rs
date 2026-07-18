@@ -39,7 +39,7 @@ use std::path::{Path, PathBuf};
 
 use alizarin_core::graph::{StaticGraph, StaticResourceMetadata};
 use alizarin_core::json_conversion::resource_tiles_to_tree;
-use alizarin_core::StaticTile;
+use alizarin_core::{IndexedGraph, StaticTile};
 use ros_madair_format::{ChunkTile, Manifest};
 use rusqlite::{Connection, OpenFlags};
 
@@ -375,17 +375,38 @@ pub fn hydrate_resource(
 
 /// Hydrate already-recovered tiles (the second half of [`hydrate_resource`]),
 /// for callers that got their tiles some other way — a query result, say.
+///
+/// # Descriptors are RE-DERIVED here, from *these* tiles
+///
+/// The resource's descriptor (its `name`) is recomputed by rendering the graph's
+/// descriptor template against the tiles handed in — not read from any stored
+/// copy. This is what makes composition correct: [`Layers::hydrate_resource`]
+/// passes the COMPOSED tiles, so the composed `name` is the descriptor of the
+/// merged view, and a shared entry gets the layer's real headword rather than a
+/// lower layer's `<Headword>` placeholder. (This is the rule the batch merge
+/// applies with `recompute_descriptors=true`, and the opposite of what
+/// `merge_resources` does alone — it copies the first resource's descriptor
+/// wholesale, which for topmost-first layers would be the placeholder.)
+///
+/// **Cost:** one `IndexedGraph` build per call (it clones the graph). Hydration
+/// is inherently a SINGLE-resource operation — a list of names is a query over
+/// `spine.display_name` (real since A1), not a hydrate per row — so this is not a
+/// hot path. Do not call it in a loop; if you need many, query instead.
 pub fn hydrate_tiles(
     tiles: &[StaticTile],
     uuid: &str,
     graph: &StaticGraph,
 ) -> Result<serde_json::Value, ReadError> {
-    // The head stores no resource metadata beyond a display name, and the
-    // hydrator only needs the identity fields.
+    // Re-derive the descriptor from the composed tiles (see the doc above).
+    // `build_descriptors` needs an IndexedGraph; there is no cheaper borrow-based
+    // path, and a single entry-view build is fine.
+    let indexed = IndexedGraph::new(graph.clone());
+    let descriptors = indexed.build_descriptors(tiles);
+
     let metadata = StaticResourceMetadata {
-        descriptors: Default::default(),
         graph_id: graph.graph_id().to_string(),
-        name: String::new(),
+        name: descriptors.name.clone().unwrap_or_default(),
+        descriptors,
         resourceinstanceid: uuid.to_string(),
         publication_id: None,
         principaluser_id: None,

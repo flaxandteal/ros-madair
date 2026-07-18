@@ -716,10 +716,14 @@ impl Layers {
     /// the empty tile — the base's is gone. (Cardinality-n still has no retraction:
     /// the id space makes those add-only.)
     ///
-    /// Descriptors are NOT recomputed here. A head carries no resource
-    /// descriptors, so there is nothing stale to rebuild — and a corpus-wide
-    /// descriptor rebuild is the expensive operation this design exists to avoid.
-    /// Descriptors are computed at *emit*, by the layer that defines the resource.
+    /// This returns TILES only; it does not touch the descriptor. The composed
+    /// `display_name` is re-derived from these tiles at hydration — see
+    /// [`hydrate_tiles`], which [`Layers::hydrate_resource`] routes through. That
+    /// is what gives a shared entry the layer's real headword instead of a lower
+    /// layer's `<Headword>` placeholder: the descriptor is a function of the
+    /// COMPOSED tiles, not of any one layer's precomputed `spine.display_name`.
+    /// (A corpus-wide descriptor rebuild is still the expensive path this design
+    /// avoids — recompute is per-resource, at display time, not at emit-scale.)
     pub fn resource_tiles(
         &self,
         uuid: &str,
