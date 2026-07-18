@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //! CLI: ros-madair-emit <data_dir> <out_dir> [--base-uri URI]
-//!                    [--field-classes JSON]
 //!                    [--tier <name>:<config.json>]
 //!
 //! data_dir layout (AlizarinProvider/Clódóir convention):
@@ -8,10 +7,9 @@
 //!   resources/**/*.json    business data
 //!   vocabularies/*.xml     SKOS (optional)
 //!
-//! --field-classes: schema-declared head membership (M1 item 3), a JSON
-//! object of {"<alias>": "filterable" | "detail-only"} overriding
-//! datatype inference. "filterable" on a non-concept/non-link datatype
-//! is an error (no text in the head).
+//! Head membership is datatype-driven — concept/link fields are indexed,
+//! everything else is detail-only — so there is no field-class flag. To index
+//! a subset of concept fields, prune a search graph (prune_graph) upstream.
 //!
 //! --tier (M1.5): emit a named tier as its own complete artifact graph
 //! under <out_dir>/<name>/. The config JSON is
@@ -30,7 +28,7 @@ use serde::Deserialize;
 use ros_madair_emit::{EmitOptions, TierManifest};
 
 const USAGE: &str = "usage: ros-madair-emit <data_dir> <out_dir> \
-     [--base-uri URI] [--field-classes JSON] [--tier <name>:<config.json>]";
+     [--base-uri URI] [--tier <name>:<config.json>]";
 
 /// On-disk tier config (the CLI supplies the name).
 #[derive(Deserialize)]
@@ -57,22 +55,6 @@ fn main() -> ExitCode {
         if args[i] == "--base-uri" {
             i += 1;
             base_uri = args.get(i).cloned().unwrap_or(base_uri);
-        } else if args[i] == "--field-classes" {
-            i += 1;
-            let Some(raw) = args.get(i) else {
-                eprintln!("--field-classes requires a JSON argument\n{USAGE}");
-                return ExitCode::from(2);
-            };
-            match serde_json::from_str(raw) {
-                Ok(map) => options.field_classes = map,
-                Err(e) => {
-                    eprintln!(
-                        "--field-classes: expected JSON object of \
-                         {{\"<alias>\": \"filterable\"|\"detail-only\"}} ({e})"
-                    );
-                    return ExitCode::from(2);
-                }
-            }
         } else if args[i] == "--tier" {
             i += 1;
             match args.get(i) {

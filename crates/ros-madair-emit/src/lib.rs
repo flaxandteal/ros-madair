@@ -38,7 +38,7 @@
 //! `manifest` (contract types and snapshot id). This file is the
 //! `emit()` orchestration only.
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::Path;
 
@@ -59,61 +59,22 @@ pub use closure::{build_closure, Closure, ClosureEntry};
 /// hand-mirrored copy of the wire format, which is how they drift). Re-exported
 /// here so existing callers keep working.
 pub use ros_madair_format::{
-    ArtifactEntry, Budgets, ChunkTile, EmitSummary, FieldEntry, Manifest, ModelManifest,
-    TierManifest,
+    ArtifactEntry, Budgets, ChunkTile, EmitSummary, Manifest, ModelManifest, TierManifest,
 };
 
 pub type EmitError = Box<dyn std::error::Error>;
 
-/// Typed field-class violations (M1 item 3). These are contract errors,
-/// not warnings: "filterable" on a datatype the head cannot index
-/// without storing text (anything that is not a concept or resource
-/// link) would break the head's core invariant — NO TEXT IN THE HEAD.
-#[derive(Debug)]
-pub enum FieldClassError {
-    /// "filterable" declared on a non-concept, non-link datatype.
-    NotFilterable { alias: String, datatype: String },
-    /// A declared class other than "filterable" | "detail-only".
-    UnknownClass { alias: String, class: String },
-    /// A declared alias that matched no node in any loaded model.
-    UnknownAlias { alias: String },
-}
-
-impl std::fmt::Display for FieldClassError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            FieldClassError::NotFilterable { alias, datatype } => write!(
-                f,
-                "field class error: alias '{alias}' (datatype '{datatype}') \
-                 cannot be declared filterable — only concept and \
-                 resource-link datatypes are head-indexable (no text in \
-                 the head)"
-            ),
-            FieldClassError::UnknownClass { alias, class } => write!(
-                f,
-                "field class error: alias '{alias}' declares unknown class \
-                 '{class}' (expected \"filterable\" or \"detail-only\")"
-            ),
-            FieldClassError::UnknownAlias { alias } => write!(
-                f,
-                "field class error: alias '{alias}' matched no node in any \
-                 loaded model"
-            ),
-        }
-    }
-}
-
-impl std::error::Error for FieldClassError {}
-
-/// Emit-time options (M1 items 3/6): schema-declared field classes and
-/// tier exclusions. `Default` reproduces the plain single-tier emit.
+/// Emit-time options (M1 item 6): tier exclusions. `Default` reproduces the
+/// plain single-tier emit.
+///
+/// There is no field-class override. A field's head membership is a pure
+/// function of its datatype (concept/link → indexed, else → detail-only),
+/// computed by `datatype_index_spec`; the reader derives the same, so nothing
+/// needs declaring or recording. To index a strict SUBSET of a corpus's concept
+/// fields, prune a search graph (`prune_graph`) — a graph-level operation, not a
+/// per-field flag.
 #[derive(Default, Clone)]
 pub struct EmitOptions {
-    /// alias -> declared class ("filterable" | "detail-only"). Overrides
-    /// datatype inference; datatype inference is only a proposal the
-    /// schema confirms. A node declared detail-only is NOT head-indexed
-    /// (no concept_tags rows, no chunk concept/link summaries).
-    pub field_classes: BTreeMap<String, String>,
     /// Tier name + exclusions; when set, the caller directs out_dir at
     /// the tier's own subdirectory and this is recorded in the manifest.
     pub tier: Option<TierManifest>,
@@ -162,16 +123,6 @@ pub fn emit_with_options(
     options: &EmitOptions,
     registry: &ExtensionTypeRegistry,
 ) -> Result<EmitSummary, EmitError> {
-    // Validate declared classes upfront (typed errors, M1 item 3).
-    for (alias, class) in &options.field_classes {
-        if class != "filterable" && class != "detail-only" {
-            return Err(Box::new(FieldClassError::UnknownClass {
-                alias: alias.clone(),
-                class: class.clone(),
-            }));
-        }
-    }
-
     let data_dir = Path::new(data_dir);
     let out = Path::new(out_dir);
     fs::create_dir_all(out.join("chunks"))?;
@@ -184,29 +135,6 @@ pub fn emit_with_options(
     // half is applied per-resource in the streaming loop.
     if let Some(tier) = &options.tier {
         retain_tier_models(&mut models, tier);
-    }
-
-    // Field plans next (fail fast): validates declared classes against
-    // datatypes and catches declared aliases that match no node in any
-    // model, before any population work.
-    let mut matched_aliases = std::collections::BTreeSet::new();
-    let mut plans = Vec::with_capacity(models.len());
-    for model in &models {
-        plans.push(head::field_plan(
-            &model.graph,
-            &options.field_classes,
-            &mut matched_aliases,
-            registry,
-        )?);
-    }
-    // A declared alias that matched nothing is a typo, not a no-op —
-    // the schema declaration is a contract.
-    for alias in options.field_classes.keys() {
-        if !matched_aliases.contains(alias) {
-            return Err(Box::new(FieldClassError::UnknownAlias {
-                alias: alias.clone(),
-            }));
-        }
     }
 
     let collections = closure::load_collections(data_dir, base_uri)?;
@@ -295,7 +223,6 @@ pub fn emit_with_options(
                 &ctxs[idx],
                 resource,
                 &closure,
-                &plans[idx].1,
                 &mut interner,
                 &mut sink,
                 &mut next_rid,
@@ -309,12 +236,11 @@ pub fn emit_with_options(
     tx.commit()?;
 
     let mut manifest_models = Vec::new();
-    for (i, (model, (fields, _detail_only))) in models.iter().zip(plans).enumerate() {
+    for (i, model) in models.iter().enumerate() {
         manifest_models.push(ModelManifest {
             slug: model.slug.clone(),
             graph_id: model.graph.graphid.clone(),
             spine_table: spine_tables[i].clone(),
-            fields,
             resource_count: resource_counts[i],
         });
     }
@@ -337,8 +263,8 @@ pub fn emit_with_options(
     // manifest is built — it is an input to its own digest, and the
     // self-reference is resolved by hashing the id-less form (see
     // manifest::manifest_digest_bytes). A manifest-only change (handler set,
-    // tier, declared field classes) therefore MOVES the id: two deployments
-    // that answer differently cannot share an identity.
+    // tier) therefore MOVES the id: two deployments that answer differently
+    // cannot share an identity.
     let artifacts = manifest::hash_artifacts(out)?;
 
     let head_db_bytes = fs::metadata(out.join("head.sqlite"))?.len();

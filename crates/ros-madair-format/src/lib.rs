@@ -107,32 +107,15 @@ pub struct ModelManifest {
     pub slug: String,
     pub graph_id: String,
     pub spine_table: String,
-    /// alias -> physical location, keyed for the query compiler (M2).
-    pub fields: BTreeMap<String, FieldEntry>,
     pub resource_count: usize,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct FieldEntry {
-    pub node_id: String,
-    pub datatype: String,
-    /// "concept" | "link-coarse" | "detail-only".
-    /// concept: exact rows in `concept_tags`; hierarchy queries via
-    ///   `concept BETWEEN vocab.dfs_enter AND vocab.dfs_leave` (P10).
-    /// link-coarse: NO exact head table — only
-    ///   `chunk_link_summary(chunk, node, min_target, max_target, n)`;
-    ///   the client plans coarse against the summary and resurfaces
-    ///   exact pairs from the tile chunks (P1/P2). Exact head link
-    ///   tables would be an opt-in, schema-declared field class.
-    /// Everything else (strings, numbers, dates, geo, …) is
-    /// detail-only in this iteration.
-    pub storage: String,
-    /// "filterable" | "coarse" | "detail-only". Datatype inference is
-    /// only a proposal; a schema declaration
-    /// (EmitOptions.field_classes / --field-classes) overrides it and
-    /// is recorded here, so the M2 compiler can read head membership
-    /// from the manifest alone (M1 item 3).
-    pub class: String,
+    // NO per-field layout map. A field's storage/class is a pure function of its
+    // datatype (concept → concept_tags, link → coarse, everything else →
+    // detail-only), computed identically by emit and reader from `graph.json`
+    // via `datatype_index_spec`. Materializing it here was a verbatim copy of
+    // the graph plus a derivable value — I6 ("layout derivable from the schema")
+    // in fact, not just in principle. If a corpus ever needs to index a strict
+    // SUBSET of its concept fields, that is a pruned search graph (prune_graph),
+    // not a per-field flag.
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -255,8 +238,7 @@ mod tests {
     #[test]
     fn chunk_tile_roundtrips_through_named_msgpack() {
         let original = tile();
-        let encoded =
-            rmp_serde::to_vec_named(&vec![ChunkTile::from(&original)]).expect("encode");
+        let encoded = rmp_serde::to_vec_named(&vec![ChunkTile::from(&original)]).expect("encode");
         let decoded: Vec<ChunkTile> = rmp_serde::from_slice(&encoded).expect("decode");
         assert_eq!(decoded.len(), 1);
         let back: StaticTile = decoded.into_iter().next().unwrap().into();

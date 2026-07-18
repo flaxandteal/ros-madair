@@ -176,10 +176,10 @@ impl Layers {
     ///   fields that handler owns, so the identical query would answer zero
     ///   rows there and non-zero here, with nothing to show for it;
     /// - **per-model spine table** — a shared `graph_id` must map to the same
-    ///   spine table in every layer (the compiled SQL names it once);
-    /// - **per-field class/storage** — a shared alias whose class differs
-    ///   between layers is head-indexed in one and detail-only in the other:
-    ///   same SQL, silently different meaning.
+    ///   spine table in every layer (the compiled SQL names it once).
+    ///
+    /// A field's class is NOT checked: it is a pure function of datatype and the
+    /// layers share one graph, so it cannot differ between them.
     ///
     /// Layers need not carry the same *set* of models: an overlay may carry a
     /// subset (typically it carries only what was edited). Models absent from a
@@ -914,18 +914,11 @@ fn check_composable(base: &Layer, layer: &Layer) -> Result<(), ReadError> {
                 model.spine_table.clone(),
             );
         }
-        for (alias, field) in &model.fields {
-            let Some(base_field) = base_model.fields.get(alias) else {
-                continue;
-            };
-            if base_field.class != field.class || base_field.storage != field.storage {
-                return incompatible(
-                    &format!("field class/storage for '{alias}'"),
-                    format!("{}/{}", base_field.class, base_field.storage),
-                    format!("{}/{}", field.class, field.storage),
-                );
-            }
-        }
+        // No per-field class/storage check: a field's class is a pure function
+        // of its datatype (via `datatype_index_spec`), and composed layers query
+        // against ONE shared graph, so two layers cannot derive different classes
+        // for the same field. The old check compared a materialized map that no
+        // longer exists — the map was the thing that could drift, not the graph.
     }
     Ok(())
 }

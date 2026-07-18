@@ -3,7 +3,7 @@
 //! interning, spine/concept_tags/vocab/chunk summary/fragment_dir
 //! population, rollups, indexes and VACUUM.
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::HashMap;
 
 use alizarin_core::skos::{SkosCollection, SkosConcept};
 use alizarin_core::{
@@ -14,8 +14,7 @@ use rusqlite::{Connection, Transaction};
 
 use crate::chunks::ChunkSink;
 use crate::closure::Closure;
-use crate::{EmitError, FieldClassError};
-use ros_madair_format::FieldEntry;
+use crate::EmitError;
 
 // ---------------------------------------------------------------------------
 // Dictionary interning (dictionary.bin minus the parser — P0-corollary)
@@ -92,10 +91,6 @@ fn preintern_concepts_dfs(
     });
 }
 
-/// Pre-intern concepts in closure DFS order BEFORE anything else is
-/// interned, so concept term_ids are dense, contiguous per subtree
-/// (P18-corollary: interning order is locality order). Traversal
-/// mirrors build_closure.
 /// One row of the head's `vocab` table: a concept's DFS interval plus its
 /// display label (A2). The label makes concept display a self-contained SQL
 /// join instead of a `closure.json` sidecar lookup.
@@ -106,6 +101,10 @@ pub(crate) struct VocabRow {
     pub label: String,
 }
 
+/// Pre-intern concepts in closure DFS order BEFORE anything else is
+/// interned, so concept term_ids are dense, contiguous per subtree
+/// (P18-corollary: interning order is locality order). Traversal
+/// mirrors build_closure.
 pub(crate) fn preintern_concepts(
     interner: &mut Interner,
     collections: &[SkosCollection],
@@ -199,92 +198,6 @@ pub(crate) fn create_schema(conn: &Connection) -> Result<(), EmitError> {
              max_target INTEGER NOT NULL, n INTEGER NOT NULL);",
     )?;
     Ok(())
-}
-
-/// Field plan: datatype inference proposes, the schema declaration
-/// disposes (M1 item 3). Inference: concepts and links are head-indexed;
-/// everything else (strings, numbers, dates, geo, …) is detail-only and
-/// lives in the body chunks. A declared class overrides inference:
-///   "detail-only" — the node is NOT head-indexed (its node id goes into
-///     the returned set, gating concept_tags / chunk summary population;
-///     rollups follow automatically since they are computed FROM
-///     concept_tags);
-///   "filterable" — legal only on concept and resource-link datatypes;
-///     anything else would require text in the head, so it is a typed
-///     error (`FieldClassError::NotFilterable`).
-/// Aliases seen in `declared` are recorded in `matched` so the caller
-/// can reject declarations that touch no node in any model.
-pub(crate) fn field_plan(
-    graph: &StaticGraph,
-    declared: &BTreeMap<String, String>,
-    matched: &mut std::collections::BTreeSet<String>,
-    registry: &ExtensionTypeRegistry,
-) -> Result<(BTreeMap<String, FieldEntry>, HashSet<String>), EmitError> {
-    let mut fields: BTreeMap<String, FieldEntry> = BTreeMap::new();
-    let mut detail_only: HashSet<String> = HashSet::new();
-    for node in graph.nodes_slice() {
-        let Some(alias) = node.alias.clone() else {
-            continue;
-        };
-        if node.nodegroup_id.is_none() {
-            continue;
-        }
-        let dt = node.datatype.as_str();
-        // Datatype inference now routes through the core index-keys seam:
-        // the registry (with the CLM reference handler registered) decides
-        // an extension datatype's class; core's built-in match covers only
-        // concept/link. The tile value is irrelevant to the *class*, so a
-        // null value suffices here (keys are extracted per-tile in
-        // populate_model).
-        let cfg = node_config_value(&node.config);
-        let index_class =
-            datatype_index_spec(dt, &serde_json::Value::Null, cfg.as_ref(), Some(registry)).class;
-        let (storage, class) = match declared.get(&alias).map(String::as_str) {
-            Some("filterable") => {
-                matched.insert(alias.clone());
-                match index_class {
-                    IndexClass::ConceptHierarchical { .. } => ("concept", "filterable"),
-                    // Coarse remains the only head link storage (P1);
-                    // the declaration is recorded for the M2 compiler.
-                    IndexClass::Link => ("link-coarse", "filterable"),
-                    IndexClass::DetailOnly => {
-                        return Err(Box::new(FieldClassError::NotFilterable {
-                            alias,
-                            datatype: dt.to_string(),
-                        }));
-                    }
-                }
-            }
-            Some("detail-only") => {
-                matched.insert(alias.clone());
-                detail_only.insert(node.nodeid.clone());
-                ("detail-only", "detail-only")
-            }
-            Some(other) => {
-                // emit_with_options validates upfront; kept as a typed
-                // error rather than an unreachable! for defence.
-                return Err(Box::new(FieldClassError::UnknownClass {
-                    alias,
-                    class: other.to_string(),
-                }));
-            }
-            None => match index_class {
-                IndexClass::ConceptHierarchical { .. } => ("concept", "filterable"),
-                IndexClass::Link => ("link-coarse", "coarse"),
-                IndexClass::DetailOnly => ("detail-only", "detail-only"),
-            },
-        };
-        fields.insert(
-            alias,
-            FieldEntry {
-                node_id: node.nodeid.clone(),
-                datatype: dt.to_string(),
-                storage: storage.to_string(),
-                class: class.to_string(),
-            },
-        );
-    }
-    Ok((fields, detail_only))
 }
 
 // ---------------------------------------------------------------------------
@@ -397,7 +310,6 @@ pub(crate) fn process_resource(
     ctx: &ModelCtx,
     mut resource: StaticResource,
     closure: &Closure,
-    detail_only: &HashSet<String>,
     interner: &mut Interner,
     sink: &mut ChunkSink,
     next_rid: &mut i64,
@@ -431,14 +343,6 @@ pub(crate) fn process_resource(
                 .get(node_id.as_str())
                 .copied()
                 .unwrap_or("");
-            if detail_only.contains(node_id.as_str()) {
-                // Schema-declared detail-only (M1 item 3): NOT head-indexed
-                // regardless of datatype — no concept_tags rows, no chunk
-                // concept/link summaries (and hence no rollups: those are
-                // computed from concept_tags in finalize). The values still
-                // live in the tile chunks.
-                continue;
-            }
             if value.is_null() {
                 continue;
             }
