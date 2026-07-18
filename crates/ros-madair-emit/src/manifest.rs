@@ -7,7 +7,7 @@
 //! This module is the writer-side half only.
 
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use ros_madair_format::{ArtifactEntry, Manifest};
 use sha2::{Digest, Sha256};
@@ -15,33 +15,32 @@ use sha2::{Digest, Sha256};
 use crate::chunks::hex;
 use crate::EmitError;
 
-/// Hash every data artifact under `out` (head.sqlite, chunks/*), in a fixed
-/// order. The manifest is hashed separately — see [`manifest_digest_bytes`] —
-/// because it cannot be written until the id it carries has been computed.
+/// Hash the head — and ONLY the head (A6).
 ///
-/// `closure.json` is no longer emitted (A2), so it is no longer hashed; the
-/// concept data it carried lives in the head (`vocab.label` + DFS intervals).
+/// The chunks are content-addressed (`chunks/<sha256>.msgpack`) and every one of
+/// those hashes is stored INSIDE `head.sqlite` (the `chunks` table). So hashing
+/// the head already covers the whole chunk set transitively: change a chunk's
+/// bytes → its content hash changes → the head's `chunks` table changes → the
+/// head's own hash changes → the snapshot id moves. Listing 173 per-chunk
+/// `{path, bytes, sha256}` entries in the manifest restated the content-addressing
+/// and was the bulk of a 42 KB manifest — for the id AND for sync, since a client
+/// fetches `head.sqlite` first and reads the chunk set from it.
+///
+/// `head.sqlite` itself is genuinely worth an entry: it is NOT content-addressed
+/// by name, so its hash is the only external check on its bytes. (`closure.json`,
+/// A2, is no longer emitted, so no longer hashed either.)
 pub(crate) fn hash_artifacts(out: &Path) -> Result<Vec<ArtifactEntry>, EmitError> {
-    let mut artifacts = Vec::new();
-    let mut paths: Vec<PathBuf> = vec![out.join("head.sqlite")];
-    let mut chunk_paths: Vec<PathBuf> = fs::read_dir(out.join("chunks"))?
-        .filter_map(|e| e.ok().map(|e| e.path()))
-        .collect();
-    chunk_paths.sort();
-    paths.extend(chunk_paths);
-    for path in &paths {
-        let bytes = fs::read(path)?;
-        artifacts.push(ArtifactEntry {
-            path: path
-                .strip_prefix(out)
-                .unwrap_or(path)
-                .to_string_lossy()
-                .to_string(),
-            bytes: bytes.len() as u64,
-            sha256: hex(&Sha256::digest(&bytes)),
-        });
-    }
-    Ok(artifacts)
+    let head = out.join("head.sqlite");
+    let bytes = fs::read(&head)?;
+    Ok(vec![ArtifactEntry {
+        path: head
+            .strip_prefix(out)
+            .unwrap_or(&head)
+            .to_string_lossy()
+            .to_string(),
+        bytes: bytes.len() as u64,
+        sha256: hex(&Sha256::digest(&bytes)),
+    }])
 }
 
 /// The canonical bytes of a manifest **for hashing**: compact JSON with
@@ -64,11 +63,10 @@ pub(crate) fn manifest_digest_bytes(manifest: &Manifest) -> Result<Vec<u8>, Emit
 ///
 /// The manifest used to be left out of the digest, purely because it is written
 /// last. That made `snapshot_id` a hash of the *data* and not of the
-/// *deployment*: the handler set (I6), the tier definition and the declared
-/// field classes could all change while the id stood still, so two deployments
-/// that answer queries differently could claim the same identity — and drift
-/// detection built on the id would see nothing. The manifest is a first-class
-/// artifact and is hashed like one.
+/// *deployment*: the handler set (I6) and the tier definition could change while
+/// the id stood still, so two deployments that answer queries differently could
+/// claim the same identity — and drift detection built on the id would see
+/// nothing. The manifest is a first-class artifact and is hashed like one.
 pub(crate) fn snapshot_id(artifacts: &[ArtifactEntry], manifest_bytes: &[u8]) -> String {
     let mut hasher = Sha256::new();
     for entry in artifacts {
