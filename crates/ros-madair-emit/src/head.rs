@@ -7,7 +7,8 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 
 use alizarin_core::skos::{SkosCollection, SkosConcept};
 use alizarin_core::{
-    datatype_index_spec, ExtensionTypeRegistry, IndexClass, StaticGraph, StaticResource,
+    datatype_index_spec, ExtensionTypeRegistry, IndexClass, IndexedGraph, StaticGraph,
+    StaticResource, StaticTile,
 };
 use rusqlite::{Connection, Transaction};
 
@@ -281,6 +282,13 @@ pub(crate) fn create_spine_table(conn: &Connection, spine_table: &str) -> Result
 pub(crate) struct ModelCtx<'g> {
     node_datatype: HashMap<&'g str, &'g str>,
     node_config: HashMap<&'g str, serde_json::Value>,
+    /// Built once per model so the per-resource spine display_name can be the
+    /// EVALUATED descriptor template, not the raw literal. Cloning the graph
+    /// once per model is a fixed setup cost; it does not touch the per-resource
+    /// memory bound (only tiles stream). (A1: `spine.display_name` used to emit
+    /// the unrendered template, e.g. `'<Headword>'`, making the resource→
+    /// descriptor index structurally present but useless for display.)
+    indexed: IndexedGraph,
 }
 
 impl<'g> ModelCtx<'g> {
@@ -300,6 +308,39 @@ impl<'g> ModelCtx<'g> {
         ModelCtx {
             node_datatype,
             node_config,
+            indexed: IndexedGraph::new(graph.clone()),
+        }
+    }
+
+    /// Evaluate the resource's display name: the descriptor template rendered
+    /// against its tiles (A1). The registry is passed so a descriptor over an
+    /// extension datatype (e.g. `reference`) resolves rather than blanking.
+    ///
+    /// **Fall back to the raw `name` unless the template FULLY resolved.** A
+    /// residual `<placeholder>` means the template referenced a node the resource
+    /// does not carry, or one whose name does not match (Arches matches
+    /// placeholders on node *name*, case-sensitively — a `<title>` template will
+    /// not resolve against a node named `Title`). An unresolved `<title>` is a
+    /// strictly worse display name than whatever `name` the export already
+    /// carried, so it must never win. (When the export's `name` is *itself* the
+    /// unrendered template — the case A1 targets — both are placeholders and the
+    /// result is unchanged, i.e. no regression; the real remedy there is a
+    /// descriptor whose placeholders match, which is a data concern.)
+    fn display_name(
+        &self,
+        tiles: &[StaticTile],
+        raw_name: &str,
+        registry: &ExtensionTypeRegistry,
+    ) -> String {
+        let evaluated = self.indexed.build_descriptors_with_context(
+            tiles,
+            &mut Vec::new(),
+            None,
+            Some(registry),
+        );
+        match evaluated.name {
+            Some(n) if !n.is_empty() && !n.contains('<') => n,
+            _ => raw_name.to_string(),
         }
     }
 }
@@ -410,7 +451,12 @@ pub(crate) fn process_resource(
         }
     }
 
-    stmt_spine.execute((rid, term_id, &resource.resourceinstance.name))?;
+    // A1: the spine display_name is the EVALUATED descriptor (`abadh`), not the
+    // raw template literal (`<Headword>`). `tiles` is still resident here (it
+    // moves into the sink below), so this reads the same tiles that were just
+    // indexed — no second pass, no extra memory.
+    let display_name = ctx.display_name(&tiles, &resource.resourceinstance.name, registry);
+    stmt_spine.execute((rid, term_id, &display_name))?;
     // Statements borrow tx; drop them before feeding the sink (the sink
     // does not touch the connection, but keep the borrow scope tight).
     drop(stmt_spine);
