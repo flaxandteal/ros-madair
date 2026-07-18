@@ -15,13 +15,15 @@ use sha2::{Digest, Sha256};
 use crate::chunks::hex;
 use crate::EmitError;
 
-/// Hash every data artifact under `out` (head.sqlite, closure.json, chunks/*),
-/// in a fixed order. The manifest is hashed separately — see
-/// [`manifest_digest_bytes`] — because it cannot be written until the id it
-/// carries has been computed.
+/// Hash every data artifact under `out` (head.sqlite, chunks/*), in a fixed
+/// order. The manifest is hashed separately — see [`manifest_digest_bytes`] —
+/// because it cannot be written until the id it carries has been computed.
+///
+/// `closure.json` is no longer emitted (A2), so it is no longer hashed; the
+/// concept data it carried lives in the head (`vocab.label` + DFS intervals).
 pub(crate) fn hash_artifacts(out: &Path) -> Result<Vec<ArtifactEntry>, EmitError> {
     let mut artifacts = Vec::new();
-    let mut paths: Vec<PathBuf> = vec![out.join("head.sqlite"), out.join("closure.json")];
+    let mut paths: Vec<PathBuf> = vec![out.join("head.sqlite")];
     let mut chunk_paths: Vec<PathBuf> = fs::read_dir(out.join("chunks"))?
         .filter_map(|e| e.ok().map(|e| e.path()))
         .collect();

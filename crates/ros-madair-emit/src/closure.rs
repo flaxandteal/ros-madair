@@ -30,7 +30,7 @@ pub struct ClosureEntry {
     pub ancestors: Vec<String>,
 }
 
-fn label_of(concept: &SkosConcept) -> String {
+pub(crate) fn label_of(concept: &SkosConcept) -> String {
     concept
         .pref_labels
         .get("en")

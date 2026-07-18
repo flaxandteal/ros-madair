@@ -56,7 +56,8 @@ impl Interner {
 fn preintern_concepts_dfs(
     interner: &mut Interner,
     concept: &SkosConcept,
-    rows: &mut Vec<(i64, i64, i64)>,
+    closure: &Closure,
+    rows: &mut Vec<VocabRow>,
 ) {
     // Poly-hierarchy / repeated subtrees: first DFS occurrence wins;
     // a repeat visit would fracture the interval, so skip it.
@@ -65,23 +66,52 @@ fn preintern_concepts_dfs(
     }
     let enter = interner.intern(&concept.id);
     for child in concept.children.iter().flatten() {
-        preintern_concepts_dfs(interner, child, rows);
+        preintern_concepts_dfs(interner, child, closure, rows);
     }
     // Only concept ids have been interned so far, so the current max
     // term_id is the last id assigned within this subtree.
     let leave = interner.len() as i64;
-    rows.push((enter, enter, leave));
+    // A2: carry the concept's label so display resolves as a SQL join
+    // (`concept_tags → vocab.label`), self-contained in the head. Take the
+    // label from the CLOSURE, not `label_of(concept)` on this node: a concept
+    // can appear twice in the tree — a shallow membership ref with no
+    // pref_labels, and its full definition — and DFS-first here would pick the
+    // shallow one (a UUID). `build_closure` already resolved the real label
+    // (last-write-wins over both occurrences), so this makes vocab.label
+    // byte-identical to what closure.json carried.
+    let label = closure
+        .concepts
+        .get(&concept.id)
+        .map(|e| e.label.clone())
+        .unwrap_or_else(|| crate::closure::label_of(concept));
+    rows.push(VocabRow {
+        concept: enter,
+        dfs_enter: enter,
+        dfs_leave: leave,
+        label,
+    });
 }
 
 /// Pre-intern concepts in closure DFS order BEFORE anything else is
 /// interned, so concept term_ids are dense, contiguous per subtree
 /// (P18-corollary: interning order is locality order). Traversal
 /// mirrors build_closure.
+/// One row of the head's `vocab` table: a concept's DFS interval plus its
+/// display label (A2). The label makes concept display a self-contained SQL
+/// join instead of a `closure.json` sidecar lookup.
+pub(crate) struct VocabRow {
+    pub concept: i64,
+    pub dfs_enter: i64,
+    pub dfs_leave: i64,
+    pub label: String,
+}
+
 pub(crate) fn preintern_concepts(
     interner: &mut Interner,
     collections: &[SkosCollection],
-) -> Vec<(i64, i64, i64)> {
-    let mut vocab_rows: Vec<(i64, i64, i64)> = Vec::new();
+    closure: &Closure,
+) -> Vec<VocabRow> {
+    let mut vocab_rows: Vec<VocabRow> = Vec::new();
     for coll in collections {
         // The concept maps are HashMaps — sort top-level by id so term
         // ids (and hence the snapshot id) are deterministic (P16).
@@ -93,7 +123,7 @@ pub(crate) fn preintern_concepts(
         };
         top.sort_by(|a, b| a.id.cmp(&b.id));
         for concept in top {
-            preintern_concepts_dfs(interner, concept, &mut vocab_rows);
+            preintern_concepts_dfs(interner, concept, closure, &mut vocab_rows);
         }
     }
     vocab_rows
@@ -133,8 +163,12 @@ pub(crate) fn create_schema(conn: &Connection) -> Result<(), EmitError> {
          -- max descendant term_id. Hierarchy membership is
          --   concept BETWEEN dfs_enter AND dfs_leave
          -- against the exact concept_tags table — no expanded table.
+         -- `label` (A2): the concept's display text, so concept display is a
+         -- self-contained join (concept_tags → vocab.label) — no closure.json
+         -- sidecar. A bounded controlled vocabulary, like dict.term already is.
          CREATE TABLE vocab (concept INTEGER PRIMARY KEY,
-             dfs_enter INTEGER NOT NULL, dfs_leave INTEGER NOT NULL);
+             dfs_enter INTEGER NOT NULL, dfs_leave INTEGER NOT NULL,
+             label TEXT NOT NULL);
          CREATE TABLE concept_tags (rid INTEGER NOT NULL,
              node INTEGER NOT NULL, concept INTEGER NOT NULL,
              UNIQUE(rid, node, concept));
@@ -470,7 +504,7 @@ pub(crate) fn process_resource(
 pub(crate) fn insert_bulk(
     conn: &mut Connection,
     interner: &Interner,
-    vocab_rows: &[(i64, i64, i64)],
+    vocab_rows: &[VocabRow],
     sink: &ChunkSink,
 ) -> Result<(), EmitError> {
     let tx = conn.transaction()?;
@@ -482,10 +516,10 @@ pub(crate) fn insert_bulk(
             stmt.execute((id, term))?;
         }
         let mut stmt = tx.prepare_cached(
-            "INSERT INTO vocab (concept, dfs_enter, dfs_leave) VALUES (?1,?2,?3)",
+            "INSERT INTO vocab (concept, dfs_enter, dfs_leave, label) VALUES (?1,?2,?3,?4)",
         )?;
         for row in vocab_rows {
-            stmt.execute(*row)?;
+            stmt.execute((row.concept, row.dfs_enter, row.dfs_leave, &row.label))?;
         }
         let mut stmt = tx.prepare_cached("INSERT INTO chunks (chunk, hash) VALUES (?1, ?2)")?;
         for (chunk, hash) in &sink.chunk_rows {

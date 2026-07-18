@@ -17,8 +17,11 @@
 //!                       chunk_summary (summary.bin-as-data, P1/P2/P15),
 //!                       rollups
 //!   chunks/<hash>.msgpack — content-hashed per-nodegroup tile chunks
-//!   closure.json      — concept closure (first-class artifact)
 //!   manifest.json     — the layout/compatibility contract
+//!
+//! (A2: `closure.json` is no longer emitted — concept labels live in
+//! `vocab.label`, hierarchy in `vocab`'s DFS intervals, the value→concept map
+//! only ever mattered at emit. The head is self-contained for concept display.)
 //!
 //! NO TEXT IN THE HEAD: strings/numbers/dates are detail-only (live in
 //! chunks; text search is the Pagefind sidecar). The head indexes
@@ -215,7 +218,7 @@ pub fn emit_with_options(
     head::create_schema(&conn)?;
 
     let mut interner = head::Interner::default();
-    let vocab_rows = head::preintern_concepts(&mut interner, &collections);
+    let vocab_rows = head::preintern_concepts(&mut interner, &collections, &closure);
     let mut sink = chunks::ChunkSink::new(out.join("chunks"));
     let mut next_rid: i64 = 1;
     let mut total_resources = 0usize;
@@ -321,9 +324,13 @@ pub fn emit_with_options(
     head::finalize(&conn)?;
     drop(conn);
 
-    // Closure artifact
-    let closure_bytes = serde_json::to_vec_pretty(&closure)?;
-    fs::write(out.join("closure.json"), &closure_bytes)?;
+    // A2: `closure.json` is no longer shipped. It carried concept labels (now in
+    // `vocab.label`), the DFS ancestors (derivable from `vocab`'s intervals), and
+    // the value→concept map (only ever needed at emit, to resolve tile value-ids
+    // into `concept_tags` — see `process_resource`). All of that is now either in
+    // the head or an emit-only intermediate, so the head is self-contained for
+    // concept display: `concept_tags → vocab.label`. `build_closure` still runs
+    // above; its output just stays in memory.
 
     // Manifest: hash every artifact, then hash the manifest itself, and derive
     // the snapshot id from the whole set. The id is left EMPTY while the
