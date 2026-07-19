@@ -181,6 +181,38 @@ pub fn emit_with_options(
         .map(|t| t.exclude_nodegroups.iter().map(String::as_str).collect())
         .unwrap_or_default();
 
+    // A9 — PRE-INTERN RESOURCE IDS IN STREAM ORDER, before any tile is
+    // processed. A link target is a resource id; interning it inline (at first
+    // encounter — as a target, or as its own resource, whichever came first)
+    // scattered target ids across the id space with no relation to resource
+    // identity. So `chunk_link_summary` target ranges spanned ~1/3 of the id
+    // space (measured: median 33%, mean 38% on wiktionary), and coarse link
+    // routing was 16–31× weaker than designed — silently, and worse with scale.
+    //
+    // Interning every resource id up front, in the SAME order the streaming pass
+    // below will visit them, makes a target's id its stream position. A chunk's
+    // link tiles come from a contiguous run of source resources, so their target
+    // ranges then tighten to the extent the source data has locality. This is the
+    // P18-corollary ("interning order is locality order") applied to resources —
+    // exactly as it already is to concepts (DFS order) above; only concepts got
+    // it before. The same sorted walk, so the pre-intern order matches the
+    // stream order exactly (determinism, and target id == spine position).
+    //
+    // (Cost: a second parse of the business data to read ids. Memory stays
+    // bounded — one file at a time, dropped. An id-only parse would avoid the
+    // full re-parse; deferred, correctness first.)
+    let files = input::business_data_files(data_dir)?;
+    for path in &files {
+        let bytes = fs::read(path)?;
+        if let Ok(resources) = parse_business_data_bytes(&bytes) {
+            for r in &resources {
+                if by_graph.contains_key(r.resourceinstance.graph_id.as_str()) {
+                    interner.intern(&r.resourceinstance.resourceinstanceid);
+                }
+            }
+        }
+    }
+
     // STREAMING PASS: one sorted walk over the business-data files. Each
     // file is read, parsed, and its resources are processed one at a time
     // through the head + chunk sink, then dropped. Peak memory is bounded
@@ -188,7 +220,6 @@ pub fn emit_with_options(
     // (the sink already flushes chunks at CHUNK_MAX_TILES), NOT by corpus
     // size. Resource encounter order (sorted files, then in-file order) is
     // deterministic, so the snapshot id is run-stable.
-    let files = input::business_data_files(data_dir)?;
     let tx = conn.transaction()?;
     for path in files {
         let bytes = fs::read(&path)?;
