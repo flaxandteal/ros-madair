@@ -112,6 +112,20 @@ pub enum Expr {
     /// concept id, not a label. Matches on the exact `value_tags` index, so it is
     /// NOT coarse: `qvalue BETWEEN lo AND hi`.
     Range { path: String, lo: i64, hi: i64 },
+    /// Spatial bounding-box OVERLAP predicate on a `SpatialBbox` node (geometry,
+    /// A8.2). The four fields are the query box's corners in the same lng/lat
+    /// space the emitter stored. Selects resources whose geometry's bbox overlaps
+    /// the query box — a strict SUPERSET of true `sfIntersects`, so it always
+    /// compiles `coarse: true`: the head answers the candidate set (no false
+    /// negatives) and the client verifies exact intersection on hydrated tiles,
+    /// exactly the residual contract `has_link` already uses.
+    Bbox {
+        path: String,
+        min_lng: f64,
+        min_lat: f64,
+        max_lng: f64,
+        max_lat: f64,
+    },
 }
 
 /// Operators for [`Expr::Concept`].
@@ -245,6 +259,11 @@ impl std::error::Error for QueryError {}
 pub enum Param {
     Text(String),
     Int(i64),
+    /// A raw f64 corner for a spatial [`Expr::Bbox`] filter (A8.2). Kept distinct
+    /// from `Int` so the binder passes it to SQLite as REAL, matching the
+    /// `geo_bbox` column type — comparing a REAL column against an integer-bound
+    /// value would defeat the covering index.
+    Real(f64),
 }
 
 /// One parameterized SQL statement (per measure).
@@ -445,6 +464,7 @@ pub fn leaf_node_id(
             Some(node.nodeid.clone())
         }
         Expr::Range { path, .. } => Some(resolver.resolve(path)?.nodeid.clone()),
+        Expr::Bbox { path, .. } => Some(resolver.resolve(path)?.nodeid.clone()),
         Expr::All(_) | Expr::Any(_) | Expr::Not(_) => None,
     })
 }
@@ -708,6 +728,21 @@ fn is_ordered_class(node: &StaticNode, registry: Option<&ExtensionTypeRegistry>)
     )
 }
 
+/// True iff the node is head-indexed as a spatial bbox (A8.2) — the class that
+/// answers a `Bbox` predicate via `geo_bbox`.
+fn is_spatial_class(node: &StaticNode, registry: Option<&ExtensionTypeRegistry>) -> bool {
+    matches!(
+        datatype_index_spec(
+            &node.datatype,
+            &serde_json::Value::Null,
+            node_config_value(node).as_ref(),
+            registry,
+        )
+        .class,
+        IndexClass::SpatialBbox
+    )
+}
+
 // ---------------------------------------------------------------------------
 // SQL generation (M2.4, parameterized only)
 // ---------------------------------------------------------------------------
@@ -737,6 +772,13 @@ impl ParamBuilder {
     /// Add an integer parameter, returning its `?N` placeholder.
     fn int(&mut self, value: i64) -> String {
         self.params.push(Param::Int(value));
+        format!("?{}", self.params.len())
+    }
+
+    /// Add a real (f64) parameter, returning its `?N` placeholder (A8.2 bbox
+    /// corners).
+    fn real(&mut self, value: f64) -> String {
+        self.params.push(Param::Real(value));
         format!("?{}", self.params.len())
     }
 }
@@ -1049,13 +1091,51 @@ fn compile_expr(
                  AND vt.qvalue BETWEEN {lo_p} AND {hi_p})"
             ))
         }
+        Expr::Bbox {
+            path,
+            min_lng,
+            min_lat,
+            max_lng,
+            max_lat,
+        } => {
+            let node = resolver.resolve(path)?;
+            if !is_spatial_class(node, registry) {
+                return Err(QueryError::NotHeadIndexed {
+                    path: path.clone(),
+                    datatype: node.datatype.clone(),
+                });
+            }
+            // Coarse: bbox-overlap is a strict SUPERSET of true intersection, so
+            // this admits false positives (a geometry whose box overlaps the query
+            // box but whose actual shape does not), never false negatives. Mark
+            // coarse and let the caller verify exact intersection on hydrated
+            // tiles — the same residual contract has_link uses.
+            *coarse = true;
+            let node_p = params.text(&node.nodeid);
+            // Two boxes overlap iff they overlap on BOTH axes: the stored box's
+            // max corner is not left/below the query's min, and its min corner is
+            // not right/above the query's max.
+            let q_min_lng = params.real(*min_lng);
+            let q_min_lat = params.real(*min_lat);
+            let q_max_lng = params.real(*max_lng);
+            let q_max_lat = params.real(*max_lat);
+            Ok(format!(
+                "EXISTS (SELECT 1 FROM {schema}geo_bbox g \
+                 WHERE g.rid = s.rid \
+                 AND g.node = (SELECT term_id FROM {schema}dict WHERE term = {node_p}) \
+                 AND g.max_lng >= {q_min_lng} AND g.min_lng <= {q_max_lng} \
+                 AND g.max_lat >= {q_min_lat} AND g.min_lat <= {q_max_lat})"
+            ))
+        }
     }
 }
 
 /// Find the path of the first coarse (`has_link`) predicate in a subtree.
 fn first_coarse_path(expr: &Expr) -> Option<&str> {
     match expr {
-        Expr::HasLink { path, .. } => Some(path),
+        // has_link (chunk summary) and bbox (superset of intersection) both
+        // over-approximate, so negating either would drop matching records.
+        Expr::HasLink { path, .. } | Expr::Bbox { path, .. } => Some(path),
         Expr::All(exprs) | Expr::Any(exprs) => exprs.iter().find_map(first_coarse_path),
         Expr::Not(inner) => first_coarse_path(inner),
         // Concept and Range are EXACT (concept_tags / value_tags) — not coarse,

@@ -17,6 +17,9 @@ path = "src/main.rs"
 
 [dependencies]
 alizarin-core.workspace = true
+# A8.2: geometry → bounding box at emit. Native-only — the query side needs no
+# geojson (it compares f64 corners), so this never reaches the WASM query path.
+geojson = "0.24"
 ros-madair-query = { path = "../ros-madair-query" }
 ros-madair-handlers = { path = "../ros-madair-handlers" }
 ros-madair-format = { path = "../ros-madair-format" }

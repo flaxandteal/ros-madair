@@ -48,6 +48,7 @@ use rusqlite::Connection;
 mod chunks;
 mod closure;
 mod composability;
+mod geo;
 mod head;
 mod input;
 mod manifest;

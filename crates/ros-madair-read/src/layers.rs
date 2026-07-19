@@ -839,6 +839,7 @@ fn bind(params: &[Param]) -> Vec<SqlValue> {
         .map(|p| match p {
             Param::Text(s) => SqlValue::Text(s.clone()),
             Param::Int(i) => SqlValue::Integer(*i),
+            Param::Real(f) => SqlValue::Real(*f),
         })
         .collect()
 }

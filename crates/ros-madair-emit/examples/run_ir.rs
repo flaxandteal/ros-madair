@@ -94,6 +94,7 @@ fn run(
             .map(|p| match p {
                 Param::Text(s) => SqlValue::Text(s.clone()),
                 Param::Int(i) => SqlValue::Integer(*i),
+                Param::Real(f) => SqlValue::Real(*f),
             })
             .collect();
         let started = Instant::now();

@@ -27,6 +27,10 @@ pub(crate) struct ChunkSink {
     pub(crate) pending_links: BTreeMap<String, Vec<(i64, i64)>>,
     /// nodegroup uuid -> (node int, quantized value) pairs for pending tiles (A8)
     pub(crate) pending_values: BTreeMap<String, Vec<(i64, i64)>>,
+    /// nodegroup uuid -> (node int, [min_lng, min_lat, max_lng, max_lat]) per-
+    /// resource bboxes for pending tiles (A8.2). Raw f64, not quantized: the
+    /// head stores the coarse box; the client verifies exact intersection.
+    pub(crate) pending_geo: BTreeMap<String, Vec<(i64, [f64; 4])>>,
     /// nodegroup uuid -> (rid, tile count) memberships for pending tiles
     pub(crate) pending_members: BTreeMap<String, Vec<(i64, usize)>>,
     /// content hash -> chunk id (content-addressed dedupe)
@@ -42,6 +46,11 @@ pub(crate) struct ChunkSink {
     /// (chunk, node, min_qvalue, max_qvalue, n) rows for `chunk_value_summary`
     /// (A8: coarse chunk→ordered-value-range; the native reader uses value_tags)
     pub(crate) value_summary_rows: Vec<(i64, i64, i64, i64, i64)>,
+    /// (chunk, node, min_lng, min_lat, max_lng, max_lat, n) rows for
+    /// `chunk_geo_summary` (A8.2: the union bbox of every resource's bbox in the
+    /// chunk — coarse chunk→region for the browser spatial prune; the native
+    /// reader uses geo_bbox directly)
+    pub(crate) geo_summary_rows: Vec<(i64, i64, f64, f64, f64, f64, i64)>,
     /// (rid, nodegroup int, chunk id, tile count) rows for `fragment_dir`
     pub(crate) fragment_rows: Vec<(i64, i64, i64, i64)>,
 }
@@ -54,12 +63,14 @@ impl ChunkSink {
             pending_concepts: BTreeMap::new(),
             pending_links: BTreeMap::new(),
             pending_values: BTreeMap::new(),
+            pending_geo: BTreeMap::new(),
             pending_members: BTreeMap::new(),
             chunk_by_hash: HashMap::new(),
             chunk_rows: Vec::new(),
             summary_rows: Vec::new(),
             link_summary_rows: Vec::new(),
             value_summary_rows: Vec::new(),
+            geo_summary_rows: Vec::new(),
             fragment_rows: Vec::new(),
         }
     }
@@ -111,6 +122,7 @@ impl ChunkSink {
         let concepts = self.pending_concepts.remove(ng).unwrap_or_default();
         let links = self.pending_links.remove(ng).unwrap_or_default();
         let values = self.pending_values.remove(ng).unwrap_or_default();
+        let geo = self.pending_geo.remove(ng).unwrap_or_default();
         let members = self.pending_members.remove(ng).unwrap_or_default();
         if tiles.is_empty() {
             return Ok(());
@@ -168,6 +180,23 @@ impl ChunkSink {
             }
             for (node, (min_v, max_v, n)) in vagg {
                 self.value_summary_rows.push((id, node, min_v, max_v, n));
+            }
+            // Per-chunk, per geo-node: the UNION bbox over every resource's bbox
+            // in the chunk (A8.2). min corners take the min, max corners the max —
+            // so the chunk box contains every resource box, and a query box that
+            // misses the union misses every resource in it (a safe coarse prune).
+            let mut gagg: BTreeMap<i64, ([f64; 4], i64)> = BTreeMap::new();
+            for (node, b) in &geo {
+                let entry = gagg.entry(*node).or_insert((*b, 0));
+                entry.0[0] = entry.0[0].min(b[0]); // min_lng
+                entry.0[1] = entry.0[1].min(b[1]); // min_lat
+                entry.0[2] = entry.0[2].max(b[2]); // max_lng
+                entry.0[3] = entry.0[3].max(b[3]); // max_lat
+                entry.1 += 1;
+            }
+            for (node, (b, n)) in gagg {
+                self.geo_summary_rows
+                    .push((id, node, b[0], b[1], b[2], b[3], n));
             }
             id
         };

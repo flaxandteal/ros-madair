@@ -136,8 +136,10 @@ pub(crate) fn preintern_concepts(
 /// dispatching on datatype (A8). The `IndexClass::Ordered` class is opaque about
 /// meaning — this is where the datatype decides the encoding.
 ///
-/// A8.1: date/edtf → days-from-civil (`alizarin_core::quantize`). A8.2 adds
-/// geojson → Hilbert. `None` (unparseable) → the value is not head-indexed.
+/// A8.1: date/edtf → days-from-civil (`alizarin_core::quantize`). This is for
+/// SCALAR ordered values only; geometry (A8.2) is NOT quantized to a single key —
+/// it indexes a bounding box (`geo::extract_bbox` → geo_bbox) and never reaches
+/// here. `None` (unparseable) → the value is not head-indexed.
 fn quantize_ordered(datatype: &str, raw: &str) -> Option<i64> {
     match datatype {
         "date" | "edtf" => alizarin_core::quantize::quantize_date(raw),
@@ -193,6 +195,18 @@ pub(crate) fn create_schema(conn: &Connection) -> Result<(), EmitError> {
          CREATE TABLE value_tags (rid INTEGER NOT NULL,
              node INTEGER NOT NULL, qvalue INTEGER NOT NULL,
              UNIQUE(rid, node, qvalue));
+         -- A8.2: spatial exact index — one axis-aligned bounding box per
+         -- (rid, node) geometry. Corners are RAW f64 (REAL), NOT quantized: a
+         -- bbox-overlap filter is already a coarse SUPERSET of true intersection
+         -- (a candidate set with no false negatives), so there is nothing to gain
+         -- from a lossy space-filling-curve key here — the client verifies exact
+         -- intersection on hydration. A bbox is deliberately NOT a centroid: a
+         -- polygon whose centroid sits outside a query box still overlaps it, and
+         -- a centroid index would wrongly drop it.
+         CREATE TABLE geo_bbox (rid INTEGER NOT NULL, node INTEGER NOT NULL,
+             min_lng REAL NOT NULL, min_lat REAL NOT NULL,
+             max_lng REAL NOT NULL, max_lat REAL NOT NULL,
+             UNIQUE(rid, node, min_lng, min_lat, max_lng, max_lat));
          -- fragment_dir doubles as the layer-composition PRESENCE index: a
          -- (rid, nodegroup) row means this layer carries this nodegroup for
          -- this resource. Layer precedence is per-NODEGROUP, not per-node,
@@ -223,7 +237,14 @@ pub(crate) fn create_schema(conn: &Connection) -> Result<(), EmitError> {
          -- for a range query (the native reader uses value_tags directly).
          CREATE TABLE chunk_value_summary (chunk INTEGER NOT NULL,
              node INTEGER NOT NULL, min_qvalue INTEGER NOT NULL,
-             max_qvalue INTEGER NOT NULL, n INTEGER NOT NULL);",
+             max_qvalue INTEGER NOT NULL, n INTEGER NOT NULL);
+         -- A8.2: coarse chunk->region — the union bbox of every resource bbox in
+         -- the chunk, so a browser client can prune which chunks to fetch for a
+         -- spatial query (the native reader uses geo_bbox directly). Same coarse-
+         -- prune role chunk_summary/chunk_value_summary play for concepts/scalars.
+         CREATE TABLE chunk_geo_summary (chunk INTEGER NOT NULL,
+             node INTEGER NOT NULL, min_lng REAL NOT NULL, min_lat REAL NOT NULL,
+             max_lng REAL NOT NULL, max_lat REAL NOT NULL, n INTEGER NOT NULL);",
     )?;
     Ok(())
 }
@@ -351,6 +372,8 @@ pub(crate) fn process_resource(
     ))?;
     let mut stmt_ct = tx.prepare_cached("INSERT OR IGNORE INTO concept_tags VALUES (?1,?2,?3)")?;
     let mut stmt_vt = tx.prepare_cached("INSERT OR IGNORE INTO value_tags VALUES (?1,?2,?3)")?;
+    let mut stmt_geo =
+        tx.prepare_cached("INSERT OR IGNORE INTO geo_bbox VALUES (?1,?2,?3,?4,?5,?6)")?;
 
     let res_id = resource.resourceinstance.resourceinstanceid.clone();
     let rid = *next_rid;
@@ -429,6 +452,25 @@ pub(crate) fn process_resource(
                             .push((node_int, qvalue));
                     }
                 }
+                IndexClass::SpatialBbox => {
+                    // A8.2: extract the geometry's bounding box and write the
+                    // exact row (geo_bbox) + feed the per-chunk union bbox
+                    // (chunk_geo_summary). The key is the raw serialized GeoJSON;
+                    // unparseable/empty geometry is simply not indexed (it still
+                    // lives in the chunk, like any detail-only value).
+                    let node_int = interner.intern(node_id);
+                    for raw in spec.keys {
+                        let Some((min_lng, min_lat, max_lng, max_lat)) = crate::geo::extract_bbox(&raw)
+                        else {
+                            continue;
+                        };
+                        stmt_geo.execute((rid, node_int, min_lng, min_lat, max_lng, max_lat))?;
+                        sink.pending_geo
+                            .entry(tile.nodegroup_id.clone())
+                            .or_default()
+                            .push((node_int, [min_lng, min_lat, max_lng, max_lat]));
+                    }
+                }
                 // Strings/numbers/etc.: detail-only — NOT head-indexed (they
                 // live in the chunks).
                 IndexClass::DetailOnly => {}
@@ -447,6 +489,7 @@ pub(crate) fn process_resource(
     drop(stmt_spine);
     drop(stmt_ct);
     drop(stmt_vt);
+    drop(stmt_geo);
     sink.add_resource_tiles(rid, tiles, interner)?;
     Ok(())
 }
@@ -491,6 +534,11 @@ pub(crate) fn insert_bulk(
         for row in &sink.value_summary_rows {
             stmt.execute(*row)?;
         }
+        let mut stmt =
+            tx.prepare_cached("INSERT INTO chunk_geo_summary VALUES (?1,?2,?3,?4,?5,?6,?7)")?;
+        for row in &sink.geo_summary_rows {
+            stmt.execute(*row)?;
+        }
         let mut stmt = tx.prepare_cached("INSERT INTO fragment_dir VALUES (?1,?2,?3,?4)")?;
         for row in &sink.fragment_rows {
             stmt.execute(*row)?;
@@ -527,12 +575,21 @@ pub(crate) fn finalize(conn: &Connection) -> Result<(), EmitError> {
          -- A8: covering index for range scans — (node, qvalue) so
          -- `qvalue BETWEEN lo AND hi` for a node is an index range, rid trailing.
          CREATE INDEX idx_vt ON value_tags (node, qvalue, rid);
+         -- A8.2: covering index for the bbox-overlap scan. Leading `node`
+         -- equality restricts to the geo node; the remaining corners + rid make
+         -- the overlap predicate index-only (no R-tree — plain SQLite — so the
+         -- box test still scans that node's rows, but never touches geo_bbox's
+         -- heap or the spine).
+         CREATE INDEX idx_geo
+             ON geo_bbox (node, min_lng, max_lng, min_lat, max_lat, rid);
          CREATE INDEX idx_frag ON fragment_dir (rid, nodegroup);
          CREATE INDEX idx_summary ON chunk_summary (node, min_concept, max_concept);
          CREATE INDEX idx_link_summary
              ON chunk_link_summary (node, min_target, max_target);
          CREATE INDEX idx_value_summary
              ON chunk_value_summary (node, min_qvalue, max_qvalue);
+         CREATE INDEX idx_geo_summary
+             ON chunk_geo_summary (node, min_lng, max_lng, min_lat, max_lat);
          ANALYZE;
          VACUUM;",
     )?;
