@@ -20,8 +20,9 @@
 //!    term_id → rid mapping; `rid` is the emitter's sequential resource
 //!    counter, NOT the dict id);
 //! 3. `fragment_dir JOIN chunks` → the chunk hashes holding this rid's tiles;
-//! 4. read `chunks/<hash>.msgpack` (a `Vec<ChunkTile>`, `to_vec_named`),
-//!    keeping only the tiles whose `resourceinstance_id` is the target —
+//! 4. read `chunks/<hash>.msgpack` (framed `Vec<ChunkTile>` via `decode_chunk`,
+//!    which gates the P17 version header), keeping only the tiles whose
+//!    `resourceinstance_id` is the target —
 //!    chunks are content-addressed and pack up to 256 tiles from *many*
 //!    resources;
 //! 5. hydrate with the partial-safe `alizarin_core::resource_tiles_to_tree`.
@@ -42,7 +43,7 @@ use std::sync::{Arc, Mutex};
 use alizarin_core::graph::{StaticGraph, StaticResourceMetadata};
 use alizarin_core::json_conversion::resource_tiles_to_tree;
 use alizarin_core::{IndexedGraph, StaticTile};
-use ros_madair_format::{ChunkTile, Manifest};
+use ros_madair_format::{decode_chunk, ChunkDecodeError, Manifest, FORMAT_VERSION};
 use rusqlite::{Connection, OpenFlags};
 
 mod layers;
@@ -122,11 +123,19 @@ pub enum ReadError {
     Sqlite(rusqlite::Error),
     /// A chunk file (or the manifest) could not be read.
     Io(std::io::Error),
-    /// A chunk file is not a valid `Vec<ChunkTile>` msgpack payload —
-    /// i.e. the artifact was written by an incompatible emitter.
+    /// A chunk file did not decode — a bad/absent P17 framing header, a format
+    /// version this reader does not implement, or a corrupt msgpack body.
     Chunk {
         hash: String,
-        source: rmp_serde::decode::Error,
+        source: ChunkDecodeError,
+    },
+    /// An artifact's on-disk FORMAT version (P17) is not the one this reader
+    /// implements. Names the artifact (head / manifest) so "re-emit" is
+    /// actionable; the head defaults to `0` when never stamped (pre-P17).
+    FormatSkew {
+        artifact: String,
+        found: u32,
+        expected: u32,
     },
     /// `manifest.json` exists but does not parse as one.
     ///
@@ -192,6 +201,16 @@ impl std::fmt::Display for ReadError {
                     "chunk {hash}.msgpack is not decodable as tiles: {source}"
                 )
             }
+            ReadError::FormatSkew {
+                artifact,
+                found,
+                expected,
+            } => write!(
+                f,
+                "{artifact} is format version {found}, but this reader implements \
+                 {expected} — the artifact and the reader are skewed; re-emit with \
+                 a matching ros-madair-emit (there is no in-place migration)"
+            ),
             ReadError::Manifest { path, source } => write!(
                 f,
                 "failed to parse manifest at {}: {source} — if the artifact \
@@ -251,12 +270,40 @@ impl From<std::io::Error> for ReadError {
     }
 }
 
-/// Open a snapshot's head DB strictly read-only.
+/// Open a snapshot's head DB strictly read-only, gating on its P17 format
+/// version. A head stamps [`FORMAT_VERSION`] into `PRAGMA user_version`
+/// (defaulting to `0` if never stamped — a pre-P17 head), and a mismatch is
+/// refused here rather than surfacing later as a missing table or a misread
+/// column. This is the head arm of the coherent version gate (chunks and the
+/// manifest are gated at their own read points).
 pub fn open_head(head_dir: &Path) -> Result<Connection, ReadError> {
-    Ok(Connection::open_with_flags(
+    let conn = Connection::open_with_flags(
         head_dir.join("head.sqlite"),
         OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
-    )?)
+    )?;
+    let version: u32 = conn.pragma_query_value(None, "user_version", |r| r.get(0))?;
+    if version != FORMAT_VERSION {
+        return Err(ReadError::FormatSkew {
+            artifact: format!("head.sqlite ({})", head_dir.display()),
+            found: version,
+            expected: FORMAT_VERSION,
+        });
+    }
+    Ok(conn)
+}
+
+/// Gate a parsed manifest on its P17 [`format_version`](Manifest::format_version)
+/// — the manifest arm of the coherent version gate. A pre-P17 manifest lacks the
+/// field and deserializes to `0`, which no reader implements, so it is caught.
+fn check_manifest_format(manifest: &Manifest, path: &Path) -> Result<(), ReadError> {
+    if manifest.format_version != FORMAT_VERSION {
+        return Err(ReadError::FormatSkew {
+            artifact: format!("manifest.json ({})", path.display()),
+            found: manifest.format_version,
+            expected: FORMAT_VERSION,
+        });
+    }
+    Ok(())
 }
 
 /// The snapshot's manifest, if it is present beside the head.
@@ -276,9 +323,13 @@ pub fn load_manifest(head_dir: &Path) -> Result<Option<Manifest>, ReadError> {
         return Ok(None);
     }
     let bytes = std::fs::read(&path)?;
-    serde_json::from_slice(&bytes)
-        .map(Some)
-        .map_err(|source| ReadError::Manifest { path, source })
+    let manifest: Manifest =
+        serde_json::from_slice(&bytes).map_err(|source| ReadError::Manifest {
+            path: path.clone(),
+            source,
+        })?;
+    check_manifest_format(&manifest, &path)?;
+    Ok(Some(manifest))
 }
 
 /// Spine tables to search for a resource, best candidate first.
@@ -402,11 +453,10 @@ pub(crate) fn resource_tiles_cached(
     let mut tiles: Vec<StaticTile> = Vec::new();
     for hash in &hashes {
         let bytes = read_chunk_bytes(head_dir, hash, cache)?;
-        let chunk: Vec<ChunkTile> =
-            rmp_serde::from_slice(bytes.as_slice()).map_err(|source| ReadError::Chunk {
-                hash: hash.clone(),
-                source,
-            })?;
+        let chunk = decode_chunk(bytes.as_slice()).map_err(|source| ReadError::Chunk {
+            hash: hash.clone(),
+            source,
+        })?;
         for tile in chunk {
             if tile.resourceinstance_id == uuid {
                 tiles.push(tile.into());

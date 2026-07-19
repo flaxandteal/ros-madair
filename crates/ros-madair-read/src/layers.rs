@@ -105,7 +105,7 @@ use alizarin_core::graph::{
     StaticResourceMetadata, TileMergeMode,
 };
 use alizarin_core::StaticTile;
-use ros_madair_format::{ChunkTile, Manifest};
+use ros_madair_format::{decode_chunk, Manifest};
 use ros_madair_query::{
     compile_match_probe, compile_with_registry, CompiledStatement, Expr, Measure, Param, Query,
 };
@@ -201,8 +201,16 @@ impl Layers {
             if !path.is_file() {
                 return Err(ReadError::MissingManifest(dir.to_path_buf()));
             }
-            let manifest: Manifest = serde_json::from_slice(&std::fs::read(&path)?)
-                .map_err(|source| ReadError::Manifest { path, source })?;
+            let manifest: Manifest =
+                serde_json::from_slice(&std::fs::read(&path)?).map_err(|source| {
+                    ReadError::Manifest {
+                        path: path.clone(),
+                        source,
+                    }
+                })?;
+            // P17: refuse a layer whose format version this reader can't read,
+            // before it is composed with the others.
+            crate::check_manifest_format(&manifest, &path)?;
             layers.push(Layer {
                 dir: dir.to_path_buf(),
                 manifest,
@@ -963,11 +971,10 @@ impl Layers {
             // Through the shared cache (P15): these are the same chunks a
             // subsequent hydrate of the citers will want.
             let bytes = read_chunk_bytes(dir, &hash, Some(&self.chunk_cache))?;
-            let chunk: Vec<ChunkTile> =
-                rmp_serde::from_slice(bytes.as_slice()).map_err(|source| ReadError::Chunk {
-                    hash: hash.clone(),
-                    source,
-                })?;
+            let chunk = decode_chunk(bytes.as_slice()).map_err(|source| ReadError::Chunk {
+                hash: hash.clone(),
+                source,
+            })?;
             for tile in &chunk {
                 let Some((_, value)) = tile.data.iter().find(|(k, _)| &***k == node_id) else {
                     continue;

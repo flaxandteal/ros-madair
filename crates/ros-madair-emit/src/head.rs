@@ -593,5 +593,13 @@ pub(crate) fn finalize(conn: &Connection) -> Result<(), EmitError> {
          ANALYZE;
          VACUUM;",
     )?;
+    // P17: stamp the format version into the head's own header, AFTER vacuum (so
+    // it survives the rebuild). The reader gates `open_head` on it — a head from a
+    // skewed emitter is refused, not silently misqueried. `user_version` defaults
+    // to 0 on any DB that never set it, so a pre-P17 head fails the gate too.
+    conn.execute_batch(&format!(
+        "PRAGMA user_version = {};",
+        ros_madair_format::FORMAT_VERSION
+    ))?;
     Ok(())
 }

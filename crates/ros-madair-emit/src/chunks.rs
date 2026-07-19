@@ -128,9 +128,10 @@ impl ChunkSink {
             return Ok(());
         }
         // Serialize via ChunkTile so map key order (and the content
-        // hash) is deterministic.
+        // hash) is deterministic. Framed with the P17 version header — the hash
+        // covers the header, so a format bump changes every chunk's identity.
         let chunk_tiles: Vec<ChunkTile> = tiles.iter().map(ChunkTile::from).collect();
-        let bytes = rmp_serde::to_vec_named(&chunk_tiles)?;
+        let bytes = ros_madair_format::encode_chunk(&chunk_tiles)?;
         let hash = hex(&Sha256::digest(&bytes));
         let chunk_id = if let Some(&id) = self.chunk_by_hash.get(&hash) {
             id

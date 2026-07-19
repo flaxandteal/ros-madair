@@ -315,6 +315,9 @@ pub fn emit_with_options(
     let head_db_bytes = fs::metadata(out.join("head.sqlite"))?.len();
     let mut manifest = Manifest {
         snapshot_id: String::new(),
+        // P17: the reader gates on this; it must be the version the emitter
+        // actually wrote across the head + chunks.
+        format_version: ros_madair_format::FORMAT_VERSION,
         base_uri: base_uri.to_string(),
         tier: options.tier.clone(),
         // I6: the artifact explains its own handler set. Derived from the
