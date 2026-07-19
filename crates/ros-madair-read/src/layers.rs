@@ -98,20 +98,19 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use alizarin_core::datatype_index_spec;
 use alizarin_core::extension_type_registry::ExtensionTypeRegistry;
 use alizarin_core::graph::{
-    merge_resources, unify_cardinality_one_tiles, StaticGraph, StaticNode, StaticResource,
+    merge_resources, unify_cardinality_one_tiles, StaticGraph, StaticResource,
     StaticResourceMetadata, TileMergeMode,
 };
 use alizarin_core::StaticTile;
-use ros_madair_format::{decode_chunk, Manifest};
+use ros_madair_format::Manifest;
 use ros_madair_query::{
     compile_match_probe, compile_with_registry, CompiledStatement, Expr, Measure, Param, Query,
 };
 use rusqlite::{types::Value as SqlValue, Connection};
 
-use crate::{hydrate_tiles, open_head, read_chunk_bytes, resource_tiles_cached, ChunkCache, ReadError};
+use crate::{hydrate_tiles, open_head, resource_tiles_cached, ChunkCache, ReadError};
 
 /// A filter tree whose leaves know which NODEGROUP they read and carry a compiled
 /// one-layer probe.
@@ -867,11 +866,6 @@ impl Layers {
         .map_err(ReadError::Query)?
         .expect("a HasLink leaf always reads a node");
 
-        let node = graph
-            .get_node_by_id(&node_id)
-            .ok_or_else(|| ReadError::Hydration(format!("node {node_id} not in graph")))?;
-        let node_datatype = node.datatype.clone();
-        let node_config = node_config_value(node);
         let (nodegroup_id, additive) = nodegroup_of(graph, &node_id);
 
         let model_layers = self.model_layers(graph);
@@ -879,18 +873,10 @@ impl Layers {
             return Err(ReadError::ModelInNoLayer(graph.graph_id().to_string()));
         }
 
-        // Per-layer inbound-citer sets, coarse-scanned + exact-verified.
+        // Per-layer inbound-citer sets, each an exact indexed lookup (P12).
         let mut per_layer: Vec<(usize, BTreeSet<String>)> = Vec::with_capacity(model_layers.len());
         for &i in &model_layers {
-            let set = self.citers_in_layer(
-                i,
-                &node_id,
-                &node_datatype,
-                node_config.as_ref(),
-                target_uuid,
-                registry,
-            )?;
-            per_layer.push((i, set));
+            per_layer.push((i, self.citers_in_layer(i, &node_id, target_uuid)?));
         }
 
         let mut out: BTreeSet<String> = BTreeSet::new();
@@ -925,73 +911,35 @@ impl Layers {
         Ok(out.into_iter().collect())
     }
 
-    /// Inbound citers of `target_uuid` through `node_id`, within ONE layer.
+    /// Inbound citers of `target_uuid` through `node_id`, within ONE layer — an
+    /// EXACT, indexed lookup against the P12 `reverse_links` shadow table (no
+    /// coarse chunk scan, no chunk read, no verify: the table IS the verified
+    /// edge set). `source` in that table is the citer's resource term_id, so the
+    /// query returns citer UUIDs directly through one `dict` join.
     ///
-    /// Coarse: the `chunk_link_summary` scan admits every chunk whose target range
-    /// covers X (an over-approximation — the range is coarse). Exact: each admitted
-    /// chunk is read and a tile counts only if its `node` value genuinely contains
-    /// X, per `datatype_index_spec` (the emitter's own extraction). A layer that
-    /// does not carry this model, or whose dict never interned X (so nothing links
-    /// to it here), yields the empty set — the target subselect resolves to NULL and
-    /// `X BETWEEN NULL` admits no chunk.
+    /// A layer that does not carry this model, or whose dict never interned the
+    /// target (so nothing links to it here), yields the empty set — the `node`/
+    /// `target` subselects resolve to NULL and match no row.
+    ///
+    /// (This replaced a coarse `chunk_link_summary` scan + chunk read + tile
+    /// verify. It was correct but measured at 71–100% of a model's link chunks
+    /// read per lookup, because A8-locality orders a model for its forward field
+    /// and scatters its reverse targets — the shadow index is the resolution.)
     fn citers_in_layer(
         &self,
         index: usize,
         node_id: &str,
-        node_datatype: &str,
-        node_config: Option<&serde_json::Value>,
         target_uuid: &str,
-        registry: Option<&ExtensionTypeRegistry>,
     ) -> Result<BTreeSet<String>, ReadError> {
-        // A layer that does not carry this model never interned this node's UUID,
-        // so the coarse scan's `dict WHERE term = node_id` subselect resolves to
-        // NULL and admits no chunk — no explicit model guard needed.
-        let dir = &self.layers[index].dir;
-        let conn = open_head(dir)?;
-
-        // Coarse: chunks whose link summary for this node covers X's interned id.
-        // Identical min/max scan to a forward HasLink, run without an anchoring
-        // resource — that is the whole reuse.
+        let conn = open_head(&self.layers[index].dir)?;
         let mut stmt = conn.prepare(
-            "SELECT DISTINCT cls.chunk FROM chunk_link_summary cls \
-             WHERE cls.node = (SELECT term_id FROM dict WHERE term = ?1) \
-             AND (SELECT term_id FROM dict WHERE term = ?2) \
-                 BETWEEN cls.min_target AND cls.max_target",
+            "SELECT DISTINCT d.term FROM reverse_links rl \
+             JOIN dict d ON d.term_id = rl.source \
+             WHERE rl.node = (SELECT term_id FROM dict WHERE term = ?1) \
+               AND rl.target = (SELECT term_id FROM dict WHERE term = ?2)",
         )?;
-        let chunk_ids: Vec<i64> = stmt
-            .query_map((node_id, target_uuid), |r| r.get::<_, i64>(0))?
-            .collect::<Result<_, _>>()?;
-
-        let mut citers = BTreeSet::new();
-        for chunk_id in chunk_ids {
-            let hash: String =
-                conn.query_row("SELECT hash FROM chunks WHERE chunk = ?1", [chunk_id], |r| {
-                    r.get(0)
-                })?;
-            // Through the shared cache (P15): these are the same chunks a
-            // subsequent hydrate of the citers will want.
-            let bytes = read_chunk_bytes(dir, &hash, Some(&self.chunk_cache))?;
-            let chunk = decode_chunk(bytes.as_slice()).map_err(|source| ReadError::Chunk {
-                hash: hash.clone(),
-                source,
-            })?;
-            for tile in &chunk {
-                let Some((_, value)) = tile.data.iter().find(|(k, _)| &***k == node_id) else {
-                    continue;
-                };
-                let value: &serde_json::Value = value;
-                if value.is_null() {
-                    continue;
-                }
-                // Exact verify with the emitter's own extraction: the tile cites X
-                // iff X is among the link keys of this node's value.
-                let spec = datatype_index_spec(node_datatype, value, node_config, registry);
-                if spec.keys.iter().any(|k| k == target_uuid) {
-                    citers.insert(tile.resourceinstance_id.clone().into_owned());
-                }
-            }
-        }
-        Ok(citers)
+        let rows = stmt.query_map((node_id, target_uuid), |r| r.get::<_, String>(0))?;
+        Ok(rows.collect::<Result<_, _>>()?)
     }
 }
 
@@ -1049,22 +997,6 @@ fn nodegroup_of(graph: &StaticGraph, node_id: &str) -> (String, bool) {
         ),
         None => (node_id.to_string(), false),
     }
-}
-
-/// A node's config as a JSON object (the wire shape `datatype_index_spec` and
-/// extension handlers expect), or `None` when the node has no config. Mirrors the
-/// emitter's and query compiler's copies — it lets a handler (e.g. the CLM
-/// reference handler) resolve its own collection when extracting link keys.
-fn node_config_value(node: &StaticNode) -> Option<serde_json::Value> {
-    if node.config.is_empty() {
-        return None;
-    }
-    Some(serde_json::Value::Object(
-        node.config
-            .iter()
-            .map(|(k, v)| (k.clone(), v.clone()))
-            .collect(),
-    ))
 }
 
 fn bind(params: &[Param]) -> Vec<SqlValue> {

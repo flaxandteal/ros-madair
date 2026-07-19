@@ -207,6 +207,19 @@ pub(crate) fn create_schema(conn: &Connection) -> Result<(), EmitError> {
              min_lng REAL NOT NULL, min_lat REAL NOT NULL,
              max_lng REAL NOT NULL, max_lat REAL NOT NULL,
              UNIQUE(rid, node, min_lng, min_lat, max_lng, max_lat));
+         -- P12 shadow reverse-index: the EXACT (link node, target, source) edge,
+         -- so a reverse lookup ('who links TO X via this node?') is an indexed
+         -- point query instead of a coarse chunk_link_summary scan + chunk read +
+         -- verify. `source` is the CITER's resource term_id (not rid), so the
+         -- reverse query returns citer UUIDs via one dict join — no spine join.
+         -- This is the dual of the deliberately-absent forward exact link table
+         -- (P1: forward HasLink stays coarse): materialized only because measured
+         -- reverse lookups scanned 71–100% of a model's link chunks (A8-locality
+         -- orders a model for its FORWARD field, scattering its reverse targets —
+         -- the shadow index decouples the two directions).
+         CREATE TABLE reverse_links (node INTEGER NOT NULL,
+             target INTEGER NOT NULL, source INTEGER NOT NULL,
+             UNIQUE(node, target, source));
          -- fragment_dir doubles as the layer-composition PRESENCE index: a
          -- (rid, nodegroup) row means this layer carries this nodegroup for
          -- this resource. Layer precedence is per-NODEGROUP, not per-node,
@@ -374,6 +387,8 @@ pub(crate) fn process_resource(
     let mut stmt_vt = tx.prepare_cached("INSERT OR IGNORE INTO value_tags VALUES (?1,?2,?3)")?;
     let mut stmt_geo =
         tx.prepare_cached("INSERT OR IGNORE INTO geo_bbox VALUES (?1,?2,?3,?4,?5,?6)")?;
+    let mut stmt_rev =
+        tx.prepare_cached("INSERT OR IGNORE INTO reverse_links VALUES (?1,?2,?3)")?;
 
     let res_id = resource.resourceinstance.resourceinstanceid.clone();
     let rid = *next_rid;
@@ -422,9 +437,11 @@ pub(crate) fn process_resource(
                     }
                 }
                 IndexClass::Link => {
-                    // Coarse only (P1): no exact head row — targets feed the
-                    // per-chunk min/max summary; exact pairs resurface from
-                    // the tiles.
+                    // FORWARD stays coarse (P1): targets feed the per-chunk
+                    // min/max summary; exact pairs resurface from the tiles.
+                    // REVERSE is exact (P12): the same edge is materialized into
+                    // reverse_links keyed by target, so `cited_by` is an indexed
+                    // lookup — `source` is THIS resource's term_id (the citer).
                     let node_int = interner.intern(node_id);
                     for target in spec.keys {
                         let target_int = interner.intern(&target);
@@ -432,6 +449,7 @@ pub(crate) fn process_resource(
                             .entry(tile.nodegroup_id.clone())
                             .or_default()
                             .push((node_int, target_int));
+                        stmt_rev.execute((node_int, target_int, term_id))?;
                     }
                 }
                 IndexClass::Ordered => {
@@ -490,6 +508,7 @@ pub(crate) fn process_resource(
     drop(stmt_ct);
     drop(stmt_vt);
     drop(stmt_geo);
+    drop(stmt_rev);
     sink.add_resource_tiles(rid, tiles, interner)?;
     Ok(())
 }
@@ -582,6 +601,9 @@ pub(crate) fn finalize(conn: &Connection) -> Result<(), EmitError> {
          -- heap or the spine).
          CREATE INDEX idx_geo
              ON geo_bbox (node, min_lng, max_lng, min_lat, max_lat, rid);
+         -- P12: covering index for the reverse lookup — (node, target) equality
+         -- yields the source term_ids directly, index-only.
+         CREATE INDEX idx_rev ON reverse_links (node, target, source);
          CREATE INDEX idx_frag ON fragment_dir (rid, nodegroup);
          CREATE INDEX idx_summary ON chunk_summary (node, min_concept, max_concept);
          CREATE INDEX idx_link_summary

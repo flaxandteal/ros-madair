@@ -276,35 +276,32 @@ fn chunk_cache_serves_repeat_reads() {
     );
 }
 
-/// P15 on the A7 flow: `cited_by` scans a chunk, then hydrating the citer it
-/// found reuses that very chunk — the reverse-lookup-then-hydrate pattern
-/// (`loadEntryV2`) costs the chunk fetch ONCE, not twice.
+/// P12: `cited_by` reads NO chunks — it is an indexed `reverse_links` lookup, so
+/// the reverse traversal costs zero chunk fetches (the coarse scan it replaced
+/// read 71–100% of a model's link chunks). The chunk cache is untouched by it;
+/// only the subsequent hydrate reads chunks.
 #[test]
-fn cited_by_then_hydrate_reuses_the_scanned_chunk() {
+fn cited_by_reads_no_chunks() {
     let Some((base, overlay, graph)) = setup() else {
         eprintln!("demo fixture absent — skipping");
         return;
     };
     let layers = Layers::open(&[base.as_path(), overlay.as_path()]).unwrap();
 
-    // Scan: reads the cognate nodegroup's chunks across layers.
     let citers = layers.cited_by(B, "cognate", &graph, None).unwrap();
     assert!(citers.contains(&C.to_string()));
-    let scan_misses = layers.chunk_cache().misses();
-    assert!(scan_misses > 0, "the scan fetched chunks");
-    let hits_before = layers.chunk_cache().hits();
-
-    // Hydrate C — which lives ONLY in its cognate card, the chunk the scan just
-    // read — so it is served entirely from cache: no new fetch.
-    layers.hydrate_resource(C, &graph).unwrap();
     assert_eq!(
         layers.chunk_cache().misses(),
-        scan_misses,
-        "hydrating the scanned citer must not re-fetch its chunk"
+        0,
+        "cited_by is an index lookup — it fetches no chunks"
     );
+    assert!(layers.chunk_cache().is_empty(), "no chunk entered the cache");
+
+    // Only the hydrate touches chunks.
+    layers.hydrate_resource(C, &graph).unwrap();
     assert!(
-        layers.chunk_cache().hits() > hits_before,
-        "the hydrate was served from the scan's cached chunk"
+        layers.chunk_cache().misses() > 0,
+        "the hydrate (not the scan) is what reads chunks"
     );
 }
 
