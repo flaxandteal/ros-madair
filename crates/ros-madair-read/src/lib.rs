@@ -34,8 +34,10 @@
 //! consequences (P13 precedence, why counts cannot be summed, the tile merge
 //! rule).
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 
 use alizarin_core::graph::{StaticGraph, StaticResourceMetadata};
 use alizarin_core::json_conversion::resource_tiles_to_tree;
@@ -45,6 +47,73 @@ use rusqlite::{Connection, OpenFlags};
 
 mod layers;
 pub use layers::{Layer, Layers};
+
+/// A content-addressed chunk cache (RM principle P15).
+///
+/// The read path re-reads `chunks/<hash>.msgpack` on every hydrate and every
+/// `cited_by` scan. On local SQLite that is harmless (the OS page cache absorbs
+/// it); over HTTP/CDN — the browser/Tauri consumer — each read is a network
+/// fetch, and the A7 reverse-lookup flow (`cited_by` a target, then hydrate each
+/// citer) re-reads the very chunks the scan just touched. This memoizes chunk
+/// BYTES so a chunk is fetched once per session.
+///
+/// **It is keyed by content hash alone, and that is why it is correct.** A chunk
+/// file's name IS the sha256 of its bytes, so a hash uniquely identifies immutable
+/// content — the cache can never go stale, and a hash shared across layers (same
+/// content) is legitimately one entry. This is the "conscious" block cache the
+/// principle inventory calls for, not an accidental one.
+///
+/// Bytes, not parsed tiles: the fetch is the cost over a network; re-parsing
+/// cached bytes is negligible CPU and keeps the cache free of the borrowed-`Cow`
+/// lifetimes `ChunkTile` carries. Unbounded and session-lived (held on
+/// [`Layers`]); a size cap / LRU is a later refinement if a session's working set
+/// outgrows memory.
+#[derive(Debug, Default)]
+pub struct ChunkCache {
+    bytes: Mutex<HashMap<String, Arc<Vec<u8>>>>,
+    hits: AtomicU64,
+    misses: AtomicU64,
+}
+
+impl ChunkCache {
+    /// The bytes of `chunks/<hash>.msgpack`, from cache if seen, else read from
+    /// `dir` and memoized. `dir` is only consulted on a miss — a cache hit never
+    /// touches the filesystem (or the network), which is the whole point.
+    pub fn read_bytes(&self, dir: &Path, hash: &str) -> Result<Arc<Vec<u8>>, ReadError> {
+        if let Some(b) = self.bytes.lock().unwrap().get(hash) {
+            self.hits.fetch_add(1, Ordering::Relaxed);
+            return Ok(Arc::clone(b));
+        }
+        self.misses.fetch_add(1, Ordering::Relaxed);
+        let bytes = Arc::new(std::fs::read(
+            dir.join("chunks").join(format!("{hash}.msgpack")),
+        )?);
+        self.bytes
+            .lock()
+            .unwrap()
+            .insert(hash.to_string(), Arc::clone(&bytes));
+        Ok(bytes)
+    }
+
+    /// Reads served from cache (no fetch) this session.
+    pub fn hits(&self) -> u64 {
+        self.hits.load(Ordering::Relaxed)
+    }
+
+    /// Reads that missed and fetched from disk/network this session.
+    pub fn misses(&self) -> u64 {
+        self.misses.load(Ordering::Relaxed)
+    }
+
+    /// Distinct chunks resident in the cache.
+    pub fn len(&self) -> usize {
+        self.bytes.lock().unwrap().len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+}
 
 /// Everything that can go wrong reading a snapshot.
 #[derive(Debug)]
@@ -303,6 +372,20 @@ pub fn resource_tiles_with_graph(
     uuid: &str,
     graph: Option<&StaticGraph>,
 ) -> Result<Vec<StaticTile>, ReadError> {
+    // One-shot: no cache (a fresh cache per call would never hit). The cached
+    // path is [`Layers`], which reuses one cache across many hydrates/queries.
+    resource_tiles_cached(head_dir, uuid, graph, None)
+}
+
+/// [`resource_tiles_with_graph`], but chunk bytes are fetched through `cache`
+/// (P15) when one is given — so a chunk touched by an earlier read in the same
+/// session is not fetched again. `None` reads straight from disk.
+pub(crate) fn resource_tiles_cached(
+    head_dir: &Path,
+    uuid: &str,
+    graph: Option<&StaticGraph>,
+    cache: Option<&ChunkCache>,
+) -> Result<Vec<StaticTile>, ReadError> {
     let conn = open_head(head_dir)?;
     let rid = resolve_rid(&conn, head_dir, uuid, graph)?;
 
@@ -318,9 +401,9 @@ pub fn resource_tiles_with_graph(
 
     let mut tiles: Vec<StaticTile> = Vec::new();
     for hash in &hashes {
-        let bytes = std::fs::read(head_dir.join("chunks").join(format!("{hash}.msgpack")))?;
+        let bytes = read_chunk_bytes(head_dir, hash, cache)?;
         let chunk: Vec<ChunkTile> =
-            rmp_serde::from_slice(&bytes).map_err(|source| ReadError::Chunk {
+            rmp_serde::from_slice(bytes.as_slice()).map_err(|source| ReadError::Chunk {
                 hash: hash.clone(),
                 source,
             })?;
@@ -336,6 +419,21 @@ pub fn resource_tiles_with_graph(
             .cmp(&(b.nodegroup_id.as_str(), b.tileid.as_deref()))
     });
     Ok(tiles)
+}
+
+/// Chunk bytes via the cache if one is supplied (P15), else a direct read.
+/// Returns an `Arc` either way so callers share one representation.
+pub(crate) fn read_chunk_bytes(
+    dir: &Path,
+    hash: &str,
+    cache: Option<&ChunkCache>,
+) -> Result<Arc<Vec<u8>>, ReadError> {
+    match cache {
+        Some(c) => c.read_bytes(dir, hash),
+        None => Ok(Arc::new(std::fs::read(
+            dir.join("chunks").join(format!("{hash}.msgpack")),
+        )?)),
+    }
 }
 
 /// One resource's tiles, recovered from the chunks, in stable order.

@@ -96,6 +96,7 @@
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use alizarin_core::datatype_index_spec;
 use alizarin_core::extension_type_registry::ExtensionTypeRegistry;
@@ -110,7 +111,7 @@ use ros_madair_query::{
 };
 use rusqlite::{types::Value as SqlValue, Connection};
 
-use crate::{hydrate_tiles, open_head, resource_tiles_with_graph, ReadError};
+use crate::{hydrate_tiles, open_head, read_chunk_bytes, resource_tiles_cached, ChunkCache, ReadError};
 
 /// A filter tree whose leaves know which NODEGROUP they read and carry a compiled
 /// one-layer probe.
@@ -159,6 +160,11 @@ pub struct Layer {
 #[derive(Debug, Clone)]
 pub struct Layers {
     layers: Vec<Layer>,
+    /// Content-addressed chunk cache (P15), shared across every hydrate and
+    /// `cited_by` on this stack — so the A7 flow (scan citers, then hydrate them)
+    /// does not re-fetch the chunks it just read. `Arc` so a cloned `Layers`
+    /// shares the same cache rather than starting cold.
+    chunk_cache: Arc<ChunkCache>,
 }
 
 impl Layers {
@@ -206,12 +212,21 @@ impl Layers {
         for layer in &layers[1..] {
             check_composable(base, layer)?;
         }
-        Ok(Layers { layers })
+        Ok(Layers {
+            layers,
+            chunk_cache: Arc::new(ChunkCache::default()),
+        })
     }
 
     /// The layers, base first.
     pub fn layers(&self) -> &[Layer] {
         &self.layers
+    }
+
+    /// The shared chunk cache (P15) — for a consumer that wants to inspect hit
+    /// rate, or reset between sessions by opening a fresh stack.
+    pub fn chunk_cache(&self) -> &ChunkCache {
+        &self.chunk_cache
     }
 
     pub fn len(&self) -> usize {
@@ -734,7 +749,12 @@ impl Layers {
         // is what turns "first occurrence wins" into "topmost layer wins".
         let mut stack: Vec<StaticResource> = Vec::new();
         for layer in self.layers.iter().rev() {
-            let tiles = match resource_tiles_with_graph(&layer.dir, uuid, Some(graph)) {
+            let tiles = match resource_tiles_cached(
+                &layer.dir,
+                uuid,
+                Some(graph),
+                Some(&self.chunk_cache),
+            ) {
                 Ok(tiles) => tiles,
                 // Not in this layer: the normal case for an overlay.
                 Err(ReadError::UnknownResource(_)) => continue,
@@ -940,9 +960,11 @@ impl Layers {
                 conn.query_row("SELECT hash FROM chunks WHERE chunk = ?1", [chunk_id], |r| {
                     r.get(0)
                 })?;
-            let bytes = std::fs::read(dir.join("chunks").join(format!("{hash}.msgpack")))?;
+            // Through the shared cache (P15): these are the same chunks a
+            // subsequent hydrate of the citers will want.
+            let bytes = read_chunk_bytes(dir, &hash, Some(&self.chunk_cache))?;
             let chunk: Vec<ChunkTile> =
-                rmp_serde::from_slice(&bytes).map_err(|source| ReadError::Chunk {
+                rmp_serde::from_slice(bytes.as_slice()).map_err(|source| ReadError::Chunk {
                     hash: hash.clone(),
                     source,
                 })?;

@@ -248,6 +248,66 @@ fn cited_by_honours_cardinality_one_override() {
     );
 }
 
+/// P15: the chunk cache serves repeat reads without re-fetching. Hydrating the
+/// same resource twice fetches its chunks once; the second hydrate is all hits.
+#[test]
+fn chunk_cache_serves_repeat_reads() {
+    let Some((base, overlay, graph)) = setup() else {
+        eprintln!("demo fixture absent — skipping");
+        return;
+    };
+    let layers = Layers::open(&[base.as_path(), overlay.as_path()]).unwrap();
+    assert!(layers.chunk_cache().is_empty(), "cache starts cold");
+
+    layers.hydrate_resource(C, &graph).unwrap();
+    let cold_misses = layers.chunk_cache().misses();
+    let cold_hits = layers.chunk_cache().hits();
+    assert!(cold_misses > 0, "the first hydrate fetched chunks");
+
+    layers.hydrate_resource(C, &graph).unwrap();
+    assert_eq!(
+        layers.chunk_cache().misses(),
+        cold_misses,
+        "a repeat hydrate must not re-fetch any chunk"
+    );
+    assert!(
+        layers.chunk_cache().hits() > cold_hits,
+        "the repeat hydrate was served from cache"
+    );
+}
+
+/// P15 on the A7 flow: `cited_by` scans a chunk, then hydrating the citer it
+/// found reuses that very chunk — the reverse-lookup-then-hydrate pattern
+/// (`loadEntryV2`) costs the chunk fetch ONCE, not twice.
+#[test]
+fn cited_by_then_hydrate_reuses_the_scanned_chunk() {
+    let Some((base, overlay, graph)) = setup() else {
+        eprintln!("demo fixture absent — skipping");
+        return;
+    };
+    let layers = Layers::open(&[base.as_path(), overlay.as_path()]).unwrap();
+
+    // Scan: reads the cognate nodegroup's chunks across layers.
+    let citers = layers.cited_by(B, "cognate", &graph, None).unwrap();
+    assert!(citers.contains(&C.to_string()));
+    let scan_misses = layers.chunk_cache().misses();
+    assert!(scan_misses > 0, "the scan fetched chunks");
+    let hits_before = layers.chunk_cache().hits();
+
+    // Hydrate C — which lives ONLY in its cognate card, the chunk the scan just
+    // read — so it is served entirely from cache: no new fetch.
+    layers.hydrate_resource(C, &graph).unwrap();
+    assert_eq!(
+        layers.chunk_cache().misses(),
+        scan_misses,
+        "hydrating the scanned citer must not re-fetch its chunk"
+    );
+    assert!(
+        layers.chunk_cache().hits() > hits_before,
+        "the hydrate was served from the scan's cached chunk"
+    );
+}
+
 /// `cited_by` on a NON-link node is a typed error (the same discipline a forward
 /// `HasLink` on a concept node gets), not a silent empty answer.
 #[test]
