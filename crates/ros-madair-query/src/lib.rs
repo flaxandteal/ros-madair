@@ -105,6 +105,13 @@ pub enum Expr {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         target: Option<String>,
     },
+    /// Ordered-scalar RANGE predicate on an `Ordered` node (date, A8). `lo`/`hi`
+    /// are the QUANTIZED endpoints (inclusive) — the caller quantizes raw values
+    /// into the head's key space with the SAME function the emitter used
+    /// (`alizarin_core::quantize`), exactly as a Concept filter names an interned
+    /// concept id, not a label. Matches on the exact `value_tags` index, so it is
+    /// NOT coarse: `qvalue BETWEEN lo AND hi`.
+    Range { path: String, lo: i64, hi: i64 },
 }
 
 /// Operators for [`Expr::Concept`].
@@ -437,6 +444,7 @@ pub fn leaf_node_id(
             }
             Some(node.nodeid.clone())
         }
+        Expr::Range { path, .. } => Some(resolver.resolve(path)?.nodeid.clone()),
         Expr::All(_) | Expr::Any(_) | Expr::Not(_) => None,
     })
 }
@@ -682,6 +690,21 @@ fn is_link_class(node: &StaticNode, registry: Option<&ExtensionTypeRegistry>) ->
         )
         .class,
         IndexClass::Link
+    )
+}
+
+/// True iff the node is head-indexed as an ordered scalar (A8) — the class that
+/// answers a `Range` predicate via `value_tags`.
+fn is_ordered_class(node: &StaticNode, registry: Option<&ExtensionTypeRegistry>) -> bool {
+    matches!(
+        datatype_index_spec(
+            &node.datatype,
+            &serde_json::Value::Null,
+            node_config_value(node).as_ref(),
+            registry,
+        )
+        .class,
+        IndexClass::Ordered
     )
 }
 
@@ -1005,6 +1028,27 @@ fn compile_expr(
                  {target_clause})"
             ))
         }
+        Expr::Range { path, lo, hi } => {
+            let node = resolver.resolve(path)?;
+            if !is_ordered_class(node, registry) {
+                return Err(QueryError::NotHeadIndexed {
+                    path: path.clone(),
+                    datatype: node.datatype.clone(),
+                });
+            }
+            // EXACT, not coarse: the ordered index has a per-value table, so a
+            // range is an index scan over value_tags (mirrors concept `Is`), no
+            // chunk-summary over-approximation and no residual re-check.
+            let node_p = params.text(&node.nodeid);
+            let lo_p = params.int(*lo);
+            let hi_p = params.int(*hi);
+            Ok(format!(
+                "EXISTS (SELECT 1 FROM {schema}value_tags vt \
+                 WHERE vt.rid = s.rid \
+                 AND vt.node = (SELECT term_id FROM {schema}dict WHERE term = {node_p}) \
+                 AND vt.qvalue BETWEEN {lo_p} AND {hi_p})"
+            ))
+        }
     }
 }
 
@@ -1014,7 +1058,9 @@ fn first_coarse_path(expr: &Expr) -> Option<&str> {
         Expr::HasLink { path, .. } => Some(path),
         Expr::All(exprs) | Expr::Any(exprs) => exprs.iter().find_map(first_coarse_path),
         Expr::Not(inner) => first_coarse_path(inner),
-        Expr::Concept { .. } => None,
+        // Concept and Range are EXACT (concept_tags / value_tags) — not coarse,
+        // so `Not` over them is safe.
+        Expr::Concept { .. } | Expr::Range { .. } => None,
     }
 }
 

@@ -25,6 +25,8 @@ pub(crate) struct ChunkSink {
     pub(crate) pending_concepts: BTreeMap<String, Vec<(i64, i64)>>,
     /// nodegroup uuid -> (node int, target int) pairs for pending tiles
     pub(crate) pending_links: BTreeMap<String, Vec<(i64, i64)>>,
+    /// nodegroup uuid -> (node int, quantized value) pairs for pending tiles (A8)
+    pub(crate) pending_values: BTreeMap<String, Vec<(i64, i64)>>,
     /// nodegroup uuid -> (rid, tile count) memberships for pending tiles
     pub(crate) pending_members: BTreeMap<String, Vec<(i64, usize)>>,
     /// content hash -> chunk id (content-addressed dedupe)
@@ -37,6 +39,9 @@ pub(crate) struct ChunkSink {
     /// `chunk_link_summary` (P1/P2: coarse chunk→target-range in the
     /// head; exact pairs resurface from the tiles client-side)
     pub(crate) link_summary_rows: Vec<(i64, i64, i64, i64, i64)>,
+    /// (chunk, node, min_qvalue, max_qvalue, n) rows for `chunk_value_summary`
+    /// (A8: coarse chunk→ordered-value-range; the native reader uses value_tags)
+    pub(crate) value_summary_rows: Vec<(i64, i64, i64, i64, i64)>,
     /// (rid, nodegroup int, chunk id, tile count) rows for `fragment_dir`
     pub(crate) fragment_rows: Vec<(i64, i64, i64, i64)>,
 }
@@ -48,11 +53,13 @@ impl ChunkSink {
             pending_tiles: BTreeMap::new(),
             pending_concepts: BTreeMap::new(),
             pending_links: BTreeMap::new(),
+            pending_values: BTreeMap::new(),
             pending_members: BTreeMap::new(),
             chunk_by_hash: HashMap::new(),
             chunk_rows: Vec::new(),
             summary_rows: Vec::new(),
             link_summary_rows: Vec::new(),
+            value_summary_rows: Vec::new(),
             fragment_rows: Vec::new(),
         }
     }
@@ -103,6 +110,7 @@ impl ChunkSink {
         let tiles = self.pending_tiles.remove(ng).unwrap_or_default();
         let concepts = self.pending_concepts.remove(ng).unwrap_or_default();
         let links = self.pending_links.remove(ng).unwrap_or_default();
+        let values = self.pending_values.remove(ng).unwrap_or_default();
         let members = self.pending_members.remove(ng).unwrap_or_default();
         if tiles.is_empty() {
             return Ok(());
@@ -147,6 +155,19 @@ impl ChunkSink {
             }
             for (node, (min_t, max_t, n)) in lagg {
                 self.link_summary_rows.push((id, node, min_t, max_t, n));
+            }
+            // Per-chunk, per ordered-node: min/max/count over the quantized
+            // values (A8). Coarse chunk→range for the browser range-prune; the
+            // native reader queries value_tags directly.
+            let mut vagg: BTreeMap<i64, (i64, i64, i64)> = BTreeMap::new();
+            for (node, qvalue) in &values {
+                let entry = vagg.entry(*node).or_insert((*qvalue, *qvalue, 0));
+                entry.0 = entry.0.min(*qvalue);
+                entry.1 = entry.1.max(*qvalue);
+                entry.2 += 1;
+            }
+            for (node, (min_v, max_v, n)) in vagg {
+                self.value_summary_rows.push((id, node, min_v, max_v, n));
             }
             id
         };

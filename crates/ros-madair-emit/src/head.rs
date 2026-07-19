@@ -132,6 +132,19 @@ pub(crate) fn preintern_concepts(
 // Index routing
 // ---------------------------------------------------------------------------
 
+/// Quantize a raw ordered-scalar value into the head's signed sortable key,
+/// dispatching on datatype (A8). The `IndexClass::Ordered` class is opaque about
+/// meaning — this is where the datatype decides the encoding.
+///
+/// A8.1: date/edtf → days-from-civil (`alizarin_core::quantize`). A8.2 adds
+/// geojson → Hilbert. `None` (unparseable) → the value is not head-indexed.
+fn quantize_ordered(datatype: &str, raw: &str) -> Option<i64> {
+    match datatype {
+        "date" | "edtf" => alizarin_core::quantize::quantize_date(raw),
+        _ => None,
+    }
+}
+
 /// A node's config as a JSON object (the wire shape `datatype_index_spec`
 /// and extension handlers expect), or `None` when the node has no config.
 /// This is what lets a handler (e.g. the CLM reference handler) resolve its
@@ -171,6 +184,15 @@ pub(crate) fn create_schema(conn: &Connection) -> Result<(), EmitError> {
          CREATE TABLE concept_tags (rid INTEGER NOT NULL,
              node INTEGER NOT NULL, concept INTEGER NOT NULL,
              UNIQUE(rid, node, concept));
+         -- A8: ordered-scalar exact index — the value_tags analogue of
+         -- concept_tags. `qvalue` is a SIGNED sortable key (date →
+         -- days-from-civil; SQLite INTEGER orders signed, so pre-1970 is a
+         -- negative that sorts first — no bias). A range query is
+         -- `qvalue BETWEEN lo AND hi`. Not interned: the key is already a
+         -- number, not a dict term.
+         CREATE TABLE value_tags (rid INTEGER NOT NULL,
+             node INTEGER NOT NULL, qvalue INTEGER NOT NULL,
+             UNIQUE(rid, node, qvalue));
          -- fragment_dir doubles as the layer-composition PRESENCE index: a
          -- (rid, nodegroup) row means this layer carries this nodegroup for
          -- this resource. Layer precedence is per-NODEGROUP, not per-node,
@@ -195,7 +217,13 @@ pub(crate) fn create_schema(conn: &Connection) -> Result<(), EmitError> {
          -- schema-declared field class later.)
          CREATE TABLE chunk_link_summary (chunk INTEGER NOT NULL,
              node INTEGER NOT NULL, min_target INTEGER NOT NULL,
-             max_target INTEGER NOT NULL, n INTEGER NOT NULL);",
+             max_target INTEGER NOT NULL, n INTEGER NOT NULL);
+         -- A8: coarse ordered-value ranges — the chunk_summary analogue for
+         -- ordered scalars, so a browser client can prune which chunks to fetch
+         -- for a range query (the native reader uses value_tags directly).
+         CREATE TABLE chunk_value_summary (chunk INTEGER NOT NULL,
+             node INTEGER NOT NULL, min_qvalue INTEGER NOT NULL,
+             max_qvalue INTEGER NOT NULL, n INTEGER NOT NULL);",
     )?;
     Ok(())
 }
@@ -322,6 +350,7 @@ pub(crate) fn process_resource(
              VALUES (?1, ?2, ?3)"
     ))?;
     let mut stmt_ct = tx.prepare_cached("INSERT OR IGNORE INTO concept_tags VALUES (?1,?2,?3)")?;
+    let mut stmt_vt = tx.prepare_cached("INSERT OR IGNORE INTO value_tags VALUES (?1,?2,?3)")?;
 
     let res_id = resource.resourceinstance.resourceinstanceid.clone();
     let rid = *next_rid;
@@ -382,8 +411,26 @@ pub(crate) fn process_resource(
                             .push((node_int, target_int));
                     }
                 }
-                // Strings/numbers/dates/etc.: detail-only — NOT head-indexed
-                // (they live in the chunks).
+                IndexClass::Ordered => {
+                    // A8: quantize the raw value into the head's signed sortable
+                    // key space and write the exact row (value_tags) + feed the
+                    // per-chunk coarse range (chunk_value_summary). Unparseable
+                    // values are simply not indexed — they still live in the
+                    // chunk, like any detail-only value.
+                    let node_int = interner.intern(node_id);
+                    for raw in spec.keys {
+                        let Some(qvalue) = quantize_ordered(dt, &raw) else {
+                            continue;
+                        };
+                        stmt_vt.execute((rid, node_int, qvalue))?;
+                        sink.pending_values
+                            .entry(tile.nodegroup_id.clone())
+                            .or_default()
+                            .push((node_int, qvalue));
+                    }
+                }
+                // Strings/numbers/etc.: detail-only — NOT head-indexed (they
+                // live in the chunks).
                 IndexClass::DetailOnly => {}
             }
         }
@@ -399,6 +446,7 @@ pub(crate) fn process_resource(
     // does not touch the connection, but keep the borrow scope tight).
     drop(stmt_spine);
     drop(stmt_ct);
+    drop(stmt_vt);
     sink.add_resource_tiles(rid, tiles, interner)?;
     Ok(())
 }
@@ -438,6 +486,11 @@ pub(crate) fn insert_bulk(
         for row in &sink.link_summary_rows {
             stmt.execute(*row)?;
         }
+        let mut stmt =
+            tx.prepare_cached("INSERT INTO chunk_value_summary VALUES (?1,?2,?3,?4,?5)")?;
+        for row in &sink.value_summary_rows {
+            stmt.execute(*row)?;
+        }
         let mut stmt = tx.prepare_cached("INSERT INTO fragment_dir VALUES (?1,?2,?3,?4)")?;
         for row in &sink.fragment_rows {
             stmt.execute(*row)?;
@@ -471,10 +524,15 @@ pub(crate) fn finalize(conn: &Connection) -> Result<(), EmitError> {
          -- COUNT(DISTINCT rid) and rid-ordered selects index-only — no
          -- spine scan.
          CREATE INDEX idx_ct ON concept_tags (node, concept, rid);
+         -- A8: covering index for range scans — (node, qvalue) so
+         -- `qvalue BETWEEN lo AND hi` for a node is an index range, rid trailing.
+         CREATE INDEX idx_vt ON value_tags (node, qvalue, rid);
          CREATE INDEX idx_frag ON fragment_dir (rid, nodegroup);
          CREATE INDEX idx_summary ON chunk_summary (node, min_concept, max_concept);
          CREATE INDEX idx_link_summary
              ON chunk_link_summary (node, min_target, max_target);
+         CREATE INDEX idx_value_summary
+             ON chunk_value_summary (node, min_qvalue, max_qvalue);
          ANALYZE;
          VACUUM;",
     )?;
