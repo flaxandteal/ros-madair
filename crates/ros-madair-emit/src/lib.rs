@@ -51,6 +51,7 @@ mod composability;
 mod geo;
 mod head;
 mod input;
+mod locality;
 mod manifest;
 
 pub use closure::{build_closure, Closure, ClosureEntry};
@@ -174,6 +175,11 @@ pub fn emit_with_options(
         .collect();
     let mut resource_counts = vec![0usize; models.len()];
 
+    // A8-locality: classify each model's ordering field (geo Hilbert / date /
+    // none) ONCE. Applied to both passes below so chunk order == interning order
+    // (A9's invariant). See `locality`.
+    let localities = locality::model_localities(&models, registry);
+
     // Tier nodegroup exclusion set (the other half of retain_tier_models):
     // filtered per-resource before processing.
     let exclude_ngs: HashSet<&str> = options
@@ -205,7 +211,11 @@ pub fn emit_with_options(
     let files = input::business_data_files(data_dir)?;
     for path in &files {
         let bytes = fs::read(path)?;
-        if let Ok(resources) = parse_business_data_bytes(&bytes) {
+        if let Ok(mut resources) = parse_business_data_bytes(&bytes) {
+            // A8-locality: intern in the SAME order the streaming pass will chunk
+            // (locality order for geo/date models), so a target's id remains its
+            // chunk position (A9). Identical sort in both passes = lockstep.
+            locality::sort_by_locality(&mut resources, &by_graph, &localities);
             for r in &resources {
                 if by_graph.contains_key(r.resourceinstance.graph_id.as_str()) {
                     interner.intern(&r.resourceinstance.resourceinstanceid);
@@ -224,13 +234,16 @@ pub fn emit_with_options(
     let tx = conn.transaction()?;
     for path in files {
         let bytes = fs::read(&path)?;
-        let parsed = match parse_business_data_bytes(&bytes) {
+        let mut parsed = match parse_business_data_bytes(&bytes) {
             Ok(resources) => resources,
             Err(e) => {
                 eprintln!("skipping {} ({e})", path.display());
                 continue;
             }
         };
+        // A8-locality: chunk resources in locality order (same sort as the
+        // pre-intern pass above), tightening chunk_geo_summary / chunk_value_summary.
+        locality::sort_by_locality(&mut parsed, &by_graph, &localities);
         for mut resource in parsed {
             let Some(&idx) = by_graph.get(resource.resourceinstance.graph_id.as_str()) else {
                 continue;
