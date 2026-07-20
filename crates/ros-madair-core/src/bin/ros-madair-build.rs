@@ -27,7 +27,7 @@ use std::fs;
 use std::path::Path;
 use std::time::Instant;
 
-use alizarin_core::graph::{IndexedGraph, StaticGraph};
+use alizarin_core::graph::StaticGraph;
 use alizarin_core::loader::PrebuildLoader;
 
 use ros_madair_core::{
@@ -83,23 +83,19 @@ fn main() {
     println!("  Graphs: {} files", info.graph_files.len());
     println!("  Has business_data: {}", info.has_business_data);
 
-    // Load all graphs as IndexedGraphs (needed for node lookup and descriptor building)
-    let graphs_by_id: HashMap<String, IndexedGraph> = loader
+    // Load all graphs keyed by id (StaticGraph self-indexes for node lookup +
+    // descriptor building — no IndexedGraph wrapper).
+    let graphs: HashMap<String, StaticGraph> = loader
         .load_graphs_by_id()
         .unwrap_or_else(|e| {
             eprintln!("Failed to load graphs: {}", e);
             std::process::exit(1);
         });
-    println!("Loaded {} graphs:", graphs_by_id.len());
-    for (id, ig) in &graphs_by_id {
-        let name = ig.graph.name.get("en");
+    println!("Loaded {} graphs:", graphs.len());
+    for (id, g) in &graphs {
+        let name = g.name.get("en");
         println!("  {} — {}", id, name);
     }
-
-    // Consume IndexedGraphs → StaticGraphs early (needed for extract_resource_summary)
-    let graphs: HashMap<String, StaticGraph> = graphs_by_id.into_iter()
-        .map(|(id, ig)| (id, ig.graph))
-        .collect();
 
     // Load SKOS vocabularies
     let all_collections = loader.load_collections(base_uri).unwrap_or_else(|e| {
