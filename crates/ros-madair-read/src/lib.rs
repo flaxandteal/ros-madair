@@ -42,7 +42,7 @@ use std::sync::{Arc, Mutex};
 
 use alizarin_core::graph::{StaticGraph, StaticResourceMetadata};
 use alizarin_core::json_conversion::resource_tiles_to_tree;
-use alizarin_core::{IndexedGraph, StaticTile};
+use alizarin_core::StaticTile;
 use ros_madair_format::{decode_chunk, ChunkDecodeError, Manifest, FORMAT_VERSION};
 use rusqlite::{Connection, OpenFlags};
 
@@ -536,20 +536,20 @@ pub fn hydrate_resource(
 /// `merge_resources` does alone — it copies the first resource's descriptor
 /// wholesale, which for topmost-first layers would be the placeholder.)
 ///
-/// **Cost:** one `IndexedGraph` build per call (it clones the graph). Hydration
-/// is inherently a SINGLE-resource operation — a list of names is a query over
-/// `spine.display_name` (real since A1), not a hydrate per row — so this is not a
-/// hot path. Do not call it in a loop; if you need many, query instead.
+/// **Cost:** `build_descriptors` now runs on `&StaticGraph` directly — no graph
+/// clone per call (it used to build an `IndexedGraph`, cloning the whole graph
+/// plus every node, which made a fan-out of hydrations — e.g. `cited_by` then
+/// hydrate each citer — allocate megabytes per resource). Still a single-resource
+/// operation: a list of names is a query over `spine.display_name` (A1), not a
+/// hydrate per row.
 pub fn hydrate_tiles(
     tiles: &[StaticTile],
     uuid: &str,
     graph: &StaticGraph,
 ) -> Result<serde_json::Value, ReadError> {
-    // Re-derive the descriptor from the composed tiles (see the doc above).
-    // `build_descriptors` needs an IndexedGraph; there is no cheaper borrow-based
-    // path, and a single entry-view build is fine.
-    let indexed = IndexedGraph::new(graph.clone());
-    let descriptors = indexed.build_descriptors(tiles);
+    // Re-derive the descriptor from the composed tiles (see the doc above),
+    // directly on the borrowed graph — no clone.
+    let descriptors = graph.build_descriptors(tiles);
 
     let metadata = StaticResourceMetadata {
         graph_id: graph.graph_id().to_string(),

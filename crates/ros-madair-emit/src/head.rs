@@ -7,7 +7,7 @@ use std::collections::HashMap;
 
 use alizarin_core::skos::{SkosCollection, SkosConcept};
 use alizarin_core::{
-    datatype_index_spec, ExtensionTypeRegistry, IndexClass, IndexedGraph, StaticGraph,
+    datatype_index_spec, ExtensionTypeRegistry, IndexClass, StaticGraph,
     StaticResource, StaticTile,
 };
 use rusqlite::{Connection, Transaction};
@@ -291,13 +291,11 @@ pub(crate) fn create_spine_table(conn: &Connection, spine_table: &str) -> Result
 pub(crate) struct ModelCtx<'g> {
     node_datatype: HashMap<&'g str, &'g str>,
     node_config: HashMap<&'g str, serde_json::Value>,
-    /// Built once per model so the per-resource spine display_name can be the
-    /// EVALUATED descriptor template, not the raw literal. Cloning the graph
-    /// once per model is a fixed setup cost; it does not touch the per-resource
-    /// memory bound (only tiles stream). (A1: `spine.display_name` used to emit
-    /// the unrendered template, e.g. `'<Headword>'`, making the resource→
-    /// descriptor index structurally present but useless for display.)
-    indexed: IndexedGraph,
+    /// The model graph, borrowed — `build_descriptors` runs on `&StaticGraph`
+    /// directly, so evaluating the per-resource spine display_name (A1: the
+    /// EVALUATED descriptor template, not the raw `'<Headword>'` literal) needs no
+    /// graph clone. Borrowed for `'g`, like the node maps above.
+    graph: &'g StaticGraph,
 }
 
 impl<'g> ModelCtx<'g> {
@@ -317,7 +315,7 @@ impl<'g> ModelCtx<'g> {
         ModelCtx {
             node_datatype,
             node_config,
-            indexed: IndexedGraph::new(graph.clone()),
+            graph,
         }
     }
 
@@ -341,7 +339,7 @@ impl<'g> ModelCtx<'g> {
         raw_name: &str,
         registry: &ExtensionTypeRegistry,
     ) -> String {
-        let evaluated = self.indexed.build_descriptors_with_context(
+        let evaluated = self.graph.build_descriptors_with_context(
             tiles,
             &mut Vec::new(),
             None,
