@@ -52,13 +52,10 @@ fn extract_tiles_from_bytes(
 
     let blob_bytes = &file_bytes[start..end];
 
-    // Try v2 format (ResourceBlob { tiles, __cache, __scopes }) first,
-    // fall back to v1 (bare Vec<StaticTile>) for older indices.
-    let mut tiles: Vec<StaticTile> = match rmp_serde::from_slice::<ResourceBlob>(blob_bytes) {
-        Ok(blob) => blob.tiles,
-        Err(_) => rmp_serde::from_slice(blob_bytes)
-            .map_err(|e| TileSourceError::LoadError(format!("Msgpack error: {}", e)))?,
-    };
+    // v2 tile blob: ResourceBlob { tiles, __cache, __scopes }.
+    let mut tiles: Vec<StaticTile> = rmp_serde::from_slice::<ResourceBlob>(blob_bytes)
+        .map(|blob| blob.tiles)
+        .map_err(|e| TileSourceError::LoadError(format!("Msgpack error: {}", e)))?;
 
     if let Some(ng_id) = nodegroup_id {
         tiles.retain(|t| t.nodegroup_id == ng_id);
@@ -283,6 +280,16 @@ mod tests {
     use crate::uri::resource_uri;
     use std::collections::HashMap as StdHashMap;
 
+    /// Serialize tiles in the v2 blob format (ResourceBlob { tiles, .. }) the
+    /// builder writes — mirrors `build.rs`.
+    fn v2_blob(tiles: &[StaticTile]) -> Vec<u8> {
+        #[derive(serde::Serialize)]
+        struct ResourceBlobW<'a> {
+            tiles: &'a [StaticTile],
+        }
+        rmp_serde::to_vec_named(&ResourceBlobW { tiles }).unwrap()
+    }
+
     fn build_test_fixtures() -> (Dictionary, ResourceMap, HashMap<u32, Vec<u8>>, String) {
         let base_uri = "https://example.org/";
         let mut dict = Dictionary::new();
@@ -342,8 +349,8 @@ mod tests {
         ];
 
         // Serialize and write tile content file
-        let blob_001 = rmp_serde::to_vec_named(&tiles_001).unwrap();
-        let blob_002 = rmp_serde::to_vec_named(&tiles_002).unwrap();
+        let blob_001 = v2_blob(&tiles_001);
+        let blob_002 = v2_blob(&tiles_002);
 
         let mut entries: Vec<(u32, Vec<u8>)> = vec![(id_001, blob_001), (id_002, blob_002)];
         entries.sort_by_key(|(sid, _)| *sid);

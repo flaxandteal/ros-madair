@@ -393,14 +393,8 @@ impl LocalQueryEngine {
             scopes: Option<serde_json::Value>,
         }
 
-        let parsed = if header.version >= 2 {
-            rmp_serde::from_slice::<ResourceBlob>(blob)
-                .map_err(|e| format!("Failed to deserialize v2 tile blob: {e}"))?
-        } else {
-            let tiles: Vec<serde_json::Value> = rmp_serde::from_slice(blob)
-                .map_err(|e| format!("Failed to deserialize v1 tile data: {e}"))?;
-            ResourceBlob { tiles, cache: None, scopes: None }
-        };
+        let parsed = rmp_serde::from_slice::<ResourceBlob>(blob)
+            .map_err(|e| format!("Failed to deserialize v2 tile blob: {e}"))?;
 
         let filtered: Vec<&serde_json::Value> = match nodegroup_id {
             Some(ng_id) => parsed.tiles.iter()

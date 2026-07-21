@@ -20,7 +20,7 @@ use std::fs;
 use std::path::Path;
 use std::time::Instant;
 
-use alizarin_core::graph::{IndexedGraph, StaticResource};
+use alizarin_core::graph::{StaticGraph, StaticResource};
 use alizarin_core::loader::PrebuildLoader;
 
 use ros_madair_core::{
@@ -79,8 +79,9 @@ fn main() {
     println!("  Graphs: {} files", info.graph_files.len());
     println!("  Has business_data: {}", info.has_business_data);
 
-    // Load all graphs as IndexedGraphs (needed for node lookup and descriptor building)
-    let graphs_by_id: HashMap<String, IndexedGraph> = loader
+    // Load all graphs keyed by id (StaticGraph self-indexes for node lookup +
+    // descriptor building via its lazy indices)
+    let graphs_by_id: HashMap<String, StaticGraph> = loader
         .load_graphs_by_id()
         .unwrap_or_else(|e| {
             eprintln!("Failed to load graphs: {}", e);
@@ -88,7 +89,7 @@ fn main() {
         });
     println!("Loaded {} graphs:", graphs_by_id.len());
     for (id, ig) in &graphs_by_id {
-        let name = ig.graph.name.get("en");
+        let name = ig.name.get("en");
         println!("  {} — {}", id, name);
     }
 
@@ -169,7 +170,7 @@ fn main() {
                     if value.is_null() {
                         continue;
                     }
-                    let node = match graph.graph.get_node_by_id(node_id) {
+                    let node = match graph.get_node_by_id(node_id) {
                         Some(n) => n,
                         None => continue,
                     };
@@ -361,7 +362,7 @@ fn main() {
                 if value.is_null() {
                     continue;
                 }
-                let node = match graph.graph.get_node_by_id(node_id) {
+                let node = match graph.get_node_by_id(node_id) {
                     Some(n) => n,
                     None => continue,
                 };
@@ -455,7 +456,7 @@ fn main() {
 
     // Generate RDF triples for the N-Triples export
     for ig in graphs_by_id.values() {
-        if let Ok(schema_triples) = graph_schema_to_triples(&ig.graph, base_uri) {
+        if let Ok(schema_triples) = graph_schema_to_triples(ig, base_uri) {
             all_triples.extend(schema_triples);
         }
     }
@@ -467,7 +468,7 @@ fn main() {
         };
         let tiles = resource.tiles.as_deref().unwrap_or_default();
         match ros_madair_core::resource_to_triples(
-            &graph.graph,
+            graph,
             &resource.resourceinstance.resourceinstanceid,
             tiles,
             base_uri,
@@ -516,7 +517,7 @@ fn main() {
             .to_string();
         let slug = descriptors.slug.clone().unwrap_or_default();
         let model = graphs_by_id.get(graph_id.as_str())
-            .map(|g| g.graph.name.get("en"))
+            .map(|g| g.name.get("en"))
             .unwrap_or_default();
         page_resource_meta.entry(page_id).or_default().push(ResourceMeta {
             dict_id,
@@ -596,7 +597,21 @@ fn main() {
             None => continue,
         };
 
-        let blob = rmp_serde::to_vec_named(tiles).expect("Failed to serialize tiles to msgpack");
+        // v2 tile blob with cache + scopes — mirrors build.rs
+        #[derive(serde::Serialize)]
+        struct ResourceBlob<'a> {
+            tiles: &'a [alizarin_core::graph::StaticTile],
+            #[serde(skip_serializing_if = "Option::is_none", rename = "__cache")]
+            cache: Option<&'a serde_json::Value>,
+            #[serde(skip_serializing_if = "Option::is_none", rename = "__scopes")]
+            scopes: Option<&'a serde_json::Value>,
+        }
+        let blob = ResourceBlob {
+            tiles,
+            cache: resource.cache.as_ref(),
+            scopes: resource.scopes.as_ref(),
+        };
+        let blob = rmp_serde::to_vec_named(&blob).expect("Failed to serialize tiles to msgpack");
         page_tile_entries.entry(page_id).or_default().push((subject_id, blob));
     }
 

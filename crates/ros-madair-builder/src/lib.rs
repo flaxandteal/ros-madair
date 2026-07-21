@@ -420,7 +420,14 @@ impl IndexReader {
             None => return Ok(None),
         };
 
-        let tiles: Vec<StaticTile> = rmp_serde::from_slice(&blob)
+        // v2 tile blob: ResourceBlob { tiles, __cache, __scopes } (msgpack map).
+        // __cache/__scopes are ignored here — serde skips unknown fields.
+        #[derive(serde::Deserialize)]
+        struct ResourceBlob {
+            tiles: Vec<StaticTile>,
+        }
+        let tiles: Vec<StaticTile> = rmp_serde::from_slice::<ResourceBlob>(&blob)
+            .map(|rb| rb.tiles)
             .map_err(|e| PyValueError::new_err(format!("Failed to decode msgpack tiles: {e}")))?;
 
         let json = serde_json::to_string(&tiles)
