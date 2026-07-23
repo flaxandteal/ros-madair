@@ -508,6 +508,44 @@ impl IndexReader {
         }
     }
 
+    /// Resources that link *to* `target_uri` through the link node `pred_alias`
+    /// — the reverse of `query`.
+    ///
+    /// Answered from the target's own page (the P12 reverse index): a
+    /// single-page lookup, independent of how many citers exist or where they
+    /// live. `layer` is accepted for API symmetry; the base layer is used.
+    /// Returns citer resource IDs (bare UUIDs).
+    #[pyo3(signature = (pred_alias, target_uri, layer=None))]
+    fn cited_by(&self, pred_alias: &str, target_uri: &str, layer: Option<&str>) -> PyResult<Vec<String>> {
+        let _ = layer;
+        let engine = self.build_engine()
+            .map_err(|e| PyValueError::new_err(format!("Engine error: {e}")))?;
+        let uris = engine.cited_by(pred_alias, target_uri)
+            .map_err(|e| PyValueError::new_err(format!("Query error: {e}")))?;
+        Ok(self.uris_to_resource_ids(&uris))
+    }
+
+    /// Everything that links to `target_uri`, across all link fields ("what
+    /// references X"). Single-page lookup on the target's page. Returns a JSON
+    /// array of `{"resource": <id>, "field": <alias>}`. Base layer only.
+    #[pyo3(signature = (target_uri, layer=None))]
+    fn cited_by_any(&self, target_uri: &str, layer: Option<&str>) -> PyResult<String> {
+        let _ = layer;
+        let engine = self.build_engine()
+            .map_err(|e| PyValueError::new_err(format!("Engine error: {e}")))?;
+        let pairs = engine.cited_by_any(target_uri)
+            .map_err(|e| PyValueError::new_err(format!("Query error: {e}")))?;
+        let out: Vec<serde_json::Value> = pairs
+            .into_iter()
+            .map(|(uri, field)| {
+                let rid = self.uris_to_resource_ids(&[uri]).into_iter().next().unwrap_or_default();
+                serde_json::json!({ "resource": rid, "field": field })
+            })
+            .collect();
+        serde_json::to_string(&out)
+            .map_err(|e| PyValueError::new_err(format!("Serialize error: {e}")))
+    }
+
     /// Multi-pattern query (compound filters, AND logic).
     ///
     /// `patterns_json` is a JSON array of objects, each with:
