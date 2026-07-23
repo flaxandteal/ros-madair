@@ -476,6 +476,38 @@ impl IndexReader {
         }
     }
 
+    /// Exact count of resources matching a predicate (and optional object URI).
+    ///
+    /// Same resolution as [`query`] (concept-DFS, links, literals) but returns
+    /// only the count — it does not materialise resource-ID strings or read any
+    /// tiles. Use this instead of `len(query(...))` when only the total is
+    /// needed. (The summary carries page-level `subject_count`s for cheap
+    /// *estimates*; this method returns the *exact* subject count.)
+    #[pyo3(signature = (pred_alias, object_uri=None, layer=None))]
+    fn count(&self, pred_alias: &str, object_uri: Option<&str>, layer: Option<&str>) -> PyResult<u64> {
+        let engine = self.build_engine()
+            .map_err(|e| PyValueError::new_err(format!("Engine error: {e}")))?;
+
+        if self.extra_layers.is_empty() && layer.is_none() {
+            let subject_ids = engine.query_predicate(pred_alias, object_uri)
+                .map_err(|e| PyValueError::new_err(format!("Query error: {e}")))?;
+            Ok(subject_ids.len() as u64)
+        } else {
+            let pred_full = ros_madair_core::uri::node_uri(&self.base_uri, pred_alias);
+            let pattern = ros_madair_core::TriplePattern {
+                subject: ros_madair_core::PatternTerm::Variable("s".into()),
+                predicate: ros_madair_core::PatternTerm::Uri(pred_full),
+                object: match object_uri {
+                    Some(u) => ros_madair_core::PatternTerm::Uri(u.to_string()),
+                    None => ros_madair_core::PatternTerm::Variable("o".into()),
+                },
+            };
+            let uris = engine.query_patterns_multi(&[pattern], layer)
+                .map_err(|e| PyValueError::new_err(format!("Query error: {e}")))?;
+            Ok(uris.len() as u64)
+        }
+    }
+
     /// Multi-pattern query (compound filters, AND logic).
     ///
     /// `patterns_json` is a JSON array of objects, each with:
