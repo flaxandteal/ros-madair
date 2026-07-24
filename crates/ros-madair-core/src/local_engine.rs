@@ -385,6 +385,81 @@ impl LocalQueryEngine {
         Ok(out)
     }
 
+    /// Resources whose date field `pred_alias` falls in `[from, to]` (inclusive).
+    ///
+    /// Dates are quantized to days-since-epoch (the same bucketing the build
+    /// uses), so this is an exact indexed range — the summary selects only the
+    /// subject pages holding in-range records, which are then filtered on the
+    /// sorted `object_val`. `from`/`to` are `YYYY[-MM[-DD]]`; either may be
+    /// `None` for an open-ended range. Base layer only. Returns subject URIs.
+    pub fn query_date_range(
+        &self,
+        pred_alias: &str,
+        from: Option<&str>,
+        to: Option<&str>,
+    ) -> Result<Vec<String>, String> {
+        let layer = &self.layers[0];
+        let pred_full = node_uri(&layer.base_uri, pred_alias);
+        let pred_id = match layer.dict.lookup(&pred_full) {
+            Some(id) => id,
+            None => return Ok(Vec::new()),
+        };
+        let lo = match from {
+            Some(s) => crate::quantize::quantize_date(s)
+                .ok_or_else(|| format!("Unparseable from-date: {s:?}"))?,
+            None => u32::MIN,
+        };
+        let hi = match to {
+            Some(s) => crate::quantize::quantize_date(s)
+                .ok_or_else(|| format!("Unparseable to-date: {s:?}"))?,
+            None => u32::MAX,
+        };
+        if lo > hi {
+            return Err(format!("from-date is after to-date ({lo} > {hi})"));
+        }
+        // Summary: which subject pages hold records whose quantized value is in
+        // range (page_o is the quantized day for literal predicates).
+        let mut pages: Vec<u32> = layer
+            .summary
+            .lookup_op_range(lo, hi, pred_id)
+            .iter()
+            .map(|q| q.page_s)
+            .collect();
+        pages.sort_unstable();
+        pages.dedup();
+        if pages.is_empty() {
+            return Ok(Vec::new());
+        }
+        let plan = crate::query::FetchPlan {
+            pages: pages
+                .iter()
+                .map(|&p| crate::query::PageFetchSpec {
+                    page_id: p,
+                    predicates: vec![pred_id],
+                })
+                .collect(),
+            estimated_bytes: 0,
+            summary_result: None,
+        };
+        let records = load_plan_records(layer, &plan)?;
+        let mut subjects: std::collections::BTreeSet<u32> = std::collections::BTreeSet::new();
+        for &page in &pages {
+            if let Some(recs) = records.get(&(page, pred_id)) {
+                // records are sorted by object_val, so the in-range slice is a
+                // pair of partition points.
+                let start = recs.partition_point(|r| r.object_val < lo);
+                let end = recs[start..].partition_point(|r| r.object_val <= hi) + start;
+                for rec in &recs[start..end] {
+                    subjects.insert(rec.subject_id);
+                }
+            }
+        }
+        Ok(subjects
+            .iter()
+            .filter_map(|&id| layer.dict.resolve(id).map(String::from))
+            .collect())
+    }
+
     /// Borrow the dictionary (base layer).
     pub fn dictionary(&self) -> &Dictionary {
         &self.layers[0].dict

@@ -546,6 +546,27 @@ impl IndexReader {
             .map_err(|e| PyValueError::new_err(format!("Serialize error: {e}")))
     }
 
+    /// Resources whose date field `pred_alias` falls in `[date_from, date_to]`
+    /// (inclusive; `YYYY[-MM[-DD]]`; either bound may be None for open-ended).
+    ///
+    /// Exact indexed date range — summary-selected pages, filtered on the
+    /// quantized day value. Base layer only. Returns resource IDs (bare UUIDs).
+    #[pyo3(signature = (pred_alias, date_from=None, date_to=None, layer=None))]
+    fn query_date_range(
+        &self,
+        pred_alias: &str,
+        date_from: Option<&str>,
+        date_to: Option<&str>,
+        layer: Option<&str>,
+    ) -> PyResult<Vec<String>> {
+        let _ = layer;
+        let engine = self.build_engine()
+            .map_err(|e| PyValueError::new_err(format!("Engine error: {e}")))?;
+        let uris = engine.query_date_range(pred_alias, date_from, date_to)
+            .map_err(|e| PyValueError::new_err(format!("Query error: {e}")))?;
+        Ok(self.uris_to_resource_ids(&uris))
+    }
+
     /// Multi-pattern query (compound filters, AND logic).
     ///
     /// `patterns_json` is a JSON array of objects, each with:
