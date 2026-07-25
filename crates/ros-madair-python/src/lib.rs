@@ -172,10 +172,30 @@ fn hydrate_tiles(head_dir: String, uuid: String) -> PyResult<String> {
         .map_err(|e| PyValueError::new_err(format!("serialize error: {e}")))
 }
 
+/// Hydrate many resources in one call — opens the head once and shares a chunk
+/// cache across the batch (a chunk touched by an earlier resource is not re-read).
+/// Returns a JSON object mapping each found uuid to its `StaticTile` array;
+/// missing uuids are omitted. Far cheaper than N `hydrate_tiles` calls, which
+/// each reopen the head.
+#[pyfunction]
+fn hydrate_many(head_dir: String, uuids: Vec<String>) -> PyResult<String> {
+    let pairs = ros_madair_read::hydrate_many(std::path::Path::new(&head_dir), &uuids)
+        .map_err(|e| PyValueError::new_err(format!("hydrate error: {e}")))?;
+    let mut map = serde_json::Map::with_capacity(pairs.len());
+    for (uuid, tiles) in pairs {
+        let val = serde_json::to_value(&tiles)
+            .map_err(|e| PyValueError::new_err(format!("serialize error: {e}")))?;
+        map.insert(uuid, val);
+    }
+    serde_json::to_string(&serde_json::Value::Object(map))
+        .map_err(|e| PyValueError::new_err(format!("serialize error: {e}")))
+}
+
 #[pymodule]
 fn ros_madair_v2(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<Graph>()?;
     m.add_function(wrap_pyfunction!(compile_query, m)?)?;
     m.add_function(wrap_pyfunction!(hydrate_tiles, m)?)?;
+    m.add_function(wrap_pyfunction!(hydrate_many, m)?)?;
     Ok(())
 }

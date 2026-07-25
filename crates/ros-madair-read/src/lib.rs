@@ -471,6 +471,72 @@ pub(crate) fn resource_tiles_cached(
     Ok(tiles)
 }
 
+/// Hydrate many resources with **one** head connection and — the point — each
+/// needed chunk **decoded once**, its tiles bucketed to every requested resource
+/// in it. A chunk packs ~256 tiles from many resources, so the per-resource path
+/// re-decodes shared chunks N times; this collapses that to one decode per chunk.
+/// Missing UUIDs are skipped. Returns `(uuid, tiles)` for each resource found,
+/// in input order.
+pub fn hydrate_many(
+    head_dir: &Path,
+    uuids: &[String],
+) -> Result<Vec<(String, Vec<StaticTile>)>, ReadError> {
+    use std::collections::{BTreeSet, HashMap};
+
+    let conn = open_head(head_dir)?;
+
+    // uuid -> tiles bucket (only for requested resources), and the union of the
+    // chunk hashes that hold any of their tiles.
+    let mut buckets: HashMap<&str, Vec<StaticTile>> =
+        uuids.iter().map(|u| (u.as_str(), Vec::new())).collect();
+    let mut hashes: BTreeSet<String> = BTreeSet::new();
+
+    let mut stmt = conn.prepare(
+        "SELECT DISTINCT c.hash FROM fragment_dir f \
+         JOIN chunks c ON c.chunk = f.chunk WHERE f.rid = ?1",
+    )?;
+    for uuid in uuids {
+        let rid = match resolve_rid(&conn, head_dir, uuid, None) {
+            Ok(rid) => rid,
+            Err(ReadError::UnknownResource(_)) => continue,
+            Err(e) => return Err(e),
+        };
+        for hash in stmt.query_map([rid], |r| r.get::<_, String>(0))? {
+            hashes.insert(hash?);
+        }
+    }
+
+    // Decode each unique chunk once; hand each tile to its resource's bucket.
+    for hash in &hashes {
+        let bytes = read_chunk_bytes(head_dir, hash, None)?;
+        let chunk = decode_chunk(bytes.as_slice()).map_err(|source| ReadError::Chunk {
+            hash: hash.clone(),
+            source,
+        })?;
+        for tile in chunk {
+            if let Some(bucket) = buckets.get_mut(&*tile.resourceinstance_id) {
+                bucket.push(tile.into());
+            }
+        }
+    }
+
+    let mut out = Vec::with_capacity(uuids.len());
+    for uuid in uuids {
+        if let Some(mut tiles) = buckets.remove(uuid.as_str()) {
+            if tiles.is_empty() {
+                continue;
+            }
+            tiles.sort_by(|a, b| {
+                (a.nodegroup_id.as_str(), a.tileid.as_deref())
+                    .cmp(&(b.nodegroup_id.as_str(), b.tileid.as_deref()))
+            });
+            out.push((uuid.clone(), tiles));
+        }
+    }
+    Ok(out)
+}
+
+
 /// Chunk bytes via the cache if one is supplied (P15), else a direct read.
 /// Returns an `Arc` either way so callers share one representation.
 pub(crate) fn read_chunk_bytes(
