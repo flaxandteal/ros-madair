@@ -536,6 +536,102 @@ pub fn hydrate_many(
     Ok(out)
 }
 
+/// [`hydrate_many`] restricted to specific nodegroups — targeted extraction.
+///
+/// Reads only the chunks that `fragment_dir` says hold the requested nodegroups
+/// for the requested resources (a wide resource's other nodegroups' chunks are
+/// never touched or decoded), and returns only those nodegroups' tiles. This is
+/// the v2 analogue of alizarin's `get_values_at_path`: to read one field you
+/// pay for one nodegroup, not the whole resource. `nodegroups` are node-group
+/// UUIDs; empty means "all" (delegates to [`hydrate_many`]).
+pub fn hydrate_nodegroups(
+    head_dir: &Path,
+    uuids: &[String],
+    nodegroups: &[String],
+) -> Result<Vec<(String, Vec<StaticTile>)>, ReadError> {
+    use std::collections::{BTreeSet, HashMap, HashSet};
+
+    if nodegroups.is_empty() {
+        return hydrate_many(head_dir, uuids);
+    }
+    let conn = open_head(head_dir)?;
+
+    // nodegroup uuids -> dict term ids (fragment_dir.nodegroup is interned).
+    let mut ng_tids: Vec<i64> = Vec::with_capacity(nodegroups.len());
+    for ng in nodegroups {
+        if let Ok(tid) =
+            conn.query_row("SELECT term_id FROM dict WHERE term = ?1", [ng], |r| r.get::<_, i64>(0))
+        {
+            ng_tids.push(tid);
+        }
+    }
+    if ng_tids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let ng_set: HashSet<&str> = nodegroups.iter().map(|s| s.as_str()).collect();
+
+    let placeholders = (2..2 + ng_tids.len())
+        .map(|i| format!("?{i}"))
+        .collect::<Vec<_>>()
+        .join(",");
+    let sql = format!(
+        "SELECT DISTINCT c.hash FROM fragment_dir f JOIN chunks c ON c.chunk = f.chunk \
+         WHERE f.rid = ?1 AND f.nodegroup IN ({placeholders})",
+    );
+    let mut stmt = conn.prepare(&sql)?;
+
+    let mut buckets: HashMap<&str, Vec<StaticTile>> =
+        uuids.iter().map(|u| (u.as_str(), Vec::new())).collect();
+    let mut hashes: BTreeSet<String> = BTreeSet::new();
+    for uuid in uuids {
+        let rid = match resolve_rid(&conn, head_dir, uuid, None) {
+            Ok(rid) => rid,
+            Err(ReadError::UnknownResource(_)) => continue,
+            Err(e) => return Err(e),
+        };
+        let mut params: Vec<i64> = Vec::with_capacity(1 + ng_tids.len());
+        params.push(rid);
+        params.extend(&ng_tids);
+        for hash in stmt.query_map(rusqlite::params_from_iter(params.iter()), |r| {
+            r.get::<_, String>(0)
+        })? {
+            hashes.insert(hash?);
+        }
+    }
+
+    // Decode each selected chunk once; keep only tiles for a requested resource
+    // AND a requested nodegroup (a chunk may pack other nodegroups too).
+    for hash in &hashes {
+        let bytes = read_chunk_bytes(head_dir, hash, None)?;
+        let chunk = decode_chunk(bytes.as_slice()).map_err(|source| ReadError::Chunk {
+            hash: hash.clone(),
+            source,
+        })?;
+        for tile in chunk {
+            if ng_set.contains(&*tile.nodegroup_id) {
+                if let Some(bucket) = buckets.get_mut(&*tile.resourceinstance_id) {
+                    bucket.push(tile.into());
+                }
+            }
+        }
+    }
+
+    let mut out = Vec::with_capacity(uuids.len());
+    for uuid in uuids {
+        if let Some(mut tiles) = buckets.remove(uuid.as_str()) {
+            if tiles.is_empty() {
+                continue;
+            }
+            tiles.sort_by(|a, b| {
+                (a.nodegroup_id.as_str(), a.tileid.as_deref())
+                    .cmp(&(b.nodegroup_id.as_str(), b.tileid.as_deref()))
+            });
+            out.push((uuid.clone(), tiles));
+        }
+    }
+    Ok(out)
+}
+
 
 /// Chunk bytes via the cache if one is supplied (P15), else a direct read.
 /// Returns an `Arc` either way so callers share one representation.

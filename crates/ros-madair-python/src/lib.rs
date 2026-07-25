@@ -191,11 +191,35 @@ fn hydrate_many(head_dir: String, uuids: Vec<String>) -> PyResult<String> {
         .map_err(|e| PyValueError::new_err(format!("serialize error: {e}")))
 }
 
+/// [`hydrate_many`] restricted to specific node-group UUIDs — targeted
+/// extraction. Reads only the chunks holding those nodegroups (a wide
+/// resource's other nodegroups are never decoded) and returns only their tiles.
+/// Empty `nodegroups` means all. Returns `{uuid: tiles}`.
+#[pyfunction]
+fn hydrate_nodegroups(
+    head_dir: String,
+    uuids: Vec<String>,
+    nodegroups: Vec<String>,
+) -> PyResult<String> {
+    let pairs =
+        ros_madair_read::hydrate_nodegroups(std::path::Path::new(&head_dir), &uuids, &nodegroups)
+            .map_err(|e| PyValueError::new_err(format!("hydrate error: {e}")))?;
+    let mut map = serde_json::Map::with_capacity(pairs.len());
+    for (uuid, tiles) in pairs {
+        let val = serde_json::to_value(&tiles)
+            .map_err(|e| PyValueError::new_err(format!("serialize error: {e}")))?;
+        map.insert(uuid, val);
+    }
+    serde_json::to_string(&serde_json::Value::Object(map))
+        .map_err(|e| PyValueError::new_err(format!("serialize error: {e}")))
+}
+
 #[pymodule]
 fn ros_madair_v2(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<Graph>()?;
     m.add_function(wrap_pyfunction!(compile_query, m)?)?;
     m.add_function(wrap_pyfunction!(hydrate_tiles, m)?)?;
     m.add_function(wrap_pyfunction!(hydrate_many, m)?)?;
+    m.add_function(wrap_pyfunction!(hydrate_nodegroups, m)?)?;
     Ok(())
 }
