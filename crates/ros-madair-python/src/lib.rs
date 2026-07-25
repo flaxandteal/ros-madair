@@ -160,9 +160,22 @@ fn compile_query(
     graph.compile(ir_json, manifest_json)
 }
 
+/// Hydrate a resource's tiles from a v2 head directory (fragment_dir + chunks),
+/// returned as a JSON array of `StaticTile` — feed straight to
+/// `alizarin.build_tree_from_tiles`. No graph needed: `resource_tiles` reads the
+/// head's fragment_dir and the content-addressed chunks directly.
+#[pyfunction]
+fn hydrate_tiles(head_dir: String, uuid: String) -> PyResult<String> {
+    let tiles = ros_madair_read::resource_tiles(std::path::Path::new(&head_dir), &uuid)
+        .map_err(|e| PyValueError::new_err(format!("hydrate error: {e}")))?;
+    serde_json::to_string(&tiles)
+        .map_err(|e| PyValueError::new_err(format!("serialize error: {e}")))
+}
+
 #[pymodule]
 fn ros_madair_v2(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<Graph>()?;
     m.add_function(wrap_pyfunction!(compile_query, m)?)?;
+    m.add_function(wrap_pyfunction!(hydrate_tiles, m)?)?;
     Ok(())
 }
