@@ -31,6 +31,7 @@
 //! parse + `build_indices` is paid once, at handle construction, and every
 //! subsequent `compile` borrows the already-indexed graph.
 
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use pyo3::exceptions::PyValueError;
@@ -38,6 +39,7 @@ use pyo3::prelude::*;
 
 use alizarin_core::extension_type_registry::ExtensionTypeRegistry;
 use alizarin_core::graph::StaticGraph;
+use alizarin_core::{GraphModelAccess, ResourceInstanceWrapperCore};
 use ros_madair_handlers::HandlerDecl;
 use ros_madair_query::{compile_with_registry, Query};
 
@@ -214,9 +216,115 @@ fn hydrate_nodegroups(
         .map_err(|e| PyValueError::new_err(format!("serialize error: {e}")))
 }
 
+/// A lazily-hydrated resource from a v2 head — **Option C**: the resolve → fetch
+/// → merge → read loop runs entirely IN RUST, inside this one cdylib (which links
+/// BOTH `ros_madair_read` and `alizarin_core`). Touching a path fetches only that
+/// path's nodegroup from the head, in-process — no Python round-trip and no
+/// per-nodegroup JSON marshalling (tiles stay `Vec<StaticTile>` the whole way).
+///
+/// Hold one per resource and reuse it: it accumulates nodegroups as paths are
+/// touched (the in-loop pattern), exactly what the Python-orchestrated B path did
+/// across the cdylib wall, but without paying that wall's cost.
+#[pyclass]
+pub struct HeadResource {
+    head_dir: PathBuf,
+    uuid: String,
+    inner: ResourceInstanceWrapperCore,
+    model: GraphModelAccess,
+    fully_loaded: bool,
+}
+
+#[pymethods]
+impl HeadResource {
+    /// Build from a head directory, a parsed [`Graph`], and a resource UUID. No
+    /// tiles are loaded yet — they arrive per nodegroup, on demand.
+    #[new]
+    fn new(head_dir: String, graph: PyRef<Graph>, uuid: String) -> PyResult<Self> {
+        let g = graph.inner.clone();
+        let graph_id = g.graph_id().to_string();
+        let model = GraphModelAccess::new_eager(g, true);
+        let inner = ResourceInstanceWrapperCore::new(graph_id);
+        Ok(HeadResource {
+            head_dir: PathBuf::from(head_dir),
+            uuid,
+            inner,
+            model,
+            fully_loaded: false,
+        })
+    }
+
+    /// The path's display value(s) as JSON `{"is_single": bool, "values": [...]}`.
+    /// Lazily loads the nodegroup the path needs (single segment), or the whole
+    /// resource once (nested path), before reading — all in Rust.
+    fn get_values_at_path(&mut self, path: String) -> PyResult<String> {
+        self.ensure_loaded(&path)?;
+        let pl = self
+            .inner
+            .get_values_at_path(&path, &self.model, None)
+            .map_err(|e| PyValueError::new_err(e.to_string()))?;
+        let values: Vec<serde_json::Value> = pl
+            .values
+            .iter()
+            .map(|v| v.serialize_display("en", None, None, None))
+            .collect();
+        let out = serde_json::json!({ "is_single": pl.is_single, "values": values });
+        Ok(out.to_string())
+    }
+
+    /// Nodegroup UUIDs currently hydrated into this resource (for tests/inspection).
+    fn loaded_nodegroups(&self) -> Vec<String> {
+        self.inner.nodegroup_index.keys().cloned().collect()
+    }
+
+    /// Whether the whole resource has been hydrated (a nested-path fallback fired).
+    fn is_fully_loaded(&self) -> bool {
+        self.fully_loaded
+    }
+}
+
+impl HeadResource {
+    /// Ensure the tiles `path` needs are loaded. Single segment → fetch just that
+    /// nodegroup from the head and merge it (lazy); nested path (or an unresolved
+    /// one) → full hydrate, once. All fetching is `ros_madair_read`, in-process.
+    fn ensure_loaded(&mut self, path: &str) -> PyResult<()> {
+        if !path.contains('.') {
+            if let Ok(info) = self.inner.resolve_path(path, &self.model) {
+                let ng = info.nodegroup_id;
+                if self.inner.is_nodegroup_loaded(&ng) {
+                    return Ok(());
+                }
+                let pairs = ros_madair_read::hydrate_nodegroups(
+                    &self.head_dir,
+                    &[self.uuid.clone()],
+                    &[ng.clone()],
+                )
+                .map_err(|e| PyValueError::new_err(e.to_string()))?;
+                if let Some((_, tiles)) = pairs.into_iter().next() {
+                    self.inner.merge_tiles(tiles);
+                }
+                self.inner.mark_nodegroup_loaded(&ng);
+                return Ok(());
+            }
+        }
+        if self.fully_loaded {
+            return Ok(());
+        }
+        let tiles = ros_madair_read::resource_tiles(&self.head_dir, &self.uuid)
+            .map_err(|e| PyValueError::new_err(e.to_string()))?;
+        self.inner.merge_tiles(tiles);
+        let ngs: Vec<String> = self.inner.nodegroup_index.keys().cloned().collect();
+        for ng in ngs {
+            self.inner.mark_nodegroup_loaded(&ng);
+        }
+        self.fully_loaded = true;
+        Ok(())
+    }
+}
+
 #[pymodule]
 fn ros_madair_v2(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<Graph>()?;
+    m.add_class::<HeadResource>()?;
     m.add_function(wrap_pyfunction!(compile_query, m)?)?;
     m.add_function(wrap_pyfunction!(hydrate_tiles, m)?)?;
     m.add_function(wrap_pyfunction!(hydrate_many, m)?)?;
