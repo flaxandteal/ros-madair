@@ -130,6 +130,12 @@ fn geo_centre(resource: &StaticResource, node: &str) -> Option<(f64, f64)> {
 /// model is `Geo` and any resource carried a geometry) — the Hilbert grid is
 /// stretched to it, so a city-scale corpus uses the full curve resolution rather
 /// than a speck of a global grid.
+// Superseded by the streaming probe path (`probe` + `sort_probes`), which the
+// emitter now uses instead of sorting whole resources. Retained as the canonical
+// reference the probe path must match — that equivalence is pinned by the
+// snapshot-id verification over real corpora (id-order via tearma, Hilbert via the
+// place layer), not by a live caller.
+#[allow(dead_code)]
 fn locality_key(
     resource: &StaticResource,
     kind: &LocalityKind,
@@ -249,6 +255,7 @@ mod tests {
 /// passes call `sort_by_locality` on the identical resource set for a file, so
 /// each computes the SAME extents — the Hilbert keys, and hence the order, match
 /// (determinism, and A9's interning==chunking invariant).
+#[allow(dead_code)] // reference impl; see note on `locality_key`
 fn geo_extents(
     resources: &[StaticResource],
     by_graph: &HashMap<&str, usize>,
@@ -301,6 +308,7 @@ fn hilbert_xy2d(order: u32, mut x: u64, mut y: u64) -> u64 {
 /// only compared within a model), then by locality key, then by id (a total order
 /// — no reliance on sort stability). A model with no locality field contributes a
 /// constant key, so its resources keep their relative (id) order.
+#[allow(dead_code)] // reference impl; see note on `locality_key`
 pub(crate) fn sort_by_locality(
     resources: &mut [StaticResource],
     by_graph: &HashMap<&str, usize>,
@@ -322,4 +330,86 @@ pub(crate) fn sort_by_locality(
             r.resourceinstance.resourceinstanceid.clone(),
         )
     });
+}
+
+// ============================================================================
+// Streaming-friendly variant (memory-bounded emit)
+// ============================================================================
+//
+// `sort_by_locality` needs every `StaticResource` resident to sort them. The
+// streaming emit instead collects a tiny [`Probe`] per resource (id + the one
+// locality field, a few dozen bytes) while scanning the file, then orders the
+// PROBES with [`sort_probes`] and seeks the resources back in that order. The
+// order it produces is byte-identical to sorting the resources directly — the
+// extent is computed from the same centres, the key from the same formula, the
+// tiebreak from the same id — so the snapshot id is unchanged.
+
+/// A minimal locality fingerprint for one resource, collected in the streaming
+/// pass so the emitter can order disk offsets without holding whole resources.
+/// `centre` is the geometry bbox centre (geo models); `date` is the quantized day
+/// (date models); both `None` for no-locality models or resources missing the
+/// field — those sort last, in id order, exactly as in `sort_by_locality`.
+pub(crate) struct Probe {
+    pub group: usize,
+    pub id: String,
+    pub centre: Option<(f64, f64)>,
+    pub date: Option<i64>,
+}
+
+/// Extract a [`Probe`] for `resource` (already known to belong to model `group`,
+/// whose ordering is `kind`). Reads exactly the fields `sort_by_locality` reads —
+/// `geo_centre` for geo, the quantized date for date — so probe order reproduces
+/// resource order.
+pub(crate) fn probe(resource: &StaticResource, group: usize, kind: &LocalityKind) -> Probe {
+    let (centre, date) = match kind {
+        LocalityKind::None => (None, None),
+        LocalityKind::Geo(node) => (geo_centre(resource, node), None),
+        LocalityKind::Date(node) => {
+            let d = resource
+                .tiles
+                .as_deref()
+                .and_then(|ts| ts.iter().find_map(|t| t.data.get(node.as_str())))
+                .filter(|v| !v.is_null())
+                .and_then(|v| v.as_str())
+                .and_then(alizarin_core::quantize::quantize_date);
+            (None, d)
+        }
+    };
+    Probe {
+        group,
+        id: resource.resourceinstance.resourceinstanceid.clone(),
+        centre,
+        date,
+    }
+}
+
+/// Order the indices of `probes` the SAME way `sort_by_locality` orders the
+/// resources they came from: grouped by model, then locality key, then id. Geo
+/// extents are recomputed from the probes' own centres — identical to
+/// `geo_extents` over the same set — so a geo model's Hilbert keys, and the order,
+/// match the whole-parse path. Callers pass a per-file probe set (mirroring the
+/// current per-file `sort_by_locality`), keeping cross-file order untouched.
+pub(crate) fn sort_probes(probes: &[Probe]) -> Vec<usize> {
+    let mut extents: HashMap<usize, Extent> = HashMap::new();
+    for p in probes {
+        if let Some((cx, cy)) = p.centre {
+            let e = extents.entry(p.group).or_insert((cx, cy, cx, cy));
+            e.0 = e.0.min(cx);
+            e.1 = e.1.min(cy);
+            e.2 = e.2.max(cx);
+            e.3 = e.3.max(cy);
+        }
+    }
+    let mut idx: Vec<usize> = (0..probes.len()).collect();
+    idx.sort_by_cached_key(|&i| {
+        let p = &probes[i];
+        // Geo key needs the group extent; date key is already computed; no field
+        // ⇒ None (sorts last). Same precedence as `locality_key`.
+        let key: Option<i64> = match p.centre {
+            Some((cx, cy)) => extents.get(&p.group).map(|e| hilbert_key(cx, cy, e)),
+            None => p.date,
+        };
+        (p.group as i64, key.is_none(), key.unwrap_or(0), p.id.clone())
+    });
+    idx
 }

@@ -42,7 +42,11 @@ use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::Path;
 
-use alizarin_core::{parse_business_data_bytes, ExtensionTypeRegistry};
+use alizarin_core::graph::StaticResource;
+use alizarin_core::{
+    parse_business_data_bytes, parse_business_data_resource_bytes, stream_business_data_resources,
+    ExtensionTypeRegistry,
+};
 use rusqlite::Connection;
 
 mod chunks;
@@ -65,6 +69,24 @@ pub use ros_madair_format::{
 };
 
 pub type EmitError = Box<dyn std::error::Error>;
+
+/// A progress signal from a running emit, delivered to the `on_progress` sink of
+/// [`emit_with_progress`]. **Side-effect-only** — observing progress does not
+/// change the artifact, so the snapshot id is identical whether or not anything
+/// is listening.
+///
+/// NOTE: progress does NOT reflect peak memory. Over a single large prebuild file
+/// the input parse dominates RSS and happens up front (before streaming ticks);
+/// this reports *work done*, not *memory used*. See `HANDOFF-streaming-build.md`.
+#[derive(Debug, Clone)]
+pub enum EmitProgress {
+    /// A named phase began: `"loading"`, `"interning"`, `"streaming"`,
+    /// `"finalizing"`.
+    Phase(&'static str),
+    /// `done` of `total` resources streamed. `total` is known after the interning
+    /// pass; fired at a coarse cadence (~100 ticks over the run), not per resource.
+    Streaming { done: usize, total: usize },
+}
 
 /// Emit-time options (M1 item 6): tier exclusions. `Default` reproduces the
 /// plain single-tier emit.
@@ -125,9 +147,43 @@ pub fn emit_with_options(
     options: &EmitOptions,
     registry: &ExtensionTypeRegistry,
 ) -> Result<EmitSummary, EmitError> {
+    // No progress reporting: a sink that never observes and never cancels.
+    emit_with_progress(data_dir, out_dir, base_uri, options, registry, &mut |_| {
+        std::ops::ControlFlow::Continue(())
+    })
+}
+
+/// Like [`emit_with_options`], but reports [`EmitProgress`] through `on_progress`
+/// as it streams, and honours cancellation: if `on_progress` returns
+/// [`ControlFlow::Break`](std::ops::ControlFlow::Break), emit stops, the open
+/// transaction rolls back on drop, and it returns an error. The partial `out_dir`
+/// (an incomplete `head.sqlite` + any flushed `chunks/`) is the caller's to
+/// discard.
+///
+/// `on_progress` is called at phase boundaries and at a coarse cadence during the
+/// streaming pass (~100 ticks) — cheap enough for a UI event or a log line
+/// without throttling on the caller's side.
+pub fn emit_with_progress(
+    data_dir: &str,
+    out_dir: &str,
+    base_uri: &str,
+    options: &EmitOptions,
+    registry: &ExtensionTypeRegistry,
+    on_progress: &mut dyn FnMut(EmitProgress) -> std::ops::ControlFlow<()>,
+) -> Result<EmitSummary, EmitError> {
+    // Report a phase, and abort (Err) if the sink asked to cancel.
+    macro_rules! phase {
+        ($name:expr) => {
+            if on_progress(EmitProgress::Phase($name)).is_break() {
+                return Err("emit cancelled".into());
+            }
+        };
+    }
+
     let data_dir = Path::new(data_dir);
     let out = Path::new(out_dir);
     fs::create_dir_all(out.join("chunks"))?;
+    phase!("loading");
 
     // Graphs load up front (small); resources stream file-by-file below.
     let mut models = input::load_graphs(data_dir)?;
@@ -205,79 +261,156 @@ pub fn emit_with_options(
     // it before. The same sorted walk, so the pre-intern order matches the
     // stream order exactly (determinism, and target id == spine position).
     //
-    // (Cost: a second parse of the business data to read ids. Memory stays
-    // bounded — one file at a time, dropped. An id-only parse would avoid the
-    // full re-parse; deferred, correctness first.)
+    // Cost: each resource is parsed twice (pass 1 to read its id + locality
+    // probe; pass 2 to process it), same as the previous two-parse design. What
+    // changed is that neither pass holds a whole file: pass 1 STREAMS each file
+    // element-by-element (`stream_business_data_resources`) recording only a tiny
+    // locality `Probe` + a byte offset per resource; pass 2 SEEKS back to those
+    // offsets. Parsing the 193k-resource / 509 MB tearma prebuild whole cost
+    // ~2.7 GB RSS; streaming it holds the probe/offset table (~tens of MB) plus
+    // one resource at a time. See `HANDOFF-streaming-build.md`.
+    phase!("interning");
     let files = input::business_data_files(data_dir)?;
-    for path in &files {
-        let bytes = fs::read(path)?;
-        if let Ok(mut resources) = parse_business_data_bytes(&bytes) {
-            // A8-locality: intern in the SAME order the streaming pass will chunk
-            // (locality order for geo/date models), so a target's id remains its
-            // chunk position (A9). Identical sort in both passes = lockstep.
-            locality::sort_by_locality(&mut resources, &by_graph, &localities);
-            for r in &resources {
-                if by_graph.contains_key(r.resourceinstance.graph_id.as_str()) {
-                    interner.intern(&r.resourceinstance.resourceinstanceid);
-                }
-            }
-        }
+
+    // Files at or under this are parsed whole and kept in memory; larger ones are
+    // streamed + seeked. This is a MEMORY strategy only — the probe order and the
+    // per-resource parse are identical either way, so the snapshot id does not
+    // depend on the threshold. It keeps the tiny note-overlay (and the bare
+    // single-resource format only the whole parser understands) on the proven
+    // path, and keeps large prebuilds off the 2.7 GB whole-parse.
+    const SMALL_LIMIT: u64 = 8 << 20;
+
+    // Where pass 2 will re-read each resource from.
+    enum Src {
+        Disk {
+            file_idx: usize,
+            offset: u64,
+            len: usize,
+        },
+        Mem(Box<StaticResource>),
     }
 
-    // STREAMING PASS: one sorted walk over the business-data files. Each
-    // file is read, parsed, and its resources are processed one at a time
-    // through the head + chunk sink, then dropped. Peak memory is bounded
-    // by a single file's parse plus the persistent interner/closure/sink
-    // (the sink already flushes chunks at CHUNK_MAX_TILES), NOT by corpus
-    // size. Resource encounter order (sorted files, then in-file order) is
-    // deterministic, so the snapshot id is run-stable.
+    // Final ingestion order: files in path order, resources locality-ordered
+    // WITHIN each file — byte-identical to the previous per-file `sort_by_locality`
+    // order, so interning order == chunking order (A9) and the snapshot is
+    // unchanged. Ids are interned here, up front, before any tile is processed.
+    let mut order: Vec<Src> = Vec::new();
+    for (file_idx, path) in files.iter().enumerate() {
+        let size = fs::metadata(path)?.len();
+        let mut probes: Vec<locality::Probe> = Vec::new();
+        let mut srcs: Vec<Src> = Vec::new();
+
+        if size <= SMALL_LIMIT {
+            let bytes = fs::read(path)?;
+            let parsed = match parse_business_data_bytes(&bytes) {
+                Ok(r) => r,
+                Err(e) => {
+                    eprintln!("skipping {} ({e})", path.display());
+                    continue;
+                }
+            };
+            for r in parsed {
+                if let Some(&g) = by_graph.get(r.resourceinstance.graph_id.as_str()) {
+                    probes.push(locality::probe(&r, g, &localities[g]));
+                    srcs.push(Src::Mem(Box::new(r)));
+                }
+            }
+        } else {
+            let file = fs::File::open(path)?;
+            stream_business_data_resources(file, |offset, bytes| {
+                let r = parse_business_data_resource_bytes(bytes)?;
+                if let Some(&g) = by_graph.get(r.resourceinstance.graph_id.as_str()) {
+                    probes.push(locality::probe(&r, g, &localities[g]));
+                    srcs.push(Src::Disk {
+                        file_idx,
+                        offset,
+                        len: bytes.len(),
+                    });
+                }
+                Ok(())
+            })?;
+        }
+
+        // Per-file locality order (same comparator as `sort_by_locality`), then
+        // intern + append in that order. `srcs` is parallel to `probes`.
+        let perm = locality::sort_probes(&probes);
+        let mut srcs: Vec<Option<Src>> = srcs.into_iter().map(Some).collect();
+        for i in perm {
+            interner.intern(&probes[i].id);
+            order.push(srcs[i].take().expect("each source moved once"));
+        }
+    }
+    let total = order.len();
+
+    // STREAMING PASS: seek each resource back in interning order, process it one
+    // at a time through the head + chunk sink, then drop it. Peak memory is the
+    // persistent interner/closure/sink (the sink flushes chunks at
+    // CHUNK_MAX_TILES) plus ONE resource — NOT the corpus.
+    phase!("streaming");
+    // ~100 progress ticks over the run, whatever the corpus size. Cancellation is
+    // checked at the same cadence (sub-second latency at 193k).
+    let step = (total / 100).max(1);
+    let mut done = 0usize;
+    // Large-file handles reused across seeks; opened lazily.
+    let mut handles: Vec<Option<fs::File>> = files.iter().map(|_| None).collect();
     let tx = conn.transaction()?;
-    for path in files {
-        let bytes = fs::read(&path)?;
-        let mut parsed = match parse_business_data_bytes(&bytes) {
-            Ok(resources) => resources,
-            Err(e) => {
-                eprintln!("skipping {} ({e})", path.display());
-                continue;
+    for src in order {
+        let mut resource = match src {
+            Src::Mem(r) => *r,
+            Src::Disk {
+                file_idx,
+                offset,
+                len,
+            } => {
+                use std::io::{Read, Seek, SeekFrom};
+                let handle = match &mut handles[file_idx] {
+                    Some(h) => h,
+                    slot => slot.insert(fs::File::open(&files[file_idx])?),
+                };
+                handle.seek(SeekFrom::Start(offset))?;
+                let mut buf = vec![0u8; len];
+                handle.read_exact(&mut buf)?;
+                parse_business_data_resource_bytes(&buf)?
             }
         };
-        // A8-locality: chunk resources in locality order (same sort as the
-        // pre-intern pass above), tightening chunk_geo_summary / chunk_value_summary.
-        locality::sort_by_locality(&mut parsed, &by_graph, &localities);
-        for mut resource in parsed {
-            let Some(&idx) = by_graph.get(resource.resourceinstance.graph_id.as_str()) else {
-                continue;
-            };
-            // Tier nodegroup exclusion (single exclusion point, per P: the
-            // excluded tiles reach no artifact — head, summaries, chunks).
-            if !exclude_ngs.is_empty() {
-                if let Some(tiles) = resource.tiles.as_mut() {
-                    tiles.retain(|t| !exclude_ngs.contains(t.nodegroup_id.as_str()));
-                }
+        let Some(&idx) = by_graph.get(resource.resourceinstance.graph_id.as_str()) else {
+            continue;
+        };
+        // Tier nodegroup exclusion (single exclusion point, per P: the
+        // excluded tiles reach no artifact — head, summaries, chunks).
+        if !exclude_ngs.is_empty() {
+            if let Some(tiles) = resource.tiles.as_mut() {
+                tiles.retain(|t| !exclude_ngs.contains(t.nodegroup_id.as_str()));
             }
-            // Refuse to emit layers that cannot compose. Cardinality-1 tiles are
-            // supposed to carry alizarin's DERIVABLE ids (so an independently
-            // built layer can address them); several differently-id'd tiles in
-            // one (parent, nodegroup) scope means they do not. We DETECT this —
-            // we never rewrite ids. See `composability`.
-            composability::validate_composable_tile_ids(&resource, &models[idx].graph)?;
+        }
+        // Refuse to emit layers that cannot compose. Cardinality-1 tiles are
+        // supposed to carry alizarin's DERIVABLE ids (so an independently
+        // built layer can address them); several differently-id'd tiles in
+        // one (parent, nodegroup) scope means they do not. We DETECT this —
+        // we never rewrite ids. See `composability`.
+        composability::validate_composable_tile_ids(&resource, &models[idx].graph)?;
 
-            head::process_resource(
-                &tx,
-                &spine_tables[idx],
-                &ctxs[idx],
-                resource,
-                &closure,
-                &mut interner,
-                &mut sink,
-                &mut next_rid,
-                &mut total_resources,
-                &mut total_tiles,
-                registry,
-            )?;
-            resource_counts[idx] += 1;
+        head::process_resource(
+            &tx,
+            &spine_tables[idx],
+            &ctxs[idx],
+            resource,
+            &closure,
+            &mut interner,
+            &mut sink,
+            &mut next_rid,
+            &mut total_resources,
+            &mut total_tiles,
+            registry,
+        )?;
+        resource_counts[idx] += 1;
+        done += 1;
+        if done % step == 0 && on_progress(EmitProgress::Streaming { done, total }).is_break() {
+            return Err("emit cancelled".into());
         }
     }
+    // Final tick: `step` rarely divides `total`, so land exactly on done == total.
+    let _ = on_progress(EmitProgress::Streaming { done, total });
     tx.commit()?;
 
     let mut manifest_models = Vec::new();
@@ -290,6 +423,7 @@ pub fn emit_with_options(
         });
     }
 
+    phase!("finalizing");
     sink.flush_remaining(&mut interner)?;
     head::insert_bulk(&mut conn, &interner, &vocab_rows, &sink)?;
     head::finalize(&conn)?;
