@@ -1,175 +1,67 @@
 # Overview
 
-## Executive Summary
+## Summary
 
-Rós Madair is a browser-based query engine for heritage graph data. It answers
-SPARQL-like queries over tens of thousands of resources without a server-side
-database — all data lives as static files on a CDN or file server, and query
-execution happens entirely in the browser via WebAssembly.
+Rós Madair compiles Arches (alizarin) graph data into static artifacts that are
+served from a CDN or static host and queried without a backend database. A query
+consults a small indexed head, fetches only the tile fragments it needs via HTTP
+Range requests, and hydrates them into a schema-shaped tree.
 
-The key insight is a **two-level index**: a small summary index (~12 MB) loaded
-once at startup tells the query planner which pages of data are relevant, and
-then only those pages are partially fetched using HTTP Range requests. A query
-over 160,000 resources that matches 6,900 results typically transfers ~540 KB
-across ~100 HTTP requests, touching roughly 2% of the 22 MB total dataset.
-
-Multi-predicate queries (e.g., "monuments of type X in townland Y") benefit
-from **page-set intersection** at the planning stage — the planner identifies
-pages that satisfy *all* predicates before fetching anything, cutting requests
-by 60–70%.
-
-Resources are assigned to pages using a **3D Hilbert space-filling curve**
-over (longitude, latitude, concept-type), so geographically and semantically
-similar resources land on the same page, minimising the number of pages a
-typical query must touch.
-
-## Architecture
+## The pipeline
 
 ```
-┌──────────────────────────────────────────────────────┐
-│                  Static File Server                   │
-│                                                       │
-│  summary.bin (12 MB)     ← loaded once at init        │
-│  dictionary.bin (15 MB)  ← loaded once at init        │
-│  page_meta.json          ← loaded once at init        │
-│  pages/                                               │
-│    page_0000.dat  (0–2 MB each)                       │
-│    page_0001.dat     ← fetched on demand via          │
-│    ...                  HTTP Range requests            │
-│    page_0110.dat                                      │
-└──────────────────────────────────────────────────────┘
-        │
-        │  HTTPS (static files, CDN-friendly)
+alizarin graphs + resources + vocabularies (a data_dir)
+        │  ros-madair-emit   (CLI)
         ▼
-┌──────────────────────────────────────────────────────┐
-│                  Browser (WASM Client)                │
-│                                                       │
-│  1. Load summary index + dictionary + page metadata   │
-│  2. Accept query (triple patterns)                    │
-│  3. Plan: which pages to fetch, which predicates      │
-│  4. Fetch: HTTP Range requests for page headers       │
-│            + predicate blocks                         │
-│  5. Execute: binary search within records             │
-│  6. Return matching resource URIs                     │
-└──────────────────────────────────────────────────────┘
+  head.sqlite       indexed spine / concept / value / geo / link tables — the coarse index
+  chunks/*.msgpack  content-hashed tile detail — the hydration payload
+  manifest.json     layout + format-version contract
+        │  ros-madair-read (native) / a browser consumer
+        ▼
+  query the head to select resources + chunks → fetch only those (HTTP Range)
+  → hydrate tiles into a schema-shaped JSON tree (overlay + cited_by aware)
 ```
 
-The server plays no role in query execution. It serves static files — from S3,
-a CDN, GitHub Pages, or even `python -m http.server` — and the WASM client
-handles planning, fetching, and execution entirely in the browser.
+## The artifacts
 
-## Query Flow
+- **`head.sqlite`** — the coarse index. A field's storage class is a pure
+  function of its datatype (`ros-madair-handlers`): concept → `concept_tags`,
+  ordered scalar (date) → `value_tags`, geometry → `geo_bbox`, link →
+  `chunk_link_summary` / `reverse_links`, everything else → detail-only. This is
+  what a query plans against.
+- **`chunks/*.msgpack`** — the detail. Tiles are grouped into content-hashed
+  chunks; a chunk is the unit fetched and decoded. Everything not head-indexed
+  lives here for hydration.
+- **`manifest.json`** — the layout and format-version contract. A reader refuses
+  a format version it does not implement rather than misreading drifted fields.
 
-A query passes through four phases:
+## The read path
 
-1. **Initialisation** (once per session): Load `summary.bin`, `dictionary.bin`,
-   and `page_meta.json`. After this, the client holds the full summary and
-   dictionary in memory. No page files have been fetched yet.
+`ros-madair-query` compiles a typed query (`Concept`, `Range`, `Bbox`,
+`HasLink`) to SQL over the head schema. `ros-madair-read`:
 
-2. **Planning** (per query, zero network): Translate URIs to dictionary IDs,
-   look up which pages contain relevant data in the summary index, intersect
-   page sets for multi-predicate queries, and produce a fetch plan.
+- **resolves** the query to a set of resource ids;
+- **hydrates** their tiles into a schema-shaped tree;
+- composes **layered overlays** (a base artifact plus on-device overlays, with
+  precedence); and
+- answers **reverse traversal** (`cited_by`).
 
-3. **Fetching** (per query, selective network): Make HTTP Range requests for
-   page headers and specific predicate blocks. The client never downloads
-   entire page files.
+Some predicates are *coarse* — link and spatial-bbox filters over-approximate
+(they admit false positives), so the head returns a candidate set that the
+consumer is expected to verify exactly on the hydrated tiles.
 
-4. **Execution** (per query, in-memory): Binary search within loaded predicate
-   blocks, intersect result sets across patterns, and resolve subject IDs back
-   to URIs.
+## Direction: DuckDB + Parquet
 
-See [Query Execution](query-execution.md) for worked examples, and
-[Data Structures](data-structures.md) for format details.
+An investigation established that the coarse-prune-then-fine-scan **read
+mechanism** here is a reimplementation of what Parquet zone-maps + DuckDB give
+natively — and, for spatial, a less complete one (the exact-intersection fine
+step is unimplemented). The direction is therefore to **replace the read engine
+with a DuckDB + Parquet substrate** and keep only what Parquet does not hand you:
+the layered overlay model, reverse traversal (`cited_by`), and Arches
+tile-graph hydration. Full-text search stays with a separate inverted index
+(Pagefind), because zone-maps have no order to prune text on.
 
-## Build Pipeline
-
-The index is generated once at build time from alizarin graph definitions
-and resource data. Three parallel transformations feed into five output
-files:
-
-```
-┌─────────────────────────────────────────────────────────────────────┐
-│                     Alizarin Input                                   │
-│  StaticGraph  (graph definitions: node schemas, predicates)          │
-│  StaticTile   (resource data: concepts, dates, geometry, text, ...)  │
-└──────────┬───────────────────────┬──────────────────────┬───────────┘
-           │                       │                      │
-  ┌────────▼─────────┐  ┌─────────▼──────────┐  ┌────────▼─────────┐
-  │ Extract metadata │  │ Quantize values    │  │ Build dictionary │
-  │                  │  │                    │  │                  │
-  │ • centroid (geo) │  │ concept → dict ID  │  │ Every URI and    │
-  │ • concept set    │  │ resource → dict ID │  │ literal gets a   │
-  │ • graph ID       │  │ boolean → 0 / 1    │  │ sequential u32   │
-  │                  │  │ date → days+offset │  │ integer ID       │
-  └────────┬─────────┘  │ geo → Hilbert u32  │  │                  │
-           │             └─────────┬──────────┘  └────────┬─────────┘
-  ┌────────▼─────────┐             │                      │
-  │ Assign pages     │             │                      │
-  │                  │             │               ┌──────▼────────┐
-  │ Tier 1: group by │             │               │dictionary.bin │
-  │   graph ID       │             │               └───────────────┘
-  │ Tier 2: sort by  │             │
-  │   3D Hilbert     │  ┌──────────▼──────────┐
-  │   (lng,lat,type) │  │ Build page records  │
-  │ Slice: ~200      │  │                     │
-  │   resources/page │  │ PageRecord (8 bytes) │
-  └────────┬─────────┘  │ = (object_val,      │
-           │             │    subject_id)       │
-           │             └──────────┬───────────┘
-           │                        │
-           └────────────┬───────────┘
-                        │
-           ┌────────────▼─────────────────────────────────┐
-           │          Group by (page, predicate)           │
-           │          Sort within each group               │
-           └─────┬──────────────┬─────────────┬───────────┘
-                 │              │             │
-         ┌───────▼──────┐ ┌────▼────────┐ ┌──▼─────────────┐
-         │ summary.bin  │ │ page files  │ │ resource_map   │
-         │              │ │             │ │   .bin         │
-         │ 3 sorted     │ │ page_XXXX   │ │                │
-         │ quad copies  │ │   .dat      │ │ dict_id →      │
-         │ (SPO,PSO,OPS)│ │ per-page    │ │   page_id      │
-         └──────────────┘ │ predicate   │ └────────────────┘
-                          │ blocks      │
-         ┌──────────────┐ └─────────────┘
-         │page_meta.json│
-         │ page→bbox    │
-         └──────────────┘
-```
-
-The build also writes `all.nt` (full N-Triples export) for verification
-against an external SPARQL store like oxigraph.
-
-## Page Assignment
-
-Resources are assigned to pages at index-build time using a two-tier strategy:
-
-### Tier 1: Graph Grouping
-
-Resources are first grouped by their graph/model type (e.g., Heritage Place,
-Person, Activity). Resources of the same type share the same predicate
-schema, so grouping them together means page files have consistent predicate
-blocks.
-
-### Tier 2: Hilbert Space-Filling Curve
-
-Within each graph group, resources are sorted by a **3D Hilbert curve**
-over three axes:
-
-1. **Longitude** (x): normalised from [-180°, 180°] to [0, 1024)
-2. **Latitude** (y): normalised from [-90°, 90°] to [0, 1024)
-3. **Concept bucket** (z): a hash of the resource's concept URIs, mapped
-   to [0.0, 1.0) and scaled to [0, 1024)
-
-The Hilbert curve (10-bit resolution per axis, Skilling's algorithm)
-preserves locality: resources that are geographically close *and* share
-similar concept types get nearby Hilbert indices and land on the same page.
-
-The sorted sequence is then sliced into pages of ~200 resources each (configurable).
-
-!!! info "Why this matters"
-    A query for "all ringforts in County Down" benefits because ringforts in
-    County Down are geographically clustered and share the same concept type —
-    they'll occupy a small number of pages rather than being scattered across
-    the entire index.
+See the
+[README's Direction section](https://github.com/flaxandteal/ros-madair#direction-duckdb--parquet-substrate)
+for the findings, the tile-row Parquet layout, nodegroup partitioning and
+hierarchical ordering, egress governance, and the roadmap.

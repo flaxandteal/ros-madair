@@ -31,13 +31,6 @@ nav = [
   ] },
   { "How It Works" = [
     { "Overview" = "how-it-works/overview.md" },
-    { "Data Structures" = "how-it-works/data-structures.md" },
-    { "Query Execution" = "how-it-works/query-execution.md" },
-    { "Optimisations" = "how-it-works/optimisations.md" },
-  ] },
-  { "Reference" = [
-    { "Binary Formats" = "reference/binary-formats.md" },
-    { "Builder API" = "reference/builder-api.md" },
   ] },
 ]
 

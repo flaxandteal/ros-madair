@@ -110,7 +110,11 @@ use ros_madair_query::{
 };
 use rusqlite::{types::Value as SqlValue, Connection};
 
-use crate::{hydrate_tiles, open_head, resource_tiles_cached, ChunkCache, ReadError};
+use crate::{
+    hydrate_tiles_with_labels, open_head, read_vocab_labels, resource_tiles_cached, ChunkCache,
+    ReadError,
+};
+use std::collections::HashMap;
 
 /// A filter tree whose leaves know which NODEGROUP they read and carry a compiled
 /// one-layer probe.
@@ -741,7 +745,8 @@ impl Layers {
     ///
     /// This returns TILES only; it does not touch the descriptor. The composed
     /// `display_name` is re-derived from these tiles at hydration — see
-    /// [`hydrate_tiles`], which [`Layers::hydrate_resource`] routes through. That
+    /// [`crate::hydrate_tiles_with_labels`], which [`Layers::hydrate_resource`]
+    /// routes through. That
     /// is what gives a shared entry the layer's real headword instead of a lower
     /// layer's `<Headword>` placeholder: the descriptor is a function of the
     /// COMPOSED tiles, not of any one layer's precomputed `spine.display_name`.
@@ -799,9 +804,17 @@ impl Layers {
         &self,
         uuid: &str,
         graph: &StaticGraph,
+        languages: &[&str],
     ) -> Result<serde_json::Value, ReadError> {
         let tiles = self.resource_tiles(uuid, graph)?;
-        hydrate_tiles(&tiles, uuid, graph)
+        // Fold every layer's vocab labels base-first so the topmost layer's label
+        // wins — the same precedence that composes the tile data itself.
+        let mut labels = HashMap::new();
+        for layer in &self.layers {
+            let conn = open_head(&layer.dir)?;
+            read_vocab_labels(&conn, &mut labels)?;
+        }
+        hydrate_tiles_with_labels(&tiles, uuid, graph, &labels, languages)
     }
 
     /// **Reverse traversal (RM principle P12): which resources link TO

@@ -57,6 +57,7 @@ mod head;
 mod input;
 mod locality;
 mod manifest;
+mod parquet;
 
 pub use closure::{build_closure, Closure, ClosureEntry};
 /// The artifact FORMAT types (manifest contract + chunk-tile wire shape) live
@@ -110,6 +111,12 @@ pub struct EmitOptions {
 /// not error, it silently returns zero rows (see that crate's docs). Re-exported
 /// here so existing callers keep working.
 pub use ros_madair_handlers::default_registry;
+
+// Slice 1 of the DuckDB+Parquet substrate: the additive tile-row Parquet writer.
+// `crate::` disambiguates the local module from the extern `parquet` crate.
+pub use crate::parquet::{
+    emit_parquet, write_model_parquet, ClusterConfig, ClusterDim, ParquetModelSummary,
+};
 
 pub fn emit(data_dir: &str, out_dir: &str, base_uri: &str) -> Result<EmitSummary, EmitError> {
     let registry = default_registry();

@@ -79,11 +79,12 @@ fn hydrates_company_a_from_a_freshly_emitted_snapshot() {
     assert_eq!(tiles.len() as i64, expected, "tile count vs fragment_dir");
     assert!(tiles.iter().all(|t| t.resourceinstance_id == COMPANY_A));
 
-    let tree = ros_madair_read::hydrate_resource(&head, COMPANY_A, &graph).unwrap();
+    let tree = ros_madair_read::hydrate_resource(&head, COMPANY_A, &graph, &["en"]).unwrap();
     assert_eq!(tree["resourceinstanceid"], COMPANY_A);
     assert_eq!(tree["graph_id"], INSTITUTION_GRAPH);
-    assert_eq!(tree["name"]["en"]["value"], "Company A");
-    assert_eq!(tree["name"]["en"]["direction"], "ltr");
+    // Display tree: the i18n string is flattened to its "en" value (no language
+    // map, no direction) — consumers read the value directly.
+    assert_eq!(tree["name"], "Company A");
     assert_eq!(tree["location"]["type"], "FeatureCollection");
     assert_eq!(tree["location"]["features"][0]["geometry"]["type"], "Point");
     assert!(tree["location"]["features"][0]["geometry"]["coordinates"]
@@ -110,13 +111,11 @@ fn hydrates_a_resource_from_a_non_first_spine_table() {
     );
 
     let graph = graph(&data, TALK_GRAPH);
-    let tree = ros_madair_read::hydrate_resource(&head, TALK, &graph).unwrap();
+    let tree = ros_madair_read::hydrate_resource(&head, TALK, &graph, &["en"]).unwrap();
     assert_eq!(tree["resourceinstanceid"], TALK);
     assert_eq!(tree["graph_id"], TALK_GRAPH);
-    assert_eq!(
-        tree["title"]["en"]["value"],
-        "Scripting for people who like papyrus"
-    );
+    // Display tree: i18n string flattened to its "en" value.
+    assert_eq!(tree["title"], "Scripting for people who like papyrus");
     // Resource links survive the chunk round trip too.
     assert_eq!(tree["presenter"].as_array().unwrap().len(), 2);
 

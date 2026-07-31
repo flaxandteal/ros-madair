@@ -41,10 +41,12 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use alizarin_core::graph::{StaticGraph, StaticResourceMetadata};
-use alizarin_core::json_conversion::resource_tiles_to_tree;
+use alizarin_core::json_conversion::{resource_tiles_to_tree, resource_tiles_to_tree_with_context};
+use alizarin_core::type_serialization::{ExternalResolver, SerializationContext, SerializationOptions};
 use alizarin_core::StaticTile;
 use ros_madair_format::{decode_chunk, ChunkDecodeError, Manifest, FORMAT_VERSION};
-use rusqlite::{Connection, OpenFlags};
+use ros_madair_handlers::default_registry;
+use rusqlite::{Connection, OpenFlags, OptionalExtension};
 
 mod layers;
 pub use layers::{Layer, Layers};
@@ -668,8 +670,17 @@ pub fn expected_tile_count(head_dir: &Path, uuid: &str) -> Result<i64, ReadError
     )?)
 }
 
-/// Hydrate one resource into a schema-aware JSON tree (alias-keyed, nested by
-/// nodegroup, partial-safe).
+/// Hydrate one resource into a schema-aware **display** JSON tree (alias-keyed,
+/// nested by nodegroup, partial-safe), rendered against a language preference
+/// chain.
+///
+/// Display tree: values come back resolved and localised — i18n strings walk
+/// `languages` in order (first present wins, then first-available), and
+/// `concept`/`reference` ids render as labels (from this head's `vocab`+`dict`).
+/// Consumers read values directly; they do not re-resolve UUIDs or pick a
+/// language themselves. Pass a single-element slice (e.g. `&["en"]`) for one
+/// language, or an ordered chain (e.g. `&["gd", "ga", "en"]`) for controlled
+/// fallback; an empty slice defaults to `en`.
 ///
 /// `graph` must be the model these tiles belong to, with `build_indices()`
 /// already called — the head does not carry the schema; the caller ships it
@@ -678,9 +689,15 @@ pub fn hydrate_resource(
     head_dir: &Path,
     uuid: &str,
     graph: &StaticGraph,
+    languages: &[&str],
 ) -> Result<serde_json::Value, ReadError> {
     let tiles = resource_tiles_with_graph(head_dir, uuid, Some(graph))?;
-    hydrate_tiles(&tiles, uuid, graph)
+    // Reference/concept labels live in this head's `vocab`+`dict`; fold them so
+    // the tree hydrates with rendered labels instead of raw UUIDs.
+    let conn = open_head(head_dir)?;
+    let mut labels = HashMap::new();
+    read_vocab_labels(&conn, &mut labels)?;
+    hydrate_tiles_with_labels(&tiles, uuid, graph, &labels, languages)
 }
 
 /// Hydrate already-recovered tiles (the second half of [`hydrate_resource`]),
@@ -711,9 +728,56 @@ pub fn hydrate_tiles(
 ) -> Result<serde_json::Value, ReadError> {
     // Re-derive the descriptor from the composed tiles (see the doc above),
     // directly on the borrowed graph — no clone.
-    let descriptors = graph.build_descriptors(tiles);
+    let metadata = build_metadata(uuid, graph, tiles);
+    resource_tiles_to_tree(tiles, &metadata, graph).map_err(ReadError::Hydration)
+}
 
-    let metadata = StaticResourceMetadata {
+/// Hydrate tiles into a tree with **reference/concept labels resolved**, instead
+/// of the raw UUIDs [`hydrate_tiles`] leaves behind.
+///
+/// `labels` is a `uuid -> label` map read from the head's `vocab`+`dict` (build
+/// it with [`read_vocab_labels`]; the composed path folds it across every layer,
+/// base-first, so the topmost layer wins). Rendering runs through alizarin's
+/// Display-mode tree builder: `concept`/`concept-list` resolve via the built-in
+/// serializer, and `reference` through the CLM handler in [`default_registry`] —
+/// both driven by the one [`VocabResolver`]. Resolution happens inside the tree
+/// build; nothing re-interprets the tree afterward.
+///
+/// [`hydrate_resource`] calls this after reading the head. Tile-only callers (a
+/// query result, say) that have a label map can call it directly; those without
+/// one keep using [`hydrate_tiles`] and get raw UUIDs.
+pub fn hydrate_tiles_with_labels(
+    tiles: &[StaticTile],
+    uuid: &str,
+    graph: &StaticGraph,
+    labels: &HashMap<String, String>,
+    languages: &[&str],
+) -> Result<serde_json::Value, ReadError> {
+    let metadata = build_metadata(uuid, graph, tiles);
+    let resolver = VocabResolver { labels };
+    let registry = default_registry();
+    // `options` carries mode + the language preference chain; `ctx` carries the
+    // resolvers/registry. `resource_resolver` is None — resource-instance display
+    // names are a separate concern from concept/reference labels. `vocab.label`
+    // is a single flat label per concept, so the resolver ignores language; the
+    // chain only selects among i18n string datatypes.
+    let options = SerializationOptions::display_seq(languages.iter().copied());
+    let ctx = SerializationContext {
+        node_config: None,
+        external_resolver: Some(&resolver),
+        resource_resolver: None,
+        extension_registry: Some(&registry),
+    };
+    resource_tiles_to_tree_with_context(tiles, &metadata, graph, &options, &ctx)
+        .map_err(ReadError::Hydration)
+}
+
+/// Build the resource metadata (descriptor re-derived from *these* tiles) shared
+/// by every hydrate entry point — see [`hydrate_tiles`] for why the descriptor is
+/// recomputed here rather than read from a stored copy.
+fn build_metadata(uuid: &str, graph: &StaticGraph, tiles: &[StaticTile]) -> StaticResourceMetadata {
+    let descriptors = graph.build_descriptors(tiles);
+    StaticResourceMetadata {
         graph_id: graph.graph_id().to_string(),
         name: descriptors.name.clone().unwrap_or_default(),
         descriptors,
@@ -724,6 +788,59 @@ pub fn hydrate_tiles(
         graph_publication_id: None,
         createdtime: None,
         lastmodified: None,
-    };
-    resource_tiles_to_tree(tiles, &metadata, graph).map_err(ReadError::Hydration)
+    }
+}
+
+/// Resolves concept / reference list-item UUIDs to display labels straight from
+/// the head's `vocab`+`dict`. Flat and language-agnostic: `vocab.label` is one
+/// label per concept, so the collection and language arguments are ignored.
+struct VocabResolver<'a> {
+    labels: &'a HashMap<String, String>,
+}
+
+impl ExternalResolver for VocabResolver<'_> {
+    fn resolve_concept(
+        &self,
+        _collection: &str,
+        concept_id: &str,
+        _language: &str,
+    ) -> Option<String> {
+        self.labels.get(concept_id).cloned()
+    }
+}
+
+/// Fold a head's `vocab.label` into `out` as a `uuid -> label` map, joining
+/// `vocab` to `dict` on the concept term_id. A head with no `vocab` table — an
+/// overlay carrying no concepts — contributes nothing rather than erroring.
+/// Later calls overwrite earlier keys, so callers fold **base-first** to let the
+/// topmost layer win.
+pub fn read_vocab_labels(
+    conn: &Connection,
+    out: &mut HashMap<String, String>,
+) -> Result<(), ReadError> {
+    let has_vocab = conn
+        .query_row(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='vocab'",
+            [],
+            |_| Ok(()),
+        )
+        .optional()?
+        .is_some();
+    if !has_vocab {
+        return Ok(());
+    }
+
+    let mut stmt = conn.prepare(
+        "SELECT d.term, v.label FROM vocab v \
+         JOIN dict d ON d.term_id = v.concept \
+         WHERE v.label IS NOT NULL",
+    )?;
+    let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
+    for row in rows {
+        let (uuid, label) = row?;
+        if !label.is_empty() {
+            out.insert(uuid, label);
+        }
+    }
+    Ok(())
 }

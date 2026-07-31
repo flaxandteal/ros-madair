@@ -8,12 +8,12 @@ hide:
 
 # Rós Madair
 
-<p class="rm-subtitle">Browser-side SPARQL over static files</p>
+<p class="rm-subtitle">Static-file queries over heritage graph data</p>
 
 <p class="rm-tagline">
-Query heritage graph data directly from a CDN. No server-side database,
-no SPARQL endpoint — just static files and a WASM client that plans,
-fetches, and executes queries in the browser.
+Compile Arches graph data into static artifacts served from a CDN, and query
+them by fetching only the fragments each query needs — no server-side database,
+no query endpoint.
 </p>
 
 <div class="rm-actions">
@@ -28,18 +28,18 @@ fetches, and executes queries in the browser.
 <div class="rm-stats" markdown>
 
 <div class="rm-stat">
-  <div class="rm-stat-value">160K</div>
-  <div class="rm-stat-label">resources queryable</div>
-</div>
-
-<div class="rm-stat">
-  <div class="rm-stat-value">~2%</div>
-  <div class="rm-stat-label">data transferred per query</div>
-</div>
-
-<div class="rm-stat">
   <div class="rm-stat-value">0</div>
-  <div class="rm-stat-label">server-side computation</div>
+  <div class="rm-stat-label">backend databases</div>
+</div>
+
+<div class="rm-stat">
+  <div class="rm-stat-value">CDN</div>
+  <div class="rm-stat-label">static-file hosting</div>
+</div>
+
+<div class="rm-stat">
+  <div class="rm-stat-value">Arches</div>
+  <div class="rm-stat-label">heritage graph source</div>
 </div>
 
 </div>
@@ -50,9 +50,8 @@ fetches, and executes queries in the browser.
 
 ### Static-File Architecture
 
-All index data lives as flat binary files on any static host — S3, GitHub
-Pages, a CDN, or a local `python -m http.server`. No database, no backend
-process, no API server.
+Artifacts live as flat files on any static host — S3, GitHub Pages, a CDN, or a
+local `python -m http.server`. No database, no backend process, no API server.
 
 </div>
 
@@ -60,29 +59,28 @@ process, no API server.
 
 ### Surgical Data Fetching
 
-HTTP Range requests fetch only the predicate blocks needed for each query.
-A typical query over 160K resources transfers ~540 KB — roughly 2% of
-the total 22 MB dataset.
+A query consults a small indexed "head", then fetches only the tile fragments it
+needs via HTTP Range requests — not the whole dataset.
 
 </div>
 
 <div class="rm-feature" markdown>
 
-### Summary-Driven Planning
+### Coarse Index + Tile Detail
 
-A page-level summary index (loaded once at init) tells the query planner
-exactly which pages contain relevant data. Multi-predicate queries benefit
-from page-set intersection, cutting fetches by 60–70%.
+An indexed head (spine / concept / value / geo / link) routes a query to the
+resources and chunks that can match; the chunks carry the tile detail that
+hydration turns into a schema-shaped tree.
 
 </div>
 
 <div class="rm-feature" markdown>
 
-### Hilbert-Curve Locality
+### Locality-Clustered
 
-Resources are assigned to pages using a 3D Hilbert space-filling curve
-over (longitude, latitude, concept-type). Geographically and semantically
-similar resources land on the same page, minimising page spread.
+Tiles are ordered by a per-graph cluster key (geospatial + descriptor name) so
+that geographically and semantically similar data sits together, keeping the
+fetched working set small.
 
 </div>
 
@@ -96,8 +94,8 @@ similar resources land on the same page, minimising page spread.
 [Alizarin](https://github.com/flaxandteal/alizarin) — an ORM for
 [Arches](https://www.archesproject.org/) heritage data management systems.
 Where Alizarin provides a TypeScript/Rust SDK for working with Arches graphs
-live, Rós Madair provides a static, pre-built query index that can answer
-SPARQL-like pattern queries entirely in the browser.
+live, Rós Madair provides static, pre-built artifacts that can answer queries
+without a running server.
 
 The name follows the pigment theme: alizarin crimson and rose madder are
 closely related red pigments, both derived from the madder root. Rós Madair
@@ -106,32 +104,33 @@ is the static, pre-ground pigment to Alizarin's live colour mixing.
 ### The Problem
 
 Heritage datasets often contain tens or hundreds of thousands of records.
-Deploying a full SPARQL endpoint (Fuseki, Blazegraph, etc.) requires
+Standing up a full query backend (a triplestore, a database + API) requires
 server infrastructure, ongoing maintenance, and non-trivial cost. For
 read-only public datasets — museum collections, monument registries,
-archaeological surveys — this is overkill.
+archaeological surveys — that is overkill.
 
 ### The Approach
 
-Rós Madair pre-computes a two-level page-based index at build time:
+The `ros-madair-emit` CLI compiles a data directory of graphs, resources, and
+vocabularies into three artifacts:
 
-1. A **summary index** (~12 MB for 160K resources) maps which pages
-   contain which predicate/object combinations
-2. **Page files** (~86 files, ~267 KB each) contain the actual records,
-   partitioned by predicate and sorted for binary search
+1. **`head.sqlite`** — an indexed head (spine, concept, ordered-value, geo-bbox,
+   and link tables): the coarse index a query plans against.
+2. **`chunks/*.msgpack`** — content-hashed tile detail: the payload hydration
+   turns back into a schema-shaped tree.
+3. **`manifest.json`** — the layout and format-version contract every reader
+   checks.
 
-The WASM client loads the summary once, then answers queries by planning
-which pages to fetch, making targeted HTTP Range requests for specific
-predicate blocks, and executing pattern matching in-browser.
+A reader queries the head to select the resources and chunks that can match,
+fetches only those (over HTTP Range), and hydrates the tiles — overlay- and
+reverse-traversal-aware.
 
-```
-Static Files (CDN)              Browser (WASM)
-─────────────────              ──────────────────
-summary.bin  ──── load once ──→  Query Planner
-dictionary.bin ── load once ──→  Term ↔ ID Mapping
-pages/*.dat  ──── on demand ──→  Record Cache + Execution
-                  (Range reqs)
-```
+!!! note "Direction: DuckDB + Parquet"
+    The coarse/fine read engine above is being replaced by a DuckDB + Parquet
+    substrate; the layered overlay model, reverse traversal (`cited_by`), and
+    Arches tile-graph hydration are kept. See the
+    [README's Direction section](https://github.com/flaxandteal/ros-madair#direction-duckdb--parquet-substrate)
+    for the rationale and roadmap.
 
 ## Next Steps
 
@@ -141,7 +140,7 @@ pages/*.dat  ──── on demand ──→  Record Cache + Execution
 
 ### [Installation](getting-started/installation.md)
 
-Build the Rust crates, install wasm-pack, and set up the toolchain.
+Build the workspace, set up the alizarin sibling checkout, and run the tests.
 
 </div>
 
@@ -149,7 +148,7 @@ Build the Rust crates, install wasm-pack, and set up the toolchain.
 
 ### [Quick Start](getting-started/quickstart.md)
 
-Build an index from Arches data and run your first browser-side query.
+Emit static artifacts from Arches data with the `ros-madair-emit` CLI.
 
 </div>
 
@@ -157,8 +156,8 @@ Build an index from Arches data and run your first browser-side query.
 
 ### [How It Works](how-it-works/overview.md)
 
-Deep dive into the two-level index, query planning, and optimisation
-techniques.
+The head + chunks + manifest model, and where the DuckDB + Parquet direction
+takes it.
 
 </div>
 

@@ -1,35 +1,25 @@
 [workspace]
+# v2 static-assets stack only. The v1 SPARQL/page-index island
+# (core/builder/client/alizarin/napi) was a hand-rolled reimplementation of what
+# Parquet zone-maps + DuckDB give natively (quantize/summary_quads/page_file/
+# hilbert/resource_map); it was already retired (Clódóir went v2-only) and is now
+# removed. The read/prune mechanism is being replaced by a DuckDB+Parquet
+# substrate; what remains RM-specific is overlay/layering, reverse traversal
+# (cited_by), and Arches tile-graph hydration.
 members = [
-    # v2 static-assets stack (head-schema query compiler + emitter)
     "crates/ros-madair-handlers",
     "crates/ros-madair-format",
     "crates/ros-madair-query",
     "crates/ros-madair-emit",
     "crates/ros-madair-read",
     "crates/ros-madair-python",
-    # v1 — SPARQL/page-index stack.
-    "crates/ros-madair-core",
-    "crates/ros-madair-builder",
-    "crates/ros-madair-client",
-    "crates/ros-madair-alizarin",
-    "crates/ros-madair-napi",
 ]
-# `ros-madair-alizarin` is excluded from the default build: it links the
-# git-pinned alizarin-wasm v2.0.0-alpha.111, whose extension handlers predate
-# `HandlerCapabilities::can_index` and so no longer compile against the current
-# governance core. It is v1 (being retired) and is not worth carrying; the rest
-# of the workspace — the v2 static-assets stack and the remaining v1 crates —
-# builds and tests cleanly. Build it explicitly with `-p` if ever needed.
 default-members = [
     "crates/ros-madair-handlers",
     "crates/ros-madair-format",
     "crates/ros-madair-query",
     "crates/ros-madair-emit",
     "crates/ros-madair-read",
-    "crates/ros-madair-core",
-    "crates/ros-madair-builder",
-    "crates/ros-madair-client",
-    "crates/ros-madair-napi",
 ]
 resolver = "2"
 

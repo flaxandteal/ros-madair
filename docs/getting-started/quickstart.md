@@ -1,124 +1,60 @@
 # Quick Start
 
-This guide walks through building an index from Arches heritage data and
-running a query in the browser.
+This guide emits static artifacts from Arches heritage data with the
+`ros-madair-emit` CLI, then reads them back.
 
-## 1. Build an Index
-
-### From an Arches Prebuild Export
-
-If you have a Arches prebuild directory (the standard `starches-builder`
-layout with `graphs/` and `business_data/`):
+## 1. Build
 
 ```bash
-cargo run --example build_from_prebuild -- \
-    /path/to/prebuild \
-    example/static/mydata \
-    200
+cargo build --release
 ```
 
-Arguments:
+## 2. Arrange a data directory
 
-| Arg | Meaning |
-|-----|---------|
-| `/path/to/prebuild` | Arches prebuild export directory |
-| `example/static/mydata` | Output directory for the index |
-| `200` | Target resources per page (default: 200) |
-
-This produces:
+`ros-madair-emit` consumes a data directory following the alizarin/Clódóir
+convention:
 
 ```
-example/static/mydata/
-  summary.bin        # Page-level summary index (~12 MB for 160K resources)
-  dictionary.bin     # URI ↔ integer ID mapping
-  page_meta.json     # Page metadata (IDs, bounding boxes)
-  pages/             # Per-page binary files
-    page_0000.dat
-    page_0001.dat
-    ...
-  all.nt             # N-Triples RDF export (for validation)
+<data_dir>/
+  graphs/*.json          resource models
+  resources/**/*.json    business data
+  vocabularies/*.xml     SKOS (optional)
 ```
 
-### From Python
-
-```python
-from ros_madair import IndexBuilder
-
-builder = IndexBuilder()
-builder.add_graph("/path/to/graph.json")
-builder.add_business_data("/path/to/business_data/")
-builder.build("output/myindex", page_size=200)
-```
-
-## 2. Serve the Files
-
-Any static file server with Range request support works. For development:
+## 3. Emit
 
 ```bash
-cd example
-python3 serve.py 8080 .
+cargo run -p ros-madair-emit --release -- <data_dir> <out_dir> [--base-uri URI]
 ```
 
-Open `http://localhost:8080/` in a browser.
+The output directory contains:
 
-!!! note "Range request support"
-    The server must support HTTP Range requests (206 Partial Content).
-    Most production servers (nginx, Apache, S3, CloudFront) do this
-    natively. The included `serve.py` handles it for development.
-
-## 3. Run a Query
-
-### From the Example UI
-
-The example page at `http://localhost:8080/` provides a query input box
-and pre-built example queries. Click **Load Index**, then try one of the
-example buttons.
-
-### From JavaScript
-
-```javascript
-import init, { SparqlStore } from './pkg/ros_madair_client.js';
-
-await init();
-
-const store = new SparqlStore('./static/mydata/');
-await store.load_summary();
-
-const results = await store.query_patterns(JSON.stringify([
-    {
-        s: '?place',
-        p: 'https://example.org/node/monument_type_n1',
-        o: 'https://example.org/concept/43bf135f-e369-f6f4-a85d-9a54fb1fa44b'
-    }
-]));
-
-console.log(`Found ${results.length} monuments of type A`);
+```
+<out_dir>/
+  head.sqlite       indexed spine / concept / value / geo / link tables
+  chunks/*.msgpack  content-hashed tile detail
+  manifest.json     layout + format-version contract
 ```
 
-### Query Pattern Format
+### Tiers (audience-scoped artifacts)
 
-Patterns are JSON arrays of triple objects:
+`--tier <name>:<config.json>` emits a named tier as its own complete artifact
+under `<out_dir>/<name>/`, applying `exclude_nodegroups` / `exclude_models`
+before indexing so excluded data appears in **no** artifact of that tier — a
+build-time way to keep restricted data off a public host entirely.
 
-```json
-[
-    {"s": "?place", "p": "https://example.org/node/type", "o": "https://example.org/concept/church"},
-    {"s": "?place", "p": "https://example.org/node/townland", "o": "https://example.org/concept/ballymena"}
-]
-```
+## 4. Read
 
-- Values starting with `?` are **variables** — they match any value
-- Other values are **bound URIs** — they match exactly
-- Multiple patterns sharing a variable (e.g., `?place`) are intersected
+The `ros-madair-read` crate resolves a query against the head and hydrates the
+matching tiles into a schema-shaped tree. It is exercised end to end by the
+crate's integration tests (`crates/ros-madair-read/tests/`), which emit a real
+snapshot with the real emitter and read it back — the canonical worked examples
+of the query + hydrate path, including range (`ordered.rs`), spatial
+(`spatial.rs`), overlay (`layers.rs`), and reverse traversal (`reverse.rs`).
 
-## 4. Generate Validation Data
+## Where this is heading
 
-To verify query correctness, generate ground-truth validation data from
-the raw index:
-
-```bash
-cargo run --example generate_validation -- example/static/mydata
-```
-
-This produces `validation.json` with expected result counts and resource
-IDs for each example query. The example UI's **Run Validation** button
-compares WASM query results against this ground truth.
+The emitter also writes an additive tile-row **Parquet** layout
+(`ros-madair-emit`'s `parquet` module), the first slice of the DuckDB + Parquet
+substrate that replaces the coarse/fine read engine. See the
+[README's Direction section](https://github.com/flaxandteal/ros-madair#direction-duckdb--parquet-substrate).

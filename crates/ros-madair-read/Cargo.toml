@@ -17,6 +17,9 @@ description = "Native read path for Rós Madair static artifacts: resolve a reso
 # decodes chunks with `ros-madair-format` (WASM-buildable), which is exactly
 # why the format types were split out of here.
 alizarin-core.workspace = true
+# THE registry: provides the CLM `reference` handler so hydrate renders
+# reference fields through alizarin's handler, not a hand-rolled substitute.
+ros-madair-handlers = { path = "../ros-madair-handlers" }
 ros-madair-format = { path = "../ros-madair-format" }
 # Composition takes the query IR, not compiled SQL: a layered CountRecords must
 # execute an *ids* plan per layer (a count returns a number, and numbers cannot

@@ -1,62 +1,59 @@
 # Installation
 
-## Prerequisites
-
-- **Rust** (stable, 1.75+) — [rustup.rs](https://rustup.rs)
-- **wasm-pack** — `cargo install wasm-pack`
-- **Python 3.10+** — for the builder and dev server
-
-## Clone and Build
-
-```bash
-git clone https://github.com/flaxandteal/ros-madair.git
-cd ros-madair
-```
-
-### Build the Core Crates
-
-```bash
-cargo build --release
-```
-
-This builds three crates:
+Rós Madair is a Rust workspace. The current stack is six crates:
 
 | Crate | Purpose |
 |-------|---------|
-| `ros-madair-core` | Shared data structures, page format, Hilbert curves, quantisation |
-| `ros-madair-client` | WASM browser client — planner, fetcher, executor |
-| `ros-madair-builder` | PyO3 Python bindings for building indexes from Arches data |
+| `ros-madair-handlers` | Datatype → index-class classification; the CLM `reference` handler |
+| `ros-madair-format` | On-disk artifact format — manifest + versioned chunk framing (WASM-safe) |
+| `ros-madair-emit` | CLI: compile a data directory into head + chunks + manifest |
+| `ros-madair-query` | Head-schema query compiler (`Concept` / `Range` / `Bbox` / `HasLink` → SQL) |
+| `ros-madair-read` | Native read path — resolve, hydrate, layered overlay, reverse traversal |
+| `ros-madair-python` | PyO3 bindings (`compile_query`, `hydrate_*`) |
 
-### Build the WASM Client
+## Prerequisites
 
-```bash
-wasm-pack build crates/ros-madair-client --target web --out-dir ../../example/pkg
+- **Rust** (stable) — <https://rustup.rs/>
+- **Python 3.10+** — only for the PyO3 bindings (`ros-madair-python`) and the
+  docs site.
+
+## The alizarin sibling checkout
+
+Every crate depends on
+[`alizarin-core`](https://github.com/flaxandteal/alizarin) via a relative path.
+The alizarin repository must be checked out as a sibling directory alongside the
+parent `magic/` directory:
+
+```
+magic/
+  alizarin/                     # <- clone here
+  RosMadair-sandbox-parquet/    # this repo
 ```
 
-This produces the WASM module and JS bindings in `example/pkg/`.
-
-### Install the Python Builder (Optional)
-
-If you want to build indexes from Python (e.g., from an Arches export):
+## Build and test
 
 ```bash
-cd crates/ros-madair-builder
-pip install maturin
-maturin develop --release
-```
-
-This installs the `ros_madair` Python package with the `IndexBuilder` class.
-
-## Verify
-
-```bash
-# Run the core test suite
+cargo build --release
 cargo test --workspace
-
-# Check the WASM builds correctly
-ls example/pkg/ros_madair_client_bg.wasm
 ```
 
-## Next Steps
+## Python bindings (optional)
 
-See the [Quick Start](quickstart.md) to build an index and run your first query.
+```bash
+pip install maturin
+maturin develop -m crates/ros-madair-python/Cargo.toml
+```
+
+This produces an importable extension module exposing `compile_query` and the
+`hydrate_*` entry points.
+
+## Documentation site
+
+The docs are built with [Zensical](https://github.com/squidfunk/zensical) (the
+MkDocs successor):
+
+```bash
+pip install -r requirements-docs.txt
+zensical serve            # local preview
+zensical build --clean    # output in site/
+```

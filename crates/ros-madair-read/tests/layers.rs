@@ -1061,7 +1061,7 @@ fn the_overlay_overrides_the_tile_it_restates_and_keeps_the_ones_it_does_not() {
 
     let tree = f
         .layers
-        .hydrate_resource(TALK_A, &f.graph)
+        .hydrate_resource(TALK_A, &f.graph, &["en"])
         .expect("hydrate");
 
     let topics = format!("{:?}", tree["topics"]);
@@ -1075,7 +1075,7 @@ fn the_overlay_overrides_the_tile_it_restates_and_keeps_the_ones_it_does_not() {
     );
 
     assert_eq!(
-        tree["title"]["en"]["value"], "3 W's of UI",
+        tree["title"], "3 W's of UI",
         "a partial overlay must not blank a tile it did not restate"
     );
     assert!(
@@ -1106,7 +1106,7 @@ fn the_composed_display_name_is_recomputed_from_the_composed_tiles() {
 
     let composed = f
         .layers
-        .hydrate_resource(TALK_A, &f.graph)
+        .hydrate_resource(TALK_A, &f.graph, &["en"])
         .expect("hydrate");
     assert_eq!(
         composed["_name"], "3 W's of UI",
@@ -1119,7 +1119,7 @@ fn the_composed_display_name_is_recomputed_from_the_composed_tiles() {
     // therefore genuinely a product of composition, not the topmost layer's.
     let overlay_only = Layers::open(&[f.overlay_head.as_path()]).unwrap();
     let solo = overlay_only
-        .hydrate_resource(TALK_A, &f.graph)
+        .hydrate_resource(TALK_A, &f.graph, &["en"])
         .expect("hydrate");
     assert_ne!(
         solo["_name"], "3 W's of UI",

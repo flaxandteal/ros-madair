@@ -96,7 +96,7 @@ fn a_current_version_snapshot_reads() {
     };
     assert!(open_head(&out).is_ok(), "head opens at the current version");
     assert!(Layers::open(&[out.as_path()]).is_ok(), "layer opens");
-    let tree = hydrate_resource(&out, TALK, &graph).unwrap();
+    let tree = hydrate_resource(&out, TALK, &graph, &["en"]).unwrap();
     assert!(tree.is_object(), "the resource hydrates");
 }
 
@@ -119,7 +119,7 @@ fn a_skewed_head_user_version_is_refused() {
     );
     // …and so the whole read fails, loudly.
     assert!(matches!(
-        hydrate_resource(&out, TALK, &graph),
+        hydrate_resource(&out, TALK, &graph, &["en"]),
         Err(ReadError::FormatSkew { .. })
     ));
 }
@@ -164,7 +164,7 @@ fn a_skewed_chunk_header_is_refused() {
     }
     // Head + manifest are untouched, so this must be a CHUNK error specifically.
     assert!(
-        matches!(hydrate_resource(&out, TALK, &graph), Err(ReadError::Chunk { .. })),
+        matches!(hydrate_resource(&out, TALK, &graph, &["en"]), Err(ReadError::Chunk { .. })),
         "a clobbered chunk header is refused on hydrate"
     );
 }

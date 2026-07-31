@@ -103,12 +103,26 @@ fn main() -> ExitCode {
     // Register the CLM reference handler so the plain CLI path indexes
     // `reference` fields (core knows no `reference` — the handler does).
     let registry = ros_madair_emit::default_registry();
-    match ros_madair_emit::emit_with_options(
+    // Progress to STDERR (stdout stays clean for the summary JSON). Greppable
+    // `PROGRESS …` lines — watch a long emit with `… 2>&1 | grep PROGRESS`, or
+    // read them live when the emit runs as a background process.
+    let mut on_progress = |p: ros_madair_emit::EmitProgress| {
+        match p {
+            ros_madair_emit::EmitProgress::Phase(name) => eprintln!("PROGRESS phase {name}"),
+            ros_madair_emit::EmitProgress::Streaming { done, total } => {
+                let pct = if total > 0 { done * 100 / total } else { 0 };
+                eprintln!("PROGRESS streaming {done}/{total} ({pct}%)");
+            }
+        }
+        std::ops::ControlFlow::Continue(())
+    };
+    match ros_madair_emit::emit_with_progress(
         &positional[0],
         &out_dir,
         &base_uri,
         &options,
         &registry,
+        &mut on_progress,
     ) {
         Ok(summary) => {
             println!("{}", serde_json::to_string_pretty(&summary).unwrap());

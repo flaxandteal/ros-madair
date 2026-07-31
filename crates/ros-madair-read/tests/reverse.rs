@@ -259,12 +259,12 @@ fn chunk_cache_serves_repeat_reads() {
     let layers = Layers::open(&[base.as_path(), overlay.as_path()]).unwrap();
     assert!(layers.chunk_cache().is_empty(), "cache starts cold");
 
-    layers.hydrate_resource(C, &graph).unwrap();
+    layers.hydrate_resource(C, &graph, &["en"]).unwrap();
     let cold_misses = layers.chunk_cache().misses();
     let cold_hits = layers.chunk_cache().hits();
     assert!(cold_misses > 0, "the first hydrate fetched chunks");
 
-    layers.hydrate_resource(C, &graph).unwrap();
+    layers.hydrate_resource(C, &graph, &["en"]).unwrap();
     assert_eq!(
         layers.chunk_cache().misses(),
         cold_misses,
@@ -298,7 +298,7 @@ fn cited_by_reads_no_chunks() {
     assert!(layers.chunk_cache().is_empty(), "no chunk entered the cache");
 
     // Only the hydrate touches chunks.
-    layers.hydrate_resource(C, &graph).unwrap();
+    layers.hydrate_resource(C, &graph, &["en"]).unwrap();
     assert!(
         layers.chunk_cache().misses() > 0,
         "the hydrate (not the scan) is what reads chunks"
