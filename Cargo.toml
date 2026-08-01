@@ -13,6 +13,7 @@ members = [
     "crates/ros-madair-emit",
     "crates/ros-madair-read",
     "crates/ros-madair-python",
+    "crates/ros-madair-duck",
 ]
 default-members = [
     "crates/ros-madair-handlers",

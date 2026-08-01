@@ -1,0 +1,35 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+[package]
+name = "ros-madair-duck"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
+description = "Slice 2 of the DuckDB+Parquet substrate: the shared structured read path — compile the Rós Madair Query IR to DuckDB SQL over tile-row Parquet, with exact spatial."
+
+[dependencies]
+# The native DuckDB Rust binding (rusqlite-shaped API). `bundled` compiles the
+# libduckdb amalgamation, so this crate is self-contained on desktop. The same
+# engine/SQL runs as DuckDB-WASM in the browser — this is the native side of one
+# shared substrate, not a second backend.
+duckdb = { version = "1", features = ["bundled"] }
+# Reuse the ONE typed query IR — the same `Query`/`Expr` the head-SQL compiler
+# takes — so both backends answer the same queries. This crate is the second
+# compiler for that IR (→ DuckDB SQL), not a second IR.
+ros-madair-query = { path = "../ros-madair-query" }
+alizarin-core.workspace = true
+serde_json = "1"
+
+[dev-dependencies]
+ros-madair-emit = { path = "../ros-madair-emit" }
+ros-madair-read = { path = "../ros-madair-read" }
+ros-madair-handlers = { path = "../ros-madair-handlers" }
+# Integration tests don't see the crate's normal deps — mirror the ones the
+# parity test builds queries and graphs with.
+ros-madair-query = { path = "../ros-madair-query" }
+alizarin-core.workspace = true
+serde_json = "1"
