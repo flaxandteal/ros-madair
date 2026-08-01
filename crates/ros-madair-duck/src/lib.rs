@@ -25,11 +25,34 @@
 //!   - Promotion is "first indexed node of a class per tile" (from slice 1), so a
 //!     nodegroup with two nodes of the same class is not yet distinguished.
 
+use std::path::Path;
+
 use alizarin_core::datatype_index::datatype_index_spec;
 use alizarin_core::extension_type_registry::{ExtensionTypeRegistry, IndexClass};
 use alizarin_core::graph::{StaticGraph, StaticNode};
 use duckdb::Connection;
 use ros_madair_query::{ConceptOp, Expr, Query};
+
+/// Apply the spatial-extension source to a fresh connection. Best-effort for the
+/// online path (a non-spatial query still works if it fails); for the offline
+/// path it disables autoinstall so a missing local binary is a loud error, not a
+/// silent network fetch.
+fn configure_spatial(conn: &Connection, spatial: &SpatialSource) {
+    match spatial {
+        SpatialSource::None => {}
+        SpatialSource::Auto => {
+            let _ = conn.execute_batch("INSTALL spatial; LOAD spatial;");
+        }
+        SpatialSource::OfflineDir(dir) => {
+            let _ = conn.execute_batch(&format!(
+                "SET autoinstall_known_extensions=false; \
+                 SET extension_directory='{}'; \
+                 LOAD spatial;",
+                sql_lit(&dir.display().to_string())
+            ));
+        }
+    }
+}
 
 /// Why a DuckDB read failed.
 #[derive(Debug)]
@@ -62,17 +85,43 @@ pub struct DuckReader {
     has_catalog: bool,
 }
 
+/// Where DuckDB's spatial extension comes from. `json` is statically bundled
+/// (cargo feature) so it needs no source; `parquet` reading is core. Spatial is
+/// the one extension that cannot be cargo-bundled.
+pub enum SpatialSource<'a> {
+    /// Best-effort network `INSTALL spatial` (dev / online).
+    Auto,
+    /// **Offline**: load `spatial.duckdb_extension` from a local
+    /// `extension_directory` (`<dir>/<version>/<platform>/spatial.duckdb_extension`)
+    /// with autoinstall disabled — no network. This is the on-device / mobile
+    /// path: the app ships the platform's spatial binary and points here.
+    OfflineDir(&'a Path),
+    /// Skip spatial — non-spatial queries only (a `Bbox` will then error at the
+    /// DuckDB layer rather than silently mis-answer).
+    None,
+}
+
 impl DuckReader {
     /// Open a reader over a Parquet path/glob (a single `tiles_<slug>.parquet`,
-    /// or a Hive-partitioned glob). Loads the spatial + json extensions so exact
-    /// `ST_Intersects` and geometry parsing from the `data` blob work.
+    /// or a Hive-partitioned glob), installing spatial over the network if
+    /// needed. For offline/on-device use [`open_offline`](Self::open_offline).
     pub fn open(parquet_glob: &str) -> Result<Self, DuckError> {
+        Self::open_with(parquet_glob, SpatialSource::Auto)
+    }
+
+    /// Open for **offline** use: json is bundled (compiled in), and spatial loads
+    /// from `extension_dir` with no network. Parquet reading is core. This is the
+    /// deployment path for a bundled app.
+    pub fn open_offline(parquet_glob: &str, extension_dir: &Path) -> Result<Self, DuckError> {
+        Self::open_with(parquet_glob, SpatialSource::OfflineDir(extension_dir))
+    }
+
+    /// Open with an explicit spatial source.
+    pub fn open_with(parquet_glob: &str, spatial: SpatialSource) -> Result<Self, DuckError> {
         let conn = Connection::open_in_memory()?;
-        // json is needed to pull the geometry out of the tile `data` blob;
-        // spatial for the exact intersection fine step. Best-effort load — a
-        // non-spatial query still works if spatial is unavailable.
-        let _ = conn.execute_batch("INSTALL json; LOAD json;");
-        let _ = conn.execute_batch("INSTALL spatial; LOAD spatial;");
+        // json_extract* are available with NO INSTALL — the `json` cargo feature
+        // statically links the JSON extension into libduckdb. parquet is core.
+        configure_spatial(&conn, &spatial);
         conn.execute_batch(&format!(
             "CREATE VIEW tiles AS SELECT * FROM read_parquet('{}');",
             sql_lit(parquet_glob)
@@ -80,18 +129,21 @@ impl DuckReader {
         Ok(Self { conn, has_catalog: false })
     }
 
-    /// Open with a concept catalog attached (the `concept_catalog.parquet`
-    /// projected from `RdmCache`), enabling `DescendantOrSelfOf` — a subtree
-    /// range read (`dfs_enter BETWEEN pre_X AND submax_X`). DFS-ordered, so the
-    /// zone-map prunes to just the subtree's row groups.
-    pub fn open_with_catalog(parquet_glob: &str, catalog_glob: &str) -> Result<Self, DuckError> {
-        let mut r = Self::open(parquet_glob)?;
-        r.conn.execute_batch(&format!(
+    /// Attach a concept catalog (the `concept_catalog.parquet` projected from
+    /// `RdmCache`), enabling `DescendantOrSelfOf` — a subtree range read
+    /// (`dfs_enter BETWEEN pre_X AND submax_X`), zone-map-pruned to the subtree.
+    pub fn with_catalog(mut self, catalog_glob: &str) -> Result<Self, DuckError> {
+        self.conn.execute_batch(&format!(
             "CREATE VIEW concepts AS SELECT * FROM read_parquet('{}');",
             sql_lit(catalog_glob)
         ))?;
-        r.has_catalog = true;
-        Ok(r)
+        self.has_catalog = true;
+        Ok(self)
+    }
+
+    /// Convenience: [`open`](Self::open) + [`with_catalog`](Self::with_catalog).
+    pub fn open_with_catalog(parquet_glob: &str, catalog_glob: &str) -> Result<Self, DuckError> {
+        Self::open(parquet_glob)?.with_catalog(catalog_glob)
     }
 
     /// The label for a concept id, from the catalog (unblocks `v2_closure`-style
@@ -340,5 +392,61 @@ mod tests {
         let conn = Connection::open_in_memory().unwrap();
         let v: i64 = conn.query_row("SELECT 1 + 41", [], |r| r.get(0)).unwrap();
         assert_eq!(v, 42);
+    }
+
+    /// OFFLINE guarantee for JSON: `json_extract` works with autoinstall DISABLED
+    /// and no `INSTALL`/`LOAD` — proving the `json` extension is statically
+    /// compiled in (the `json` cargo feature), not fetched from the network. This
+    /// is the function the `Bbox`/`data`-blob path relies on.
+    #[test]
+    fn json_is_bundled_no_network() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch("SET autoinstall_known_extensions=false; SET autoload_known_extensions=false;")
+            .unwrap();
+        let v: i64 = conn
+            .query_row(
+                "SELECT json_extract('{\"a\": 42}', '$.a')::BIGINT",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(v, 42, "json_extract must work with no network install");
+    }
+
+    /// OFFLINE seam for spatial: with autoinstall DISABLED and `extension_directory`
+    /// pointed at a local dir holding `spatial.duckdb_extension`, `LOAD spatial`
+    /// succeeds from disk — no network. Skips if this dev box has no cached
+    /// extension (CI / a device ships its own per-platform binary).
+    #[test]
+    fn spatial_loads_offline_from_local_dir() {
+        let Some(home) = std::env::var_os("HOME") else {
+            eprintln!("no HOME — skipping");
+            return;
+        };
+        let ext_dir = Path::new(&home).join(".duckdb").join("extensions");
+        // The layout is <dir>/<version>/<platform>/spatial.duckdb_extension.
+        let has_any = std::fs::read_dir(&ext_dir).ok().is_some_and(|rd| {
+            rd.filter_map(|e| e.ok()).any(|v| {
+                v.path()
+                    .join("linux_amd64")
+                    .join("spatial.duckdb_extension")
+                    .exists()
+            })
+        });
+        if !has_any {
+            eprintln!("no cached spatial extension — skipping offline spatial test");
+            return;
+        }
+        let conn = Connection::open_in_memory().unwrap();
+        configure_spatial(&conn, &SpatialSource::OfflineDir(&ext_dir));
+        // If spatial loaded from disk, a spatial function resolves.
+        let area: f64 = conn
+            .query_row(
+                "SELECT ST_Area(ST_GeomFromText('POLYGON((0 0, 2 0, 2 2, 0 2, 0 0))'))",
+                [],
+                |r| r.get(0),
+            )
+            .expect("spatial loaded offline from the local extension_directory");
+        assert_eq!(area, 4.0);
     }
 }

@@ -16,7 +16,11 @@ description = "Slice 2 of the DuckDB+Parquet substrate: the shared structured re
 # libduckdb amalgamation, so this crate is self-contained on desktop. The same
 # engine/SQL runs as DuckDB-WASM in the browser — this is the native side of one
 # shared substrate, not a second backend.
-duckdb = { version = "1", features = ["bundled"] }
+# `json` statically compiles the JSON extension into the bundled libduckdb, so
+# `json_extract*` work OFFLINE with no `INSTALL`/network. (parquet reading is
+# core.) The spatial extension is NOT cargo-bundleable — it loads from a local
+# `.duckdb_extension` file via `extension_directory` (see `open_offline`).
+duckdb = { version = "1", features = ["bundled", "json"] }
 # Reuse the ONE typed query IR — the same `Query`/`Expr` the head-SQL compiler
 # takes — so both backends answer the same queries. This crate is the second
 # compiler for that IR (→ DuckDB SQL), not a second IR.
