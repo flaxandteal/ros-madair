@@ -32,6 +32,9 @@ const FOUNDED_NG: &str = "5efd0000-0000-4000-8000-000000000001";
 const TOPIC_NG: &str = "5efd0000-0000-4000-8000-000000000003";
 const TOPIC_A: &str = "aaaaaaaa-0000-4000-8000-000000000001";
 const TOPIC_B: &str = "bbbbbbbb-0000-4000-8000-000000000001";
+// A resource-instance-list link node. POINT + LSHAPE link to FAR; FAR + DIAG
+// have no link. Exact HasLink here (the head's chunk_link_summary is coarse).
+const LINK_NG: &str = "5efd0000-0000-4000-8000-000000000004";
 
 const R_POINT: &str = "11110000-0000-4000-8000-000000000001";
 const R_LSHAPE: &str = "22220000-0000-4000-8000-000000000001";
@@ -71,18 +74,22 @@ fn add_node(graph_path: &Path, nodeid: &str, alias: &str, datatype: &str, edge: 
     g["edges"].as_array_mut().unwrap().push(json!({ "edgeid": edge, "domainnode_id": TALK_ROOT, "rangenode_id": nodeid, "graph_id": TALK_GRAPH }));
     std::fs::write(graph_path, serde_json::to_vec_pretty(&doc).unwrap()).unwrap();
 }
-fn talk(id: &str, tag: &str, geometry: serde_json::Value, founded: &str, topic: &str) -> serde_json::Value {
+fn talk(id: &str, tag: &str, geometry: serde_json::Value, founded: &str, topic: &str, link_to: Option<&str>) -> serde_json::Value {
     let fc = json!({ "type": "FeatureCollection", "features": [{ "type": "Feature", "properties": {}, "geometry": geometry }] });
-    // A `reference` tile stores a bare array of the list-item UUID (the shape the
-    // clm handler indexes) — see ros-madair-read/tests/reference_labels.rs.
+    // A `reference` tile stores a bare array of the list-item UUID; a link tile
+    // stores `[{"resourceId": target}]` (the shape link_keys parses).
+    let mut tiles = vec![
+        json!({ "tileid": format!("a{tag}0000-0000-4000-8000-000000000010"), "nodegroup_id": GEO_NG, "parenttile_id": null, "resourceinstance_id": id, "sortorder": 0, "provisionaledits": null, "data": { GEO_NG: fc } }),
+        json!({ "tileid": format!("b{tag}0000-0000-4000-8000-000000000010"), "nodegroup_id": FOUNDED_NG, "parenttile_id": null, "resourceinstance_id": id, "sortorder": 0, "provisionaledits": null, "data": { FOUNDED_NG: founded } }),
+        json!({ "tileid": format!("c{tag}0000-0000-4000-8000-000000000010"), "nodegroup_id": TOPIC_NG, "parenttile_id": null, "resourceinstance_id": id, "sortorder": 0, "provisionaledits": null, "data": { TOPIC_NG: [topic] } }),
+    ];
+    if let Some(t) = link_to {
+        tiles.push(json!({ "tileid": format!("d{tag}0000-0000-4000-8000-000000000010"), "nodegroup_id": LINK_NG, "parenttile_id": null, "resourceinstance_id": id, "sortorder": 0, "provisionaledits": null, "data": { LINK_NG: [{ "resourceId": t }] } }));
+    }
     json!({
         "resourceinstance": { "resourceinstanceid": id, "graph_id": TALK_GRAPH, "name": id, "legacyid": null,
             "descriptors": { "en": { "name": id, "description": "", "map_popup": "" } } },
-        "tiles": [
-            { "tileid": format!("a{tag}0000-0000-4000-8000-000000000010"), "nodegroup_id": GEO_NG, "parenttile_id": null, "resourceinstance_id": id, "sortorder": 0, "provisionaledits": null, "data": { GEO_NG: fc } },
-            { "tileid": format!("b{tag}0000-0000-4000-8000-000000000010"), "nodegroup_id": FOUNDED_NG, "parenttile_id": null, "resourceinstance_id": id, "sortorder": 0, "provisionaledits": null, "data": { FOUNDED_NG: founded } },
-            { "tileid": format!("c{tag}0000-0000-4000-8000-000000000010"), "nodegroup_id": TOPIC_NG, "parenttile_id": null, "resourceinstance_id": id, "sortorder": 0, "provisionaledits": null, "data": { TOPIC_NG: [topic] } },
-        ],
+        "tiles": tiles,
     })
 }
 
@@ -96,14 +103,15 @@ fn corpus() -> Option<(PathBuf, PathBuf, StaticGraph)> {
     add_node(&gp, GEO_NG, "location", "geojson-feature-collection", "5efd0000-0000-4000-8000-0000000000ef");
     add_node(&gp, FOUNDED_NG, "founded", "date", "5efd0000-0000-4000-8000-0000000000ee");
     add_node(&gp, TOPIC_NG, "topic", "reference", "5efd0000-0000-4000-8000-0000000000ed");
+    add_node(&gp, LINK_NG, "related", "resource-instance-list", "5efd0000-0000-4000-8000-0000000000ec");
     let talk_dir = dir.join("resources").join("talk");
     std::fs::create_dir_all(&talk_dir).unwrap();
     let resources = vec![
-        // POINT + LSHAPE share TOPIC_A; FAR + DIAG share TOPIC_B.
-        talk(R_POINT, "0", json!({ "type": "Point", "coordinates": [0.0, 0.0] }), "2005-06-01", TOPIC_A),
-        talk(R_LSHAPE, "1", json!({ "type": "Polygon", "coordinates": [[[0.5,0.5],[10.0,0.5],[10.0,2.0],[2.0,2.0],[2.0,10.0],[0.5,10.0],[0.5,0.5]]] }), "2018-03-15", TOPIC_A),
-        talk(R_FAR, "2", json!({ "type": "Point", "coordinates": [100.0, 100.0] }), "1850-01-01", TOPIC_B),
-        talk(R_DIAG, "3", json!({ "type": "LineString", "coordinates": [[0.5,5.0],[5.0,0.5]] }), "2021-07-01", TOPIC_B),
+        // POINT + LSHAPE share TOPIC_A and link to FAR; FAR + DIAG share TOPIC_B, no link.
+        talk(R_POINT, "0", json!({ "type": "Point", "coordinates": [0.0, 0.0] }), "2005-06-01", TOPIC_A, Some(R_FAR)),
+        talk(R_LSHAPE, "1", json!({ "type": "Polygon", "coordinates": [[[0.5,0.5],[10.0,0.5],[10.0,2.0],[2.0,2.0],[2.0,10.0],[0.5,10.0],[0.5,0.5]]] }), "2018-03-15", TOPIC_A, Some(R_FAR)),
+        talk(R_FAR, "2", json!({ "type": "Point", "coordinates": [100.0, 100.0] }), "1850-01-01", TOPIC_B, None),
+        talk(R_DIAG, "3", json!({ "type": "LineString", "coordinates": [[0.5,5.0],[5.0,0.5]] }), "2021-07-01", TOPIC_B, None),
     ];
     std::fs::write(talk_dir.join("talks.json"), serde_json::to_vec_pretty(&json!({ "business_data": { "resources": resources } })).unwrap()).unwrap();
 
@@ -129,6 +137,9 @@ fn q(w: Expr) -> Query {
 }
 fn topic_is(value: &str) -> Expr {
     Expr::Concept { path: "topic".into(), op: ros_madair_query::ConceptOp::Is, value: value.into() }
+}
+fn links_to(target: Option<&str>) -> Expr {
+    Expr::HasLink { path: "related".into(), target: target.map(String::from) }
 }
 
 #[test]
@@ -178,11 +189,22 @@ fn duckdb_path_matches_the_battery_and_is_exact_on_spatial() {
     // The reference query agrees with the head path (both exact for concepts).
     assert_eq!(ids(topic_is(TOPIC_A)), head_ids(topic_is(TOPIC_A)), "reference: duck == head");
 
+    // Links are EXACT here (the tile carries its real targets), unlike the head's
+    // coarse chunk_link_summary. POINT + LSHAPE link to FAR; FAR + DIAG don't.
+    assert_eq!(ids(links_to(Some(R_FAR))), set(&[R_POINT, R_LSHAPE]), "HasLink to FAR is exact");
+    assert_eq!(ids(links_to(None)), set(&[R_POINT, R_LSHAPE]), "HasLink (any) = the linkers");
+    assert_eq!(ids(links_to(Some(R_POINT))), Vec::<String>::new(), "nobody links to POINT");
+    // Composes: links to FAR AND date >= 2010 → LSHAPE (2018), not POINT (2005).
+    assert_eq!(
+        ids(Expr::All(vec![links_to(Some(R_FAR)), date_range("2010-01-01", "3000-01-01")])),
+        set(&[R_LSHAPE]),
+    );
+
     // The headline, in one assertion: the head path returns the diagonal; the
     // DuckDB path does not. Same corpus, same query, exact vs superset.
     let head_spatial = head_ids(bbox(-1.0, -1.0, 1.0, 1.0));
     assert!(head_spatial.contains(&R_DIAG.to_string()), "head resolve() keeps the bbox superset (the diagonal)");
     assert!(!ids(bbox(-1.0, -1.0, 1.0, 1.0)).contains(&R_DIAG.to_string()), "duck path is exact — drops it");
 
-    eprintln!("OK: battery matches; spatial exact (diagonal dropped); reference == concept mechanism");
+    eprintln!("OK: battery matches; spatial + link exact; reference == concept mechanism");
 }

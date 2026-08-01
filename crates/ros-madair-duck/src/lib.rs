@@ -16,8 +16,9 @@
 //! Slice-2 scope (called out, not hidden):
 //!   - `Concept` supports `Is` (exact); `DescendantOrSelfOf` needs concept DFS
 //!     intervals in the substrate (a later slice) → unsupported error.
-//!   - `HasLink` needs a promoted link column (slice 1 didn't promote links) →
-//!     unsupported error.
+//!   - `HasLink` is EXACT — the emitter promotes the tile's actual target ids
+//!     (`link_targets`, a JSON array), so membership is precise (the head was
+//!     coarse here).
 //!   - `path` resolves a bare alias; dot-qualified paths are a later increment.
 //!   - Promotion is "first indexed node of a class per tile" (from slice 1), so a
 //!     nodegroup with two nodes of the same class is not yet distinguished.
@@ -194,10 +195,24 @@ fn compile_expr(
                 sql_lit(&ng)
             ))
         }
-        Expr::HasLink { path, .. } => Err(DuckError::Compile(format!(
-            "link predicate on '{path}' needs a promoted link column — slice 1 \
-             did not promote links (later slice)"
-        ))),
+        Expr::HasLink { path, target } => {
+            let (node, ng) = resolve(graph, path)?;
+            expect_class(&node, registry, |c| matches!(c, IndexClass::Link), path, "link")?;
+            // EXACT, unlike the head's coarse chunk_link_summary: `link_targets`
+            // is the tile's actual target ids (a JSON array), so membership is
+            // precise. `None` target = "has any link on this node".
+            let cond = match target {
+                Some(t) => format!(
+                    "link_targets IS NOT NULL AND json_contains(link_targets, '\"{}\"')",
+                    sql_lit(t)
+                ),
+                None => "link_targets IS NOT NULL AND link_targets <> '[]'".to_string(),
+            };
+            Ok(format!(
+                "SELECT DISTINCT resource_id FROM tiles WHERE nodegroup_id = '{}' AND {cond}",
+                sql_lit(&ng)
+            ))
+        }
     }
 }
 

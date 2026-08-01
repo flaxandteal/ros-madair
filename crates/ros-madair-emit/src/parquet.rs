@@ -295,6 +295,9 @@ struct Row {
     sortorder: Option<i32>,
     q_ordered: Option<i64>,
     concept_id: Option<String>,
+    /// Exact link target ids as a JSON array string (null if the tile has no
+    /// link node), so `HasLink` tests membership precisely.
+    link_targets: Option<String>,
     geo: Option<(f64, f64, f64, f64)>,
     data_json: String,
 }
@@ -324,6 +327,7 @@ pub fn write_model_parquet(
             let mut q_ordered = None;
             let mut concept_id = None;
             let mut geo = None;
+            let mut link_targets: Option<String> = None;
 
             for (node_id, value) in &tile.data {
                 if value.is_null() {
@@ -356,6 +360,15 @@ pub fn write_model_parquet(
                     IndexClass::ConceptHierarchical { .. } if concept_id.is_none() => {
                         concept_id = spec.keys.first().cloned();
                     }
+                    // Links are EXACT here (unlike the head's coarse
+                    // chunk_link_summary): the tile carries its actual target
+                    // ids. Store them as a JSON array so a HasLink query can test
+                    // membership precisely.
+                    IndexClass::Link if link_targets.is_none() => {
+                        if !spec.keys.is_empty() {
+                            link_targets = Some(serde_json::to_string(&spec.keys)?);
+                        }
+                    }
                     _ => {}
                 }
             }
@@ -378,6 +391,7 @@ pub fn write_model_parquet(
                 sortorder: tile.sortorder,
                 q_ordered,
                 concept_id,
+                link_targets,
                 geo,
                 data_json: serde_json::to_string(&tile.data)?,
             });
@@ -475,6 +489,7 @@ fn tile_schema() -> Arc<Schema> {
         Field::new("ng_order", DataType::Int64, false),
         Field::new("q_ordered", DataType::Int64, true),
         Field::new("concept_id", DataType::Utf8, true),
+        Field::new("link_targets", DataType::Utf8, true),
         Field::new("geo_min_lng", DataType::Float64, true),
         Field::new("geo_min_lat", DataType::Float64, true),
         Field::new("geo_max_lng", DataType::Float64, true),
@@ -504,6 +519,7 @@ fn write_rows<'a>(
             Arc::new(Int64Array::from_iter(rows.clone().map(|r| Some(r.ng_order)))),
             Arc::new(Int64Array::from_iter(rows.clone().map(|r| r.q_ordered))),
             Arc::new(StringArray::from_iter(rows.clone().map(|r| r.concept_id.as_deref()))),
+            Arc::new(StringArray::from_iter(rows.clone().map(|r| r.link_targets.as_deref()))),
             Arc::new(Float64Array::from_iter(rows.clone().map(|r| r.geo.map(|g| g.0)))),
             Arc::new(Float64Array::from_iter(rows.clone().map(|r| r.geo.map(|g| g.1)))),
             Arc::new(Float64Array::from_iter(rows.clone().map(|r| r.geo.map(|g| g.2)))),
