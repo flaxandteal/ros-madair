@@ -33,7 +33,10 @@ sha2 = "0.10"
 # disk-spilling sort) so a full-corpus build is memory-bounded — the same engine
 # that reads the substrate also writes it. Arrow/parquet remain for the small
 # in-memory concept-catalog writer.
-duckdb = { version = "1", features = ["bundled"] }
+# `parquet` statically links the parquet extension so `COPY … TO (FORMAT parquet)`
+# works OFFLINE — without it the writer autoloads and tries to download the
+# extension, impossible on Android (no android binaries; verified on-device).
+duckdb = { version = "1", features = ["bundled", "json", "parquet"] }
 arrow = "53"
 parquet = "53"
 
