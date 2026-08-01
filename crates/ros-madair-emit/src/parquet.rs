@@ -579,6 +579,7 @@ impl TileStage {
         let conn = Connection::open(&db).map_err(|e| format!("duckdb open: {e}"))?;
         conn.execute_batch(&format!(
             "SET temp_directory='{}';
+             SET memory_limit='512MB';
              CREATE TABLE stage (
                model_slug VARCHAR, resource_id VARCHAR, descriptor_name VARCHAR,
                nodegroup_id VARCHAR, tileid VARCHAR, parenttile_id VARCHAR,
@@ -725,18 +726,23 @@ pub fn emit_parquet(
     let scratch = out.join(".rmstage");
     let stage = TileStage::new(&scratch)?;
     let mut nonempty = vec![false; models.len()];
+    // STREAM the business-data too: element-by-element, never a whole-file parse.
+    // Téarma ships as ONE ~486 MB business_data JSON; `fs::read` + whole-file
+    // `parse_business_data_bytes` balloons to multiple GB and OOMs on-device (the
+    // tile-WRITE side was already disk-spill-bounded; the READ side was not).
+    // `stream_business_data_resources` walks the `resources` array and hands us one
+    // element's bytes at a time, so peak memory stays bounded to a single resource
+    // plus the disk-spilling DuckDB stage.
     for path in crate::input::business_data_files(data_dir)? {
-        let bytes = fs::read(&path)?;
-        let parsed = match alizarin_core::parse_business_data_bytes(&bytes) {
-            Ok(r) => r,
-            Err(e) => {
-                eprintln!("skipping {} ({e})", path.display());
-                continue;
-            }
-        };
-        for r in parsed {
+        let file = fs::File::open(&path)?;
+        // Preserve the whole-parse semantics: a *parse* error skips the file
+        // (below), but an *append* error is FATAL — capture it out-of-band and
+        // re-raise, rather than letting the file-skip swallow it.
+        let mut append_err: Option<EmitError> = None;
+        let stream_res = alizarin_core::stream_business_data_resources(file, |_offset, bytes| {
+            let r = alizarin_core::parse_business_data_resource_bytes(bytes)?;
             if let Some(&gi) = by_graph.get(r.resourceinstance.graph_id.as_str()) {
-                append_resource(
+                if let Err(e) = append_resource(
                     &stage,
                     &models[gi].slug,
                     &r,
@@ -745,9 +751,20 @@ pub fn emit_parquet(
                     registry,
                     &value_to_concept,
                     &ng_intervals[gi],
-                )?;
+                ) {
+                    append_err = Some(e);
+                    return Err(alizarin_core::loader::LoaderError::Other("append failed".into()));
+                }
                 nonempty[gi] = true;
             }
+            Ok(())
+        });
+        if let Some(e) = append_err {
+            return Err(e);
+        }
+        if let Err(e) = stream_res {
+            eprintln!("skipping {} ({e})", path.display());
+            continue;
         }
     }
 
