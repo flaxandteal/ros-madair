@@ -1820,6 +1820,7 @@ version = "0.1.0-alpha.15"
 dependencies = [
  "alizarin-core",
  "arrow 53.4.1",
+ "duckdb",
  "geojson",
  "parquet",
  "rmp-serde",

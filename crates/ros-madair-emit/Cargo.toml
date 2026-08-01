@@ -28,10 +28,12 @@ serde_json = "1"
 rusqlite = { version = "0.32", features = ["bundled"] }
 rmp-serde = "1"
 sha2 = "0.10"
-# Slice 1 of the DuckDB+Parquet substrate: the additive tile-row Parquet writer
-# (`parquet.rs`), alongside the existing head/chunk writer. Pure-Rust Arrow, no
-# C++ — a row group is the RM "chunk"; row order (sorted by the per-graph cluster
-# key) is the RM "locality"; promoted typed columns carry the node-level index.
+# The DuckDB+Parquet substrate writer (`parquet.rs`). The tile path STREAMS
+# through a file-backed DuckDB staging table + `COPY … ORDER BY` (external,
+# disk-spilling sort) so a full-corpus build is memory-bounded — the same engine
+# that reads the substrate also writes it. Arrow/parquet remain for the small
+# in-memory concept-catalog writer.
+duckdb = { version = "1", features = ["bundled"] }
 arrow = "53"
 parquet = "53"
 

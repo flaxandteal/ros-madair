@@ -36,11 +36,14 @@ use alizarin_core::extension_type_registry::{ExtensionTypeRegistry, IndexClass};
 use alizarin_core::graph::{StaticGraph, StaticNode, StaticNodegroup, StaticResource};
 use alizarin_core::rdm_cache::{RdmCache, RdmCollection};
 
-use arrow::array::{Float64Array, Int32Array, Int64Array, StringArray, UInt64Array};
+// Arrow/parquet: the small in-memory concept-catalog writer only. The tile path
+// streams through DuckDB (below).
+use arrow::array::{Int64Array, StringArray};
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
 use parquet::arrow::ArrowWriter;
-use parquet::file::properties::WriterProperties;
+
+use duckdb::{params, Connection};
 
 use crate::EmitError;
 
@@ -382,27 +385,10 @@ fn first_geo_bbox(
 }
 
 // ---------------------------------------------------------------------------
-// Row assembly + write
+// Row assembly + write — tiles STREAM through a DuckDB stage (see `TileStage`),
+// so there is no in-memory row buffer; each tile is promoted and appended, then
+// dropped.
 // ---------------------------------------------------------------------------
-
-struct Row {
-    cluster_key: u64,
-    /// The tile's nodegroup DFS pre-order index (its subtree-range coordinate).
-    ng_order: i64,
-    resource_id: String,
-    descriptor_name: Option<String>,
-    nodegroup_id: String,
-    tileid: Option<String>,
-    parenttile_id: Option<String>,
-    sortorder: Option<i32>,
-    q_ordered: Option<i64>,
-    concept_id: Option<String>,
-    /// Exact link target ids as a JSON array string (null if the tile has no
-    /// link node), so `HasLink` tests membership precisely.
-    link_targets: Option<String>,
-    geo: Option<(f64, f64, f64, f64)>,
-    data_json: String,
-}
 
 /// Write one model's tiles to `<out>/tiles_<slug>.parquet`.
 pub fn write_model_parquet(
@@ -417,238 +403,277 @@ pub fn write_model_parquet(
     value_to_concept: &HashMap<String, String>,
     path: &Path,
 ) -> Result<ParquetModelSummary, EmitError> {
-    let mut rows: Vec<Row> = Vec::new();
     let ng_intervals = nodegroup_dfs_intervals(graph.nodegroups_slice());
-
+    let scratch = stage_scratch(path, slug);
+    let stage = TileStage::new(&scratch)?;
     for r in resources {
-        let name = r.resourceinstance.descriptors.name.clone();
-        let centroid = first_geo_bbox(r, graph, registry)
-            .map(|(mnx, mny, mxx, mxy)| ((mnx + mxx) / 2.0, (mny + mxy) / 2.0));
-        let key = cluster_key(&cfg.dimensions, centroid, name.as_deref().unwrap_or(""));
-
-        let Some(tiles) = r.tiles.as_ref() else {
-            continue;
-        };
-        for tile in tiles {
-            let mut q_ordered = None;
-            let mut concept_id = None;
-            let mut geo = None;
-            let mut link_targets: Option<String> = None;
-
-            for (node_id, value) in &tile.data {
-                if value.is_null() {
-                    continue;
-                }
-                let Some(node) = graph.get_node_by_id(node_id) else {
-                    continue;
-                };
-                let spec = datatype_index_spec(
-                    &node.datatype,
-                    value,
-                    node_config_value(node).as_ref(),
-                    Some(registry),
-                );
-                match spec.class {
-                    IndexClass::Ordered if q_ordered.is_none() => {
-                        // date/edtf → days-from-civil, the same quantizer the head used.
-                        if matches!(node.datatype.as_str(), "date" | "edtf") {
-                            q_ordered = spec
-                                .keys
-                                .first()
-                                .and_then(|k| alizarin_core::quantize::quantize_date(k));
-                        }
-                    }
-                    IndexClass::SpatialBbox if geo.is_none() => {
-                        if let Ok(s) = serde_json::to_string(value) {
-                            geo = crate::geo::extract_bbox(&s);
-                        }
-                    }
-                    IndexClass::ConceptHierarchical { .. } if concept_id.is_none() => {
-                        // Resolve value-id → concept-id (canonical), falling back
-                        // to the raw key when it is not a controlled-list value.
-                        concept_id = spec.keys.first().map(|k| {
-                            value_to_concept.get(k).cloned().unwrap_or_else(|| k.clone())
-                        });
-                    }
-                    // Links are EXACT here (unlike the head's coarse
-                    // chunk_link_summary): the tile carries its actual target
-                    // ids. Store them as a JSON array so a HasLink query can test
-                    // membership precisely.
-                    IndexClass::Link if link_targets.is_none() => {
-                        if !spec.keys.is_empty() {
-                            link_targets = Some(serde_json::to_string(&spec.keys)?);
-                        }
-                    }
-                    _ => {}
-                }
-            }
-
-            // Unknown nodegroups sort last (sentinel), so a malformed tile never
-            // lands inside a real subtree's range.
-            let ng_order = ng_intervals
-                .get(&tile.nodegroup_id)
-                .map(|(pre, _)| *pre)
-                .unwrap_or(i64::MAX);
-
-            rows.push(Row {
-                cluster_key: key,
-                ng_order,
-                resource_id: tile.resourceinstance_id.clone(),
-                descriptor_name: name.clone(),
-                nodegroup_id: tile.nodegroup_id.clone(),
-                tileid: tile.tileid.clone(),
-                parenttile_id: tile.parenttile_id.clone(),
-                sortorder: tile.sortorder,
-                q_ordered,
-                concept_id,
-                link_targets,
-                geo,
-                data_json: serde_json::to_string(&tile.data)?,
-            });
-        }
+        append_resource(&stage, slug, r, graph, cfg, registry, value_to_concept, &ng_intervals)?;
     }
-
-    // The physical row order IS the locality. Two primary axes:
-    //  - hierarchical: nodegroup DFS `pre` first, so a subtree is one contiguous
-    //    range (single range read for "X and its children");
-    //  - default: the cluster key first, keeping a resource's tiles contiguous
-    //    and geo/name zone-maps tight.
-    if cfg.nodegroup_hierarchical_order {
-        rows.sort_by(|a, b| {
-            a.ng_order
-                .cmp(&b.ng_order)
-                .then_with(|| a.cluster_key.cmp(&b.cluster_key))
-                .then_with(|| a.resource_id.cmp(&b.resource_id))
-                .then_with(|| a.sortorder.cmp(&b.sortorder))
-        });
-    } else {
-        rows.sort_by(|a, b| {
-            a.cluster_key
-                .cmp(&b.cluster_key)
-                .then_with(|| a.resource_id.cmp(&b.resource_id))
-                .then_with(|| a.nodegroup_id.cmp(&b.nodegroup_id))
-                .then_with(|| a.sortorder.cmp(&b.sortorder))
-        });
-    }
-
-    // The subtree-interval sidecar: a consumer maps "nodegroup X" -> [pre, submax]
-    // and reads the single `ng_order BETWEEN pre AND submax` range.
-    if cfg.nodegroup_hierarchical_order {
-        let mut map: Vec<(&String, (i64, i64))> = ng_intervals.iter().map(|(k, v)| (k, *v)).collect();
-        map.sort_by_key(|(_, (pre, _))| *pre);
-        let obj: serde_json::Map<String, serde_json::Value> = map
-            .into_iter()
-            .map(|(k, (pre, submax))| (k.clone(), serde_json::json!([pre, submax])))
-            .collect();
-        let sidecar = path.with_extension("nodegroup_intervals.json");
-        if let Some(parent) = sidecar.parent() {
-            fs::create_dir_all(parent)?;
-        }
-        fs::write(&sidecar, serde_json::to_vec_pretty(&serde_json::Value::Object(obj))?)?;
-    }
-
-    let tiles = rows.len();
-    let (out_path, row_groups, partitions) = if cfg.partition_by_nodegroup {
-        // Nodegroup as a PARTITION axis: one file per nodegroup under a
-        // Hive-partitioned directory, each internally sorted by the cluster key.
-        // `rows` is already globally cluster-sorted, so per-partition order is a
-        // stable sub-sequence — no re-sort needed.
-        let dir = path.with_extension(""); // drop `.parquet` -> the partition root
-        let _ = fs::remove_dir_all(&dir);
-        let mut by_ng: HashMap<&str, Vec<&Row>> = HashMap::new();
-        for r in &rows {
-            by_ng.entry(r.nodegroup_id.as_str()).or_default().push(r);
-        }
-        // Deterministic partition order.
-        let mut ngs: Vec<&str> = by_ng.keys().copied().collect();
-        ngs.sort_unstable();
-        let mut total_rg = 0usize;
-        for ng in &ngs {
-            let part_dir = dir.join(format!("nodegroup_id={ng}"));
-            fs::create_dir_all(&part_dir)?;
-            total_rg += write_rows(by_ng[ng].iter().copied(), cfg.row_group_size, &part_dir.join("tiles.parquet"))?;
-        }
-        (dir.display().to_string(), total_rg, ngs.len())
-    } else {
-        let rg = write_rows(rows.iter(), cfg.row_group_size, path)?;
-        (path.display().to_string(), rg, 0)
-    };
-
-    Ok(ParquetModelSummary {
-        slug: slug.to_string(),
-        graph_id: graph.graphid.clone(),
-        path: out_path,
-        resources: resources.len(),
-        tiles,
-        row_groups,
-        partitions,
-    })
+    write_ng_sidecar(&ng_intervals, cfg, path)?;
+    let summary = stage.write_model(slug, &graph.graphid, cfg, path)?;
+    drop(stage);
+    let _ = fs::remove_dir_all(&scratch);
+    Ok(summary)
 }
 
-/// The frozen tile-row schema — identical for the single-file and partitioned
-/// layouts, so a reader treats a partition file and a whole-model file alike.
-fn tile_schema() -> Arc<Schema> {
-    Arc::new(Schema::new(vec![
-        Field::new("resource_id", DataType::Utf8, false),
-        Field::new("descriptor_name", DataType::Utf8, true),
-        Field::new("nodegroup_id", DataType::Utf8, false),
-        Field::new("tileid", DataType::Utf8, true),
-        Field::new("parenttile_id", DataType::Utf8, true),
-        Field::new("sortorder", DataType::Int32, true),
-        Field::new("cluster_key", DataType::UInt64, false),
-        Field::new("ng_order", DataType::Int64, false),
-        Field::new("q_ordered", DataType::Int64, true),
-        Field::new("concept_id", DataType::Utf8, true),
-        Field::new("link_targets", DataType::Utf8, true),
-        Field::new("geo_min_lng", DataType::Float64, true),
-        Field::new("geo_min_lat", DataType::Float64, true),
-        Field::new("geo_max_lng", DataType::Float64, true),
-        Field::new("geo_max_lat", DataType::Float64, true),
-        Field::new("data", DataType::Utf8, false),
-    ]))
+/// Escape a single-quoted SQL string literal (double the quotes). Used for the
+/// paths/slugs spliced into the DuckDB `COPY`/`SET` statements.
+fn sql_lit(s: &str) -> String {
+    s.replace('\'', "''")
 }
 
-/// Write a run of rows (already in the intended physical order) to one Parquet
-/// file with `row_group_size` as the chunk size. Returns the row-group count.
-fn write_rows<'a>(
-    rows: impl Iterator<Item = &'a Row> + Clone,
-    row_group_size: usize,
+/// A scratch dir for a stage keyed to the output path + slug (unique per model,
+/// cleaned up after write).
+fn stage_scratch(path: &Path, slug: &str) -> std::path::PathBuf {
+    path.parent()
+        .unwrap_or_else(|| Path::new("."))
+        .join(format!(".rmstage_{}", slug.replace('-', "_")))
+}
+
+/// Write the subtree-interval sidecar (`<path>.nodegroup_intervals.json`) when
+/// hierarchical ordering is on: a consumer maps "nodegroup X" → `[pre, submax]`
+/// and reads the single `ng_order BETWEEN pre AND submax` range.
+fn write_ng_sidecar(
+    ng_intervals: &HashMap<String, (i64, i64)>,
+    cfg: &ClusterConfig,
     path: &Path,
-) -> Result<usize, EmitError> {
-    let schema = tile_schema();
-    let batch = RecordBatch::try_new(
-        schema.clone(),
-        vec![
-            Arc::new(StringArray::from_iter(rows.clone().map(|r| Some(r.resource_id.as_str())))),
-            Arc::new(StringArray::from_iter(rows.clone().map(|r| r.descriptor_name.as_deref()))),
-            Arc::new(StringArray::from_iter(rows.clone().map(|r| Some(r.nodegroup_id.as_str())))),
-            Arc::new(StringArray::from_iter(rows.clone().map(|r| r.tileid.as_deref()))),
-            Arc::new(StringArray::from_iter(rows.clone().map(|r| r.parenttile_id.as_deref()))),
-            Arc::new(Int32Array::from_iter(rows.clone().map(|r| r.sortorder))),
-            Arc::new(UInt64Array::from_iter(rows.clone().map(|r| Some(r.cluster_key)))),
-            Arc::new(Int64Array::from_iter(rows.clone().map(|r| Some(r.ng_order)))),
-            Arc::new(Int64Array::from_iter(rows.clone().map(|r| r.q_ordered))),
-            Arc::new(StringArray::from_iter(rows.clone().map(|r| r.concept_id.as_deref()))),
-            Arc::new(StringArray::from_iter(rows.clone().map(|r| r.link_targets.as_deref()))),
-            Arc::new(Float64Array::from_iter(rows.clone().map(|r| r.geo.map(|g| g.0)))),
-            Arc::new(Float64Array::from_iter(rows.clone().map(|r| r.geo.map(|g| g.1)))),
-            Arc::new(Float64Array::from_iter(rows.clone().map(|r| r.geo.map(|g| g.2)))),
-            Arc::new(Float64Array::from_iter(rows.clone().map(|r| r.geo.map(|g| g.3)))),
-            Arc::new(StringArray::from_iter(rows.clone().map(|r| Some(r.data_json.as_str())))),
-        ],
-    )?;
-
-    if let Some(parent) = path.parent() {
+) -> Result<(), EmitError> {
+    if !cfg.nodegroup_hierarchical_order {
+        return Ok(());
+    }
+    let mut map: Vec<(&String, (i64, i64))> = ng_intervals.iter().map(|(k, v)| (k, *v)).collect();
+    map.sort_by_key(|(_, (pre, _))| *pre);
+    let obj: serde_json::Map<String, serde_json::Value> = map
+        .into_iter()
+        .map(|(k, (pre, submax))| (k.clone(), serde_json::json!([pre, submax])))
+        .collect();
+    let sidecar = path.with_extension("nodegroup_intervals.json");
+    if let Some(parent) = sidecar.parent() {
         fs::create_dir_all(parent)?;
     }
-    let file = fs::File::create(path)?;
-    let props = WriterProperties::builder()
-        .set_max_row_group_size(row_group_size.max(1))
-        .build();
-    let mut writer = ArrowWriter::try_new(file, schema, Some(props))?;
-    writer.write(&batch)?;
-    let meta = writer.close()?;
-    Ok(meta.row_groups.len())
+    fs::write(&sidecar, serde_json::to_vec_pretty(&serde_json::Value::Object(obj))?)?;
+    Ok(())
+}
+
+/// Promote one resource's tiles and STREAM them into the stage — no `Vec<Row>`.
+/// Every promoted column is a pure function of the tile (+ the resource's
+/// cluster key), so this holds one tile's worth of state at a time.
+#[allow(clippy::too_many_arguments)]
+fn append_resource(
+    stage: &TileStage,
+    model_slug: &str,
+    r: &StaticResource,
+    graph: &StaticGraph,
+    cfg: &ClusterConfig,
+    registry: &ExtensionTypeRegistry,
+    value_to_concept: &HashMap<String, String>,
+    ng_intervals: &HashMap<String, (i64, i64)>,
+) -> Result<(), EmitError> {
+    let name = r.resourceinstance.descriptors.name.clone();
+    let centroid = first_geo_bbox(r, graph, registry)
+        .map(|(mnx, mny, mxx, mxy)| ((mnx + mxx) / 2.0, (mny + mxy) / 2.0));
+    let key = cluster_key(&cfg.dimensions, centroid, name.as_deref().unwrap_or(""));
+
+    let Some(tiles) = r.tiles.as_ref() else {
+        return Ok(());
+    };
+    let mut app = stage.conn.appender("stage")?;
+    for tile in tiles {
+        let mut q_ordered = None;
+        let mut concept_id = None;
+        let mut geo = None;
+        let mut link_targets: Option<String> = None;
+
+        for (node_id, value) in &tile.data {
+            if value.is_null() {
+                continue;
+            }
+            let Some(node) = graph.get_node_by_id(node_id) else {
+                continue;
+            };
+            let spec = datatype_index_spec(
+                &node.datatype,
+                value,
+                node_config_value(node).as_ref(),
+                Some(registry),
+            );
+            match spec.class {
+                IndexClass::Ordered if q_ordered.is_none() => {
+                    // date/edtf → days-from-civil, the same quantizer the head used.
+                    if matches!(node.datatype.as_str(), "date" | "edtf") {
+                        q_ordered = spec
+                            .keys
+                            .first()
+                            .and_then(|k| alizarin_core::quantize::quantize_date(k));
+                    }
+                }
+                IndexClass::SpatialBbox if geo.is_none() => {
+                    if let Ok(s) = serde_json::to_string(value) {
+                        geo = crate::geo::extract_bbox(&s);
+                    }
+                }
+                IndexClass::ConceptHierarchical { .. } if concept_id.is_none() => {
+                    // Resolve value-id → concept-id (canonical), falling back
+                    // to the raw key when it is not a controlled-list value.
+                    concept_id = spec.keys.first().map(|k| {
+                        value_to_concept.get(k).cloned().unwrap_or_else(|| k.clone())
+                    });
+                }
+                // Links are EXACT here (unlike the head's coarse
+                // chunk_link_summary): the tile carries its actual target ids.
+                IndexClass::Link if link_targets.is_none() => {
+                    if !spec.keys.is_empty() {
+                        link_targets = Some(serde_json::to_string(&spec.keys)?);
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        // Unknown nodegroups sort last (sentinel), so a malformed tile never
+        // lands inside a real subtree's range.
+        let ng_order = ng_intervals
+            .get(&tile.nodegroup_id)
+            .map(|(pre, _)| *pre)
+            .unwrap_or(i64::MAX);
+        let data_json = serde_json::to_string(&tile.data)?;
+
+        app.append_row(params![
+            model_slug,
+            tile.resourceinstance_id,
+            name,
+            tile.nodegroup_id,
+            tile.tileid,
+            tile.parenttile_id,
+            tile.sortorder,
+            key,
+            ng_order,
+            q_ordered,
+            concept_id,
+            link_targets,
+            geo.map(|g| g.0),
+            geo.map(|g| g.1),
+            geo.map(|g| g.2),
+            geo.map(|g| g.3),
+            data_json,
+        ])?;
+    }
+    app.flush()?;
+    Ok(())
+}
+
+/// A file-backed DuckDB staging table for tile rows. Rows STREAM in via the
+/// Appender (never held in Rust memory); [`write_model`](Self::write_model) runs
+/// `COPY (… ORDER BY …)` — an external, disk-spilling sort — so a full-corpus
+/// build is memory-bounded. The same engine that reads the substrate writes it.
+/// `model_slug` separates models sharing one stage.
+pub(crate) struct TileStage {
+    conn: Connection,
+}
+
+impl TileStage {
+    fn new(scratch: &Path) -> Result<Self, EmitError> {
+        fs::create_dir_all(scratch)?;
+        let db = scratch.join("stage.duckdb");
+        let _ = fs::remove_file(&db);
+        let conn = Connection::open(&db).map_err(|e| format!("duckdb open: {e}"))?;
+        conn.execute_batch(&format!(
+            "SET temp_directory='{}';
+             CREATE TABLE stage (
+               model_slug VARCHAR, resource_id VARCHAR, descriptor_name VARCHAR,
+               nodegroup_id VARCHAR, tileid VARCHAR, parenttile_id VARCHAR,
+               sortorder INTEGER, cluster_key UBIGINT, ng_order BIGINT,
+               q_ordered BIGINT, concept_id VARCHAR, link_targets VARCHAR,
+               geo_min_lng DOUBLE, geo_min_lat DOUBLE, geo_max_lng DOUBLE, geo_max_lat DOUBLE,
+               data VARCHAR);",
+            sql_lit(&scratch.display().to_string())
+        ))
+        .map_err(|e| format!("duckdb stage schema: {e}"))?;
+        Ok(Self { conn })
+    }
+
+    /// `COPY` one model's staged rows to Parquet, sorted (external) by the
+    /// cluster key — or, hierarchical, by the nodegroup DFS `pre` first.
+    fn write_model(
+        &self,
+        slug: &str,
+        graph_id: &str,
+        cfg: &ClusterConfig,
+        path: &Path,
+    ) -> Result<ParquetModelSummary, EmitError> {
+        let order = if cfg.nodegroup_hierarchical_order {
+            "ng_order, cluster_key, resource_id, sortorder"
+        } else {
+            "cluster_key, resource_id, nodegroup_id, sortorder"
+        };
+        // NB: model_slug is excluded from the output — it is a stage-only routing
+        // column, not part of the frozen tile-row schema.
+        let cols = "resource_id, descriptor_name, nodegroup_id, tileid, parenttile_id, \
+                    sortorder, cluster_key, ng_order, q_ordered, concept_id, link_targets, \
+                    geo_min_lng, geo_min_lat, geo_max_lng, geo_max_lat, data";
+        let slug_lit = sql_lit(slug);
+        let rgs = cfg.row_group_size.max(1);
+        let count = |sql: &str| -> Result<i64, EmitError> {
+            Ok(self.conn.query_row(sql, params![slug], |r| r.get(0))?)
+        };
+        let tiles = count("SELECT count(*) FROM stage WHERE model_slug = ?")? as usize;
+        let resources =
+            count("SELECT count(DISTINCT resource_id) FROM stage WHERE model_slug = ?")? as usize;
+
+        let (out_path, glob, partitions) = if cfg.partition_by_nodegroup {
+            let dir = path.with_extension(""); // drop `.parquet` → partition root
+            let _ = fs::remove_dir_all(&dir);
+            // WRITE_PARTITION_COLUMNS keeps `nodegroup_id` inside each file (a
+            // plain `read_parquet(glob)` then still has the column), matching the
+            // prior layout; the path also carries it (Hive) for partition prune.
+            self.conn
+                .execute_batch(&format!(
+                    "COPY (SELECT {cols} FROM stage WHERE model_slug = '{slug_lit}' ORDER BY {order}) \
+                     TO '{}' (FORMAT PARQUET, PARTITION_BY (nodegroup_id), \
+                              WRITE_PARTITION_COLUMNS true, ROW_GROUP_SIZE {rgs});",
+                    dir.display()
+                ))
+                .map_err(|e| format!("duckdb COPY (partitioned): {e}"))?;
+            let parts =
+                count("SELECT count(DISTINCT nodegroup_id) FROM stage WHERE model_slug = ?")?
+                    as usize;
+            (dir.display().to_string(), format!("{}/**/*.parquet", dir.display()), parts)
+        } else {
+            if let Some(p) = path.parent() {
+                fs::create_dir_all(p)?;
+            }
+            self.conn
+                .execute_batch(&format!(
+                    "COPY (SELECT {cols} FROM stage WHERE model_slug = '{slug_lit}' ORDER BY {order}) \
+                     TO '{}' (FORMAT PARQUET, ROW_GROUP_SIZE {rgs});",
+                    path.display()
+                ))
+                .map_err(|e| format!("duckdb COPY: {e}"))?;
+            (path.display().to_string(), path.display().to_string(), 0)
+        };
+
+        let row_groups: i64 = self
+            .conn
+            .query_row(
+                &format!(
+                    "SELECT coalesce(sum(num_row_groups), 0) FROM parquet_file_metadata('{}')",
+                    sql_lit(&glob)
+                ),
+                [],
+                |r| r.get(0),
+            )
+            .unwrap_or(0);
+
+        Ok(ParquetModelSummary {
+            slug: slug.to_string(),
+            graph_id: graph_id.to_string(),
+            path: out_path,
+            resources,
+            tiles,
+            row_groups: row_groups as usize,
+            partitions,
+        })
+    }
 }
 
 /// Emit tile-row Parquet for every model in `data_dir` into `out_dir`, one
@@ -684,7 +709,22 @@ pub fn emit_parquet(
         .map(|(i, m)| (m.graph.graphid.as_str(), i))
         .collect();
 
-    let mut resources_by_model: Vec<Vec<StaticResource>> = (0..models.len()).map(|_| Vec::new()).collect();
+    // Per-model config + nodegroup DFS intervals, computed once.
+    let cfgs: Vec<ClusterConfig> = models
+        .iter()
+        .map(|m| config_by_graph.get(&m.graph.graphid).cloned().unwrap_or_default())
+        .collect();
+    let ng_intervals: Vec<HashMap<String, (i64, i64)>> = models
+        .iter()
+        .map(|m| nodegroup_dfs_intervals(m.graph.nodegroups_slice()))
+        .collect();
+
+    // STREAM: one shared file-backed stage; parse each business-data file and
+    // append its resources' tiles, never accumulating resources or rows. `emit`'s
+    // model routing tags each row with `model_slug`.
+    let scratch = out.join(".rmstage");
+    let stage = TileStage::new(&scratch)?;
+    let mut nonempty = vec![false; models.len()];
     for path in crate::input::business_data_files(data_dir)? {
         let bytes = fs::read(&path)?;
         let parsed = match alizarin_core::parse_business_data_bytes(&bytes) {
@@ -696,28 +736,32 @@ pub fn emit_parquet(
         };
         for r in parsed {
             if let Some(&gi) = by_graph.get(r.resourceinstance.graph_id.as_str()) {
-                resources_by_model[gi].push(r);
+                append_resource(
+                    &stage,
+                    &models[gi].slug,
+                    &r,
+                    &models[gi].graph,
+                    &cfgs[gi],
+                    registry,
+                    &value_to_concept,
+                    &ng_intervals[gi],
+                )?;
+                nonempty[gi] = true;
             }
         }
     }
 
     let mut summaries = Vec::new();
     for (i, m) in models.iter().enumerate() {
-        if resources_by_model[i].is_empty() {
+        if !nonempty[i] {
             continue;
         }
-        let cfg = config_by_graph.get(&m.graph.graphid).cloned().unwrap_or_default();
         let path = out.join(format!("tiles_{}.parquet", m.slug.replace('-', "_")));
-        summaries.push(write_model_parquet(
-            &m.slug,
-            &m.graph,
-            &resources_by_model[i],
-            &cfg,
-            registry,
-            &value_to_concept,
-            &path,
-        )?);
+        write_ng_sidecar(&ng_intervals[i], &cfgs[i], &path)?;
+        summaries.push(stage.write_model(&m.slug, &m.graph.graphid, &cfgs[i], &path)?);
     }
+    drop(stage);
+    let _ = fs::remove_dir_all(&scratch);
     Ok(summaries)
 }
 
