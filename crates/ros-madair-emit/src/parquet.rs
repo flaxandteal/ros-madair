@@ -359,7 +359,11 @@ fn first_geo_bbox(
 ) -> Option<(f64, f64, f64, f64)> {
     let tiles = resource.tiles.as_ref()?;
     for tile in tiles {
-        for (node_id, value) in &tile.data {
+        // Sorted view: HashMap iteration is per-run randomized, and this picks
+        // the FIRST bbox as the row's cluster geo cell — which decides row order.
+        let mut sorted: Vec<(&String, &serde_json::Value)> = tile.data.iter().collect();
+        sorted.sort_unstable_by(|a, b| a.0.cmp(b.0));
+        for &(node_id, value) in &sorted {
             if value.is_null() {
                 continue;
             }
@@ -484,7 +488,15 @@ fn append_resource(
         let mut geo = None;
         let mut link_targets: Option<String> = None;
 
-        for (node_id, value) in &tile.data {
+        // `StaticTile.data` is a HashMap — per-run randomized iteration order. A
+        // sorted view makes BOTH the `is_none()` "first wins" promotions below
+        // AND the serialized `data` column (further down) deterministic run-to-
+        // run, the same reason `ros-madair-format`'s `ChunkTile.data` is a
+        // `BTreeMap` (see that crate's comment). Without it, content hashes on
+        // the parquet output vary between identical emits.
+        let mut sorted: Vec<(&String, &serde_json::Value)> = tile.data.iter().collect();
+        sorted.sort_unstable_by(|a, b| a.0.cmp(b.0));
+        for &(node_id, value) in &sorted {
             if value.is_null() {
                 continue;
             }
@@ -536,7 +548,14 @@ fn append_resource(
             .get(&tile.nodegroup_id)
             .map(|(pre, _)| *pre)
             .unwrap_or(i64::MAX);
-        let data_json = serde_json::to_string(&tile.data)?;
+        // Sorted key order (see the sorted view above) so the content-hashed
+        // `data` column is byte-identical across runs.
+        let data_json = serde_json::to_string(
+            &sorted
+                .iter()
+                .copied()
+                .collect::<std::collections::BTreeMap<&String, &serde_json::Value>>(),
+        )?;
 
         app.append_row(params![
             model_slug,
