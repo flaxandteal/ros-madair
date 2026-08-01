@@ -33,3 +33,6 @@ ros-madair-handlers = { path = "../ros-madair-handlers" }
 ros-madair-query = { path = "../ros-madair-query" }
 alizarin-core.workspace = true
 serde_json = "1"
+# So the descendant test can COPY tiny tiles/concepts Parquets to drive the
+# range-join directly, without the SKOS-emit path.
+duckdb = { version = "1", features = ["bundled"] }

@@ -119,7 +119,7 @@ fn corpus() -> Option<(PathBuf, PathBuf, StaticGraph)> {
     let head_out = scratch("head");
     ros_madair_emit::emit(dir.to_str().unwrap(), head_out.to_str().unwrap(), "https://example.org/").expect("emit head");
     let pq_out = scratch("pq");
-    ros_madair_emit::emit_parquet(dir.to_str().unwrap(), pq_out.to_str().unwrap(), &registry, &std::collections::HashMap::new()).expect("emit parquet");
+    ros_madair_emit::emit_parquet(dir.to_str().unwrap(), pq_out.to_str().unwrap(), "https://example.org/", &registry, &std::collections::HashMap::new()).expect("emit parquet");
 
     let raw: serde_json::Value = serde_json::from_slice(&std::fs::read(&gp).unwrap()).unwrap();
     let graph: StaticGraph = serde_json::from_value(raw["graph"][0].clone()).unwrap();

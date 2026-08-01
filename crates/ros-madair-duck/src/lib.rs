@@ -14,8 +14,10 @@
 //! tile `data` blob — the fine step, actually done.
 //!
 //! Slice-2 scope (called out, not hidden):
-//!   - `Concept` supports `Is` (exact); `DescendantOrSelfOf` needs concept DFS
-//!     intervals in the substrate (a later slice) → unsupported error.
+//!   - `Concept` supports `Is` (exact) always, and `DescendantOrSelfOf` when a
+//!     concept catalog is attached (`open_with_catalog`) — a DFS-interval range
+//!     read over the catalog projected from `RdmCache`. Works for `concept` AND
+//!     `reference` (shared `ConceptHierarchical` class).
 //!   - `HasLink` is EXACT — the emitter promotes the tile's actual target ids
 //!     (`link_targets`, a JSON array), so membership is precise (the head was
 //!     coarse here).
@@ -53,9 +55,11 @@ impl From<duckdb::Error> for DuckError {
     }
 }
 
-/// A DuckDB connection with a `tiles` view over one model's Parquet.
+/// A DuckDB connection with a `tiles` view over one model's Parquet, and
+/// optionally a `concepts` view over the DFS-ordered concept catalog.
 pub struct DuckReader {
     conn: Connection,
+    has_catalog: bool,
 }
 
 impl DuckReader {
@@ -73,7 +77,37 @@ impl DuckReader {
             "CREATE VIEW tiles AS SELECT * FROM read_parquet('{}');",
             sql_lit(parquet_glob)
         ))?;
-        Ok(Self { conn })
+        Ok(Self { conn, has_catalog: false })
+    }
+
+    /// Open with a concept catalog attached (the `concept_catalog.parquet`
+    /// projected from `RdmCache`), enabling `DescendantOrSelfOf` — a subtree
+    /// range read (`dfs_enter BETWEEN pre_X AND submax_X`). DFS-ordered, so the
+    /// zone-map prunes to just the subtree's row groups.
+    pub fn open_with_catalog(parquet_glob: &str, catalog_glob: &str) -> Result<Self, DuckError> {
+        let mut r = Self::open(parquet_glob)?;
+        r.conn.execute_batch(&format!(
+            "CREATE VIEW concepts AS SELECT * FROM read_parquet('{}');",
+            sql_lit(catalog_glob)
+        ))?;
+        r.has_catalog = true;
+        Ok(r)
+    }
+
+    /// The label for a concept id, from the catalog (unblocks `v2_closure`-style
+    /// display). `None` if no catalog is attached or the concept is unknown.
+    pub fn concept_label(&self, concept_id: &str) -> Result<Option<String>, DuckError> {
+        if !self.has_catalog {
+            return Ok(None);
+        }
+        let mut stmt = self
+            .conn
+            .prepare("SELECT label FROM concepts WHERE concept_id = ?1 LIMIT 1")?;
+        let mut rows = stmt.query_map([concept_id], |r| r.get::<_, Option<String>>(0))?;
+        match rows.next() {
+            Some(r) => Ok(r?),
+            None => Ok(None),
+        }
     }
 
     /// Resolve a query to the sorted set of matching resource ids.
@@ -84,7 +118,7 @@ impl DuckReader {
         registry: &ExtensionTypeRegistry,
     ) -> Result<Vec<String>, DuckError> {
         let select = match &query.r#where {
-            Some(expr) => compile_expr(expr, graph, registry)?,
+            Some(expr) => compile_expr(expr, graph, registry, self.has_catalog)?,
             None => "SELECT DISTINCT resource_id FROM tiles".to_string(),
         };
         let sql = format!("SELECT resource_id FROM ({select}) t ORDER BY resource_id");
@@ -116,6 +150,7 @@ fn compile_expr(
     expr: &Expr,
     graph: &StaticGraph,
     registry: &ExtensionTypeRegistry,
+    has_catalog: bool,
 ) -> Result<String, DuckError> {
     match expr {
         Expr::All(children) => {
@@ -124,7 +159,7 @@ fn compile_expr(
             }
             let parts: Result<Vec<_>, _> = children
                 .iter()
-                .map(|c| compile_expr(c, graph, registry))
+                .map(|c| compile_expr(c, graph, registry, has_catalog))
                 .collect();
             Ok(parts?.join("\nINTERSECT\n"))
         }
@@ -134,12 +169,12 @@ fn compile_expr(
             }
             let parts: Result<Vec<_>, _> = children
                 .iter()
-                .map(|c| compile_expr(c, graph, registry))
+                .map(|c| compile_expr(c, graph, registry, has_catalog))
                 .collect();
             Ok(parts?.join("\nUNION\n"))
         }
         Expr::Not(inner) => {
-            let inner_sql = compile_expr(inner, graph, registry)?;
+            let inner_sql = compile_expr(inner, graph, registry, has_catalog)?;
             Ok(format!(
                 "SELECT DISTINCT resource_id FROM tiles EXCEPT {inner_sql}"
             ))
@@ -154,10 +189,28 @@ fn compile_expr(
                     sql_lit(&ng),
                     sql_lit(value)
                 )),
-                ConceptOp::DescendantOrSelfOf => Err(DuckError::Compile(format!(
-                    "concept descendant-or-self on '{path}' needs concept DFS \
-                     intervals in the substrate — not yet promoted (later slice)"
-                ))),
+                // Descendant-or-self: the tile's concept must fall in the queried
+                // concept's DFS interval. One range read over the DFS-ordered
+                // catalog (works for `concept` AND `reference` — shared class).
+                ConceptOp::DescendantOrSelfOf => {
+                    if !has_catalog {
+                        return Err(DuckError::Compile(format!(
+                            "descendant-or-self on '{path}' needs the concept \
+                             catalog — open with `open_with_catalog`"
+                        )));
+                    }
+                    Ok(format!(
+                        "SELECT DISTINCT t.resource_id FROM tiles t \
+                         JOIN concepts c ON c.concept_id = t.concept_id \
+                         WHERE t.nodegroup_id = '{}' \
+                           AND c.dfs_enter BETWEEN \
+                             (SELECT dfs_enter FROM concepts WHERE concept_id = '{}') AND \
+                             (SELECT dfs_leave FROM concepts WHERE concept_id = '{}')",
+                        sql_lit(&ng),
+                        sql_lit(value),
+                        sql_lit(value)
+                    ))
+                }
             }
         }
         Expr::Range { path, lo, hi } => {

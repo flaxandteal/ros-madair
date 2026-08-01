@@ -181,7 +181,7 @@ fn tile_row_parquet_carries_promoted_columns_and_chunks() {
     );
 
     let registry = default_registry();
-    let summaries = emit_parquet(dir.to_str().unwrap(), out.to_str().unwrap(), &registry, &cfg_by_graph)
+    let summaries = emit_parquet(dir.to_str().unwrap(), out.to_str().unwrap(), "https://example.org/", &registry, &cfg_by_graph)
         .expect("emit_parquet");
 
     let talk = summaries
@@ -282,7 +282,7 @@ fn nodegroup_partitioning_isolates_each_nodegroup_into_its_own_file() {
     );
 
     let registry = default_registry();
-    let summaries = emit_parquet(dir.to_str().unwrap(), out.to_str().unwrap(), &registry, &cfg_by_graph)
+    let summaries = emit_parquet(dir.to_str().unwrap(), out.to_str().unwrap(), "https://example.org/", &registry, &cfg_by_graph)
         .expect("emit_parquet");
     let talk = summaries.iter().find(|s| s.graph_id == TALK_GRAPH).unwrap();
 

@@ -34,6 +34,7 @@ use std::sync::Arc;
 use alizarin_core::datatype_index::datatype_index_spec;
 use alizarin_core::extension_type_registry::{ExtensionTypeRegistry, IndexClass};
 use alizarin_core::graph::{StaticGraph, StaticNode, StaticNodegroup, StaticResource};
+use alizarin_core::rdm_cache::{RdmCache, RdmCollection};
 
 use arrow::array::{Float64Array, Int32Array, Int64Array, StringArray, UInt64Array};
 use arrow::datatypes::{DataType, Field, Schema};
@@ -230,6 +231,107 @@ fn nodegroup_dfs_intervals(ngs: &[StaticNodegroup]) -> HashMap<String, (i64, i64
 }
 
 // ---------------------------------------------------------------------------
+// Concept catalog (projected from RdmCache) — DFS-interval + label
+// ---------------------------------------------------------------------------
+
+/// One row of the concept catalog: a concept's DFS-interval (so a subtree is a
+/// contiguous `dfs_enter` range → `DescendantOrSelfOf` is one DuckDB range read)
+/// plus its display label. Projected from the canonical `RdmCache`, not
+/// reimplemented — the cache is the source of resolution, hierarchy, and labels.
+struct ConceptCatalogRow {
+    concept_id: String,
+    dfs_enter: i64,
+    dfs_leave: i64,
+    label: String,
+}
+
+/// DFS-number one concept subtree over `narrower`. First occurrence wins on a
+/// poly-hierarchy (a repeat visit would fracture the interval) — same rule the
+/// head's concept DFS uses.
+fn dfs_concept(
+    coll: &RdmCollection,
+    id: &str,
+    counter: &mut i64,
+    seen: &mut std::collections::HashSet<String>,
+    rows: &mut Vec<ConceptCatalogRow>,
+) {
+    if !seen.insert(id.to_string()) {
+        return;
+    }
+    let Some(concept) = coll.get_concept(id) else {
+        return;
+    };
+    let enter = *counter;
+    *counter += 1;
+    let mut kids: Vec<&str> = concept.narrower.iter().map(String::as_str).collect();
+    kids.sort_unstable();
+    for k in kids {
+        dfs_concept(coll, k, counter, seen, rows);
+    }
+    let dfs_leave = *counter - 1; // largest pre assigned within this subtree
+    rows.push(ConceptCatalogRow {
+        concept_id: id.to_string(),
+        dfs_enter: enter,
+        dfs_leave,
+        label: coll.get_label(id, "en").unwrap_or_default(),
+    });
+}
+
+/// Project the `RdmCache` into (catalog rows, value-id → concept-id map). The map
+/// is the emit-time resolution so a promoted concept/reference key becomes the
+/// canonical concept id — the same resolution hydration and the head use.
+fn build_concept_catalog(cache: &RdmCache) -> (Vec<ConceptCatalogRow>, HashMap<String, String>) {
+    let mut rows = Vec::new();
+    let mut value_to_concept = HashMap::new();
+    let mut counter = 0i64;
+    let mut coll_ids = cache.get_collection_ids();
+    coll_ids.sort();
+    for cid in &coll_ids {
+        let Some(coll) = cache.get_collection(cid) else {
+            continue;
+        };
+        for vid in coll.get_value_ids() {
+            if let Some(concept) = coll.get_concept_id_for_value(vid) {
+                value_to_concept.insert(vid.clone(), concept.to_string());
+            }
+        }
+        let mut tops: Vec<String> = coll.get_top_concepts().iter().map(|c| c.id.clone()).collect();
+        tops.sort_unstable();
+        let mut seen = std::collections::HashSet::new();
+        for t in &tops {
+            dfs_concept(coll, t, &mut counter, &mut seen, &mut rows);
+        }
+    }
+    (rows, value_to_concept)
+}
+
+/// Write the concept catalog to `<out>/concept_catalog.parquet`, DFS-ordered so a
+/// subtree is a contiguous row range (zone-map-prunable). Skipped when empty.
+fn write_concept_catalog(mut rows: Vec<ConceptCatalogRow>, path: &Path) -> Result<usize, EmitError> {
+    rows.sort_by_key(|r| r.dfs_enter);
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("concept_id", DataType::Utf8, false),
+        Field::new("dfs_enter", DataType::Int64, false),
+        Field::new("dfs_leave", DataType::Int64, false),
+        Field::new("label", DataType::Utf8, true),
+    ]));
+    let batch = RecordBatch::try_new(
+        schema.clone(),
+        vec![
+            Arc::new(StringArray::from_iter(rows.iter().map(|r| Some(r.concept_id.as_str())))),
+            Arc::new(Int64Array::from_iter(rows.iter().map(|r| Some(r.dfs_enter)))),
+            Arc::new(Int64Array::from_iter(rows.iter().map(|r| Some(r.dfs_leave)))),
+            Arc::new(StringArray::from_iter(rows.iter().map(|r| Some(r.label.as_str())))),
+        ],
+    )?;
+    let file = fs::File::create(path)?;
+    let mut writer = ArrowWriter::try_new(file, schema, None)?;
+    writer.write(&batch)?;
+    writer.close()?;
+    Ok(rows.len())
+}
+
+// ---------------------------------------------------------------------------
 // Classification helpers (mirror ros-madair-query's datatype seam)
 // ---------------------------------------------------------------------------
 
@@ -309,6 +411,10 @@ pub fn write_model_parquet(
     resources: &[StaticResource],
     cfg: &ClusterConfig,
     registry: &ExtensionTypeRegistry,
+    // value-id → concept-id resolution (from `RdmCache`), so a promoted
+    // concept/reference key is the canonical concept id — matching hydration and
+    // the head. Empty = identity (a key not in a controlled list passes through).
+    value_to_concept: &HashMap<String, String>,
     path: &Path,
 ) -> Result<ParquetModelSummary, EmitError> {
     let mut rows: Vec<Row> = Vec::new();
@@ -358,7 +464,11 @@ pub fn write_model_parquet(
                         }
                     }
                     IndexClass::ConceptHierarchical { .. } if concept_id.is_none() => {
-                        concept_id = spec.keys.first().cloned();
+                        // Resolve value-id → concept-id (canonical), falling back
+                        // to the raw key when it is not a controlled-list value.
+                        concept_id = spec.keys.first().map(|k| {
+                            value_to_concept.get(k).cloned().unwrap_or_else(|| k.clone())
+                        });
                     }
                     // Links are EXACT here (unlike the head's coarse
                     // chunk_link_summary): the tile carries its actual target
@@ -547,12 +657,25 @@ fn write_rows<'a>(
 pub fn emit_parquet(
     data_dir: &str,
     out_dir: &str,
+    base_uri: &str,
     registry: &ExtensionTypeRegistry,
     config_by_graph: &HashMap<String, ClusterConfig>,
 ) -> Result<Vec<ParquetModelSummary>, EmitError> {
     let data_dir = Path::new(data_dir);
     let out = Path::new(out_dir);
     fs::create_dir_all(out)?;
+
+    // Build the canonical RDM cache from the collections emit already loads, and
+    // project it into (a) the value→concept resolution used for the tile
+    // `concept_id` column and (b) the DFS-ordered concept catalog Parquet that a
+    // DuckDB `DescendantOrSelfOf` range-joins.
+    let collections = crate::closure::load_collections(data_dir, base_uri)?;
+    let mut cache = RdmCache::new();
+    cache.add_from_skos_collections(&collections);
+    let (catalog_rows, value_to_concept) = build_concept_catalog(&cache);
+    if !catalog_rows.is_empty() {
+        write_concept_catalog(catalog_rows, &out.join("concept_catalog.parquet"))?;
+    }
 
     let models = crate::input::load_graphs(data_dir)?;
     let by_graph: HashMap<&str, usize> = models
@@ -591,6 +714,7 @@ pub fn emit_parquet(
             &resources_by_model[i],
             &cfg,
             registry,
+            &value_to_concept,
             &path,
         )?);
     }
@@ -652,5 +776,47 @@ mod tests {
         // Leaves are point intervals.
         assert_eq!(iv["D"].0, iv["D"].1);
         assert_eq!(iv["F"].0, iv["F"].1);
+    }
+
+    /// The concept catalog projected from an in-memory `RdmCache`: a concept
+    /// subtree is a contiguous `dfs_enter` range — what makes `DescendantOrSelfOf`
+    /// a single DuckDB range read. Tree: root → { a → { a1 }, b }.
+    #[test]
+    fn concept_catalog_dfs_intervals_make_a_subtree_a_range() {
+        use alizarin_core::rdm_cache::{RdmCache, RdmCollection, RdmConcept};
+        fn c(id: &str, broader: &[&str], narrower: &[&str]) -> RdmConcept {
+            RdmConcept {
+                id: id.to_string(),
+                pref_label: HashMap::new(),
+                alt_labels: HashMap::new(),
+                broader: broader.iter().map(|s| s.to_string()).collect(),
+                narrower: narrower.iter().map(|s| s.to_string()).collect(),
+                scope_note: HashMap::new(),
+            }
+        }
+        let mut coll = RdmCollection::new("c1".to_string());
+        coll.add_concept(c("root", &[], &["a", "b"]));
+        coll.add_concept(c("a", &["root"], &["a1"]));
+        coll.add_concept(c("a1", &["a"], &[]));
+        coll.add_concept(c("b", &["root"], &[]));
+        let mut cache = RdmCache::new();
+        cache.add_collection(coll);
+
+        let (rows, _v2c) = build_concept_catalog(&cache);
+        let iv: HashMap<String, (i64, i64)> = rows
+            .iter()
+            .map(|r| (r.concept_id.clone(), (r.dfs_enter, r.dfs_leave)))
+            .collect();
+        let inside = |anc: &str, d: &str| {
+            let (e, l) = iv[anc];
+            let (de, _) = iv[d];
+            de >= e && de <= l
+        };
+        for d in ["root", "a", "a1", "b"] {
+            assert!(inside("root", d), "{d} in root's subtree");
+        }
+        assert!(inside("a", "a1"), "a1 under a");
+        assert!(!inside("a", "b") && !inside("a", "root"), "b/root not under a");
+        assert_eq!(iv["a1"].0, iv["a1"].1, "leaf is a point interval");
     }
 }
