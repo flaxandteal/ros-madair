@@ -37,8 +37,8 @@ sha2 = "0.10"
 # works OFFLINE — without it the writer autoloads and tries to download the
 # extension, impossible on Android (no android binaries; verified on-device).
 duckdb = { version = "1", features = ["bundled", "json", "parquet"] }
-arrow = "53"
-parquet = "53"
+arrow = "58"
+parquet = "58"
 
 [dev-dependencies]
 # The `hydrate_entry` example is a driver over the library read path — it does
@@ -46,6 +46,6 @@ parquet = "53"
 ros-madair-read = { path = "../ros-madair-read" }
 # So the Parquet-emit integration test can read its own output back and assert
 # on the promoted columns (integration tests don't see the crate's normal deps).
-arrow = "53"
-parquet = "53"
+arrow = "58"
+parquet = "58"
 alizarin-core.workspace = true
