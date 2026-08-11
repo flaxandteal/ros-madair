@@ -19,11 +19,13 @@
 //!     read over the catalog projected from `RdmCache`. Works for `concept` AND
 //!     `reference` (shared `ConceptHierarchical` class).
 //!   - `HasLink` is EXACT — the emitter promotes the tile's actual target ids
-//!     (`link_targets`, a JSON array), so membership is precise (the head was
-//!     coarse here).
+//!     as a per-NODE object `link_targets` = `{node_id: [targets]}`, so membership
+//!     is precise even when a nodegroup holds >1 link node (the head was coarse
+//!     here). `geo_points` uses the same per-node object for reverse lookups.
 //!   - `path` resolves a bare alias; dot-qualified paths are a later increment.
-//!   - Promotion is "first indexed node of a class per tile" (from slice 1), so a
-//!     nodegroup with two nodes of the same class is not yet distinguished.
+//!   - `concept_id` promotion is still "first indexed node of a class per tile", so
+//!     a nodegroup with two CONCEPT nodes is not yet distinguished (links are now
+//!     per-node; concepts would need the same treatment).
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -284,6 +286,38 @@ impl DuckReader {
         Ok(out)
     }
 
+    /// Reverse-link geo lookup (Gréasán `v2_geo_points`, MapView): every resource
+    /// that links to `target` through node `node_id`, with its descriptor + point
+    /// (`geo_min_lat`/`geo_min_lng`). Node-precise via the per-node `link_targets`
+    /// object. The link and the geometry live on different tiles of the same
+    /// resource, so self-join on `resource_id`.
+    pub fn geo_points(
+        &self,
+        node_id: &str,
+        target: &str,
+    ) -> Result<Vec<(String, String, f64, f64)>, DuckError> {
+        let sql = format!(
+            "SELECT l.resource_id, any_value(l.descriptor_name), \
+                    any_value(g.geo_min_lat), any_value(g.geo_min_lng) \
+             FROM tiles l \
+             JOIN tiles g ON g.resource_id = l.resource_id AND g.geo_min_lat IS NOT NULL \
+             WHERE json_contains(json_extract(l.link_targets, '$.\"{}\"'), '\"{}\"') \
+             GROUP BY l.resource_id",
+            sql_lit(node_id),
+            sql_lit(target)
+        );
+        let mut stmt = self.conn.prepare(&sql)?;
+        let rows = stmt.query_map([], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, Option<String>>(1)?.unwrap_or_default(),
+                r.get::<_, f64>(2)?,
+                r.get::<_, f64>(3)?,
+            ))
+        })?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
     /// Resolve a query to the sorted set of matching resource ids.
     pub fn resolve_ids(
         &self,
@@ -454,18 +488,19 @@ fn compile_expr(
         Expr::HasLink { path, target } => {
             let (node, ng) = resolve(graph, path)?;
             expect_class(&node, registry, |c| matches!(c, IndexClass::Link), path, "link")?;
-            // EXACT, unlike the head's coarse chunk_link_summary: `link_targets`
-            // is the tile's actual target ids (a JSON array), so membership is
-            // precise. `None` target = "has any link on this node".
+            // EXACT, unlike the head's coarse chunk_link_summary. `link_targets` is
+            // now `{node_id: [targets]}` (per-node), so extract THIS node's array -
+            // a multi-link nodegroup (e.g. name_elements) stays precise. A missing
+            // node key → json_extract NULL → the predicate is false.
+            // `None` target = "has any link on this node".
+            let arr = format!("json_extract(link_targets, '$.\"{}\"')", sql_lit(&node.nodeid));
             let cond = match target {
-                Some(t) => format!(
-                    "link_targets IS NOT NULL AND json_contains(link_targets, '\"{}\"')",
-                    sql_lit(t)
-                ),
-                None => "link_targets IS NOT NULL AND link_targets <> '[]'".to_string(),
+                Some(t) => format!("json_contains({arr}, '\"{}\"')", sql_lit(t)),
+                None => format!("json_array_length({arr}) > 0"),
             };
             Ok(format!(
-                "SELECT DISTINCT resource_id FROM tiles WHERE nodegroup_id = '{}' AND {cond}",
+                "SELECT DISTINCT resource_id FROM tiles \
+                 WHERE nodegroup_id = '{}' AND link_targets IS NOT NULL AND {cond}",
                 sql_lit(&ng)
             ))
         }

@@ -486,7 +486,13 @@ fn append_resource(
         let mut q_ordered = None;
         let mut concept_id = None;
         let mut geo = None;
-        let mut link_targets: Option<String> = None;
+        // Per-NODE link targets `{node_id: [target,...]}` (not just the first Link
+        // node's array): a tile's nodegroup can hold >1 link node (e.g. the place
+        // graph's name_elements element_entry + concept_entry), and a node-specific
+        // query (HasLink / reverse-link geo_points) must tell them apart. Sorted
+        // (BTreeMap) so the serialized column is deterministic across emits.
+        let mut link_map: std::collections::BTreeMap<&str, Vec<String>> =
+            std::collections::BTreeMap::new();
 
         // `StaticTile.data` is a HashMap — per-run randomized iteration order. A
         // sorted view makes BOTH the `is_none()` "first wins" promotions below
@@ -533,14 +539,22 @@ fn append_resource(
                 }
                 // Links are EXACT here (unlike the head's coarse
                 // chunk_link_summary): the tile carries its actual target ids.
-                IndexClass::Link if link_targets.is_none() => {
+                // Keyed per node so a multi-link nodegroup stays distinguishable.
+                IndexClass::Link => {
                     if !spec.keys.is_empty() {
-                        link_targets = Some(serde_json::to_string(&spec.keys)?);
+                        link_map.insert(node_id.as_str(), spec.keys.clone());
                     }
                 }
                 _ => {}
             }
         }
+
+        // `{node_id: [targets]}` JSON, or NULL when the tile has no link node.
+        let link_targets: Option<String> = if link_map.is_empty() {
+            None
+        } else {
+            Some(serde_json::to_string(&link_map)?)
+        };
 
         // Unknown nodegroups sort last (sentinel), so a malformed tile never
         // lands inside a real subtree's range.
