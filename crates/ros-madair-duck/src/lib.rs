@@ -265,6 +265,25 @@ impl DuckReader {
         Ok(out)
     }
 
+    /// All `(concept_id, label)` from the catalog - the bulk concept→label dump
+    /// (Gréasán `v2_closure`, for on-device reference rendering). Empty without a
+    /// catalog attached.
+    pub fn concept_labels(&self) -> Result<HashMap<String, String>, DuckError> {
+        let mut out = HashMap::new();
+        if !self.has_catalog {
+            return Ok(out);
+        }
+        let mut stmt = self
+            .conn
+            .prepare("SELECT concept_id, label FROM concepts WHERE label IS NOT NULL AND label <> ''")?;
+        let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
+        for row in rows {
+            let (id, label) = row?;
+            out.insert(id, label);
+        }
+        Ok(out)
+    }
+
     /// Resolve a query to the sorted set of matching resource ids.
     pub fn resolve_ids(
         &self,
