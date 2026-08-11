@@ -422,6 +422,88 @@ impl DuckReader {
     }
 }
 
+/// Multi-layer composed hydration from Parquet - the counterpart of
+/// ros-madair-read's `Layers::hydrate_resource`. Gathers a resource's tiles from
+/// every layer that has it (TOPMOST first, so `merge_resources`' first-wins ==
+/// topmost-wins), merges with per-nodegroup precedence, folds concept labels
+/// base-first (topmost label wins on overwrite), and hydrates. `dirs` is base-first
+/// (the app's composition order). Same composition as the sqlite `Layers` path;
+/// only the tile source (the Parquet `data` column) differs.
+pub fn hydrate_layers(
+    dirs: &[&Path],
+    uuid: &str,
+    graph: &StaticGraph,
+    languages: &[&str],
+) -> Result<serde_json::Value, DuckError> {
+    use alizarin_core::graph::{
+        merge_resources, unify_cardinality_one_tiles, TileMergeMode,
+    };
+
+    let open_layer = |dir: &Path| -> Result<DuckReader, DuckError> {
+        let glob = format!("{}/tiles_*.parquet", dir.display());
+        let mut duck = DuckReader::open_with(&glob, SpatialSource::None)?;
+        let catalog = dir.join("concept_catalog.parquet");
+        if catalog.is_file() {
+            duck = duck.with_catalog(&catalog.to_string_lossy())?;
+        }
+        Ok(duck)
+    };
+
+    // Tiles: topmost first (rev of base-first `dirs`).
+    let mut stack = Vec::new();
+    for dir in dirs.iter().rev() {
+        let tiles = open_layer(dir)?.resource_tiles(uuid)?;
+        if tiles.is_empty() {
+            continue;
+        }
+        stack.push(as_resource(uuid, graph, tiles));
+    }
+    if stack.is_empty() {
+        return Err(DuckError::Compile(format!("resource {uuid} in no layer")));
+    }
+    let merged = merge_resources(stack).map_err(DuckError::Compile)?;
+    let mut tiles = merged.resource.tiles.unwrap_or_default();
+    unify_cardinality_one_tiles(&mut tiles, graph, false, TileMergeMode::PerNodegroup)
+        .map_err(DuckError::Compile)?;
+
+    // Labels: base-first fold so the topmost layer's label wins on overwrite.
+    let mut labels = HashMap::new();
+    for dir in dirs {
+        labels.extend(open_layer(dir)?.concept_labels()?);
+    }
+    ros_madair_read::hydrate_tiles_with_labels(&tiles, uuid, graph, &labels, languages)
+        .map_err(|e| DuckError::Compile(format!("hydrate: {e}")))
+}
+
+/// Build a tiles-only `StaticResource` for merging (mirrors ros-madair-read's
+/// private `as_resource`).
+fn as_resource(
+    uuid: &str,
+    graph: &StaticGraph,
+    tiles: Vec<StaticTile>,
+) -> alizarin_core::graph::StaticResource {
+    use alizarin_core::graph::{StaticResource, StaticResourceMetadata};
+    StaticResource {
+        resourceinstance: StaticResourceMetadata {
+            descriptors: Default::default(),
+            graph_id: graph.graph_id().to_string(),
+            name: String::new(),
+            resourceinstanceid: uuid.to_string(),
+            publication_id: None,
+            principaluser_id: None,
+            legacyid: None,
+            graph_publication_id: None,
+            createdtime: None,
+            lastmodified: None,
+        },
+        tiles: Some(tiles),
+        metadata: Default::default(),
+        cache: None,
+        scopes: None,
+        tiles_loaded: Some(true),
+    }
+}
+
 /// One-shot convenience: open, resolve, done.
 pub fn resolve_ids(
     parquet_glob: &str,
