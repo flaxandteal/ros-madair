@@ -28,6 +28,9 @@ duckdb = { version = "1", features = ["bundled", "json", "parquet"] }
 # takes — so both backends answer the same queries. This crate is the second
 # compiler for that IR (→ DuckDB SQL), not a second IR.
 ros-madair-query = { path = "../ros-madair-query" }
+# The storage-agnostic tile→tree hydration half (hydrate_tiles_with_labels): the
+# duck read path reuses it with tiles read from the Parquet `data` column.
+ros-madair-read = { path = "../ros-madair-read" }
 alizarin-core.workspace = true
 serde_json = "1"
 

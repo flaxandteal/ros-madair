@@ -33,6 +33,7 @@ use std::path::Path;
 use alizarin_core::datatype_index::datatype_index_spec;
 use alizarin_core::extension_type_registry::{ExtensionTypeRegistry, IndexClass};
 use alizarin_core::graph::{StaticGraph, StaticNode};
+use alizarin_core::StaticTile;
 use duckdb::Connection;
 use ros_madair_query::{ConceptOp, Expr, Query};
 
@@ -316,6 +317,58 @@ impl DuckReader {
             ))
         })?;
         rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
+    /// Reconstruct a resource's tiles from the Parquet `data` column - the
+    /// hydration tile source, replacing the msgpack chunk read. The `data` column
+    /// is the tile's `{node_id: value}` JSON; the other columns give the tile
+    /// tree structure (nodegroup, tileid, parent, sortorder).
+    pub fn resource_tiles(&self, uuid: &str) -> Result<Vec<StaticTile>, DuckError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT nodegroup_id, tileid, parenttile_id, sortorder, data \
+             FROM tiles WHERE resource_id = ?",
+        )?;
+        let rows = stmt.query_map([uuid], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, Option<String>>(1)?,
+                r.get::<_, Option<String>>(2)?,
+                r.get::<_, Option<i32>>(3)?,
+                r.get::<_, String>(4)?,
+            ))
+        })?;
+        let mut tiles = Vec::new();
+        for row in rows {
+            let (nodegroup_id, tileid, parenttile_id, sortorder, data_json) = row?;
+            let data = serde_json::from_str(&data_json)
+                .map_err(|e| DuckError::Compile(format!("tile data JSON: {e}")))?;
+            tiles.push(StaticTile {
+                data,
+                nodegroup_id,
+                resourceinstance_id: uuid.to_string(),
+                tileid,
+                parenttile_id,
+                provisionaledits: None,
+                sortorder,
+            });
+        }
+        Ok(tiles)
+    }
+
+    /// Hydrate a resource to a display JSON tree from Parquet: tiles from the
+    /// `data` column ([`resource_tiles`]) + concept labels from the catalog, fed
+    /// to ros-madair-read's storage-agnostic `hydrate_tiles_with_labels` (the
+    /// tile→tree half of hydration). The catalog must be attached for labels.
+    pub fn hydrate(
+        &self,
+        uuid: &str,
+        graph: &StaticGraph,
+        languages: &[&str],
+    ) -> Result<serde_json::Value, DuckError> {
+        let tiles = self.resource_tiles(uuid)?;
+        let labels = self.concept_labels()?;
+        ros_madair_read::hydrate_tiles_with_labels(&tiles, uuid, graph, &labels, languages)
+            .map_err(|e| DuckError::Compile(format!("hydrate: {e}")))
     }
 
     /// Resolve a query to the sorted set of matching resource ids.
