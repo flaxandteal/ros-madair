@@ -25,6 +25,7 @@
 //!   - Promotion is "first indexed node of a class per tile" (from slice 1), so a
 //!     nodegroup with two nodes of the same class is not yet distinguished.
 
+use std::collections::HashMap;
 use std::path::Path;
 
 use alizarin_core::datatype_index::datatype_index_spec;
@@ -160,6 +161,36 @@ impl DuckReader {
             Some(r) => Ok(r?),
             None => Ok(None),
         }
+    }
+
+    /// Per-resource descriptor (display name) for a set of resource ids, read from
+    /// the promoted `descriptor_name` tile column. The Parquet counterpart of the
+    /// sqlite head's `spine.display_name` join (Gréasán `v2_descriptors`): a flat
+    /// column read instead of a spine⨝dict join. Ids with no non-empty descriptor
+    /// are simply absent from the map.
+    pub fn descriptors(&self, uris: &[String]) -> Result<HashMap<String, String>, DuckError> {
+        let mut out = HashMap::new();
+        if uris.is_empty() {
+            return Ok(out);
+        }
+        let placeholders = std::iter::repeat("?")
+            .take(uris.len())
+            .collect::<Vec<_>>()
+            .join(",");
+        let sql = format!(
+            "SELECT resource_id, descriptor_name FROM tiles \
+             WHERE descriptor_name IS NOT NULL AND descriptor_name <> '' \
+             AND resource_id IN ({placeholders})"
+        );
+        let mut stmt = self.conn.prepare(&sql)?;
+        let rows = stmt.query_map(duckdb::params_from_iter(uris.iter()), |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+        })?;
+        for row in rows {
+            let (id, name) = row?;
+            out.entry(id).or_insert(name);
+        }
+        Ok(out)
     }
 
     /// Resolve a query to the sorted set of matching resource ids.
