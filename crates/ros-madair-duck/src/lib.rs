@@ -86,6 +86,15 @@ pub struct DuckReader {
     has_catalog: bool,
 }
 
+/// A resource's search display (from [`DuckReader::search_display`]): headword plus
+/// POS and dialect concept labels.
+#[derive(Debug, Default, Clone)]
+pub struct SearchRow {
+    pub headword: Option<String>,
+    pub pos: Option<String>,
+    pub dialects: Vec<String>,
+}
+
 /// Where DuckDB's spatial extension comes from. `json` is statically bundled
 /// (cargo feature) so it needs no source; `parquet` reading is core. Spatial is
 /// the one extension that cannot be cargo-bundled.
@@ -189,6 +198,69 @@ impl DuckReader {
         for row in rows {
             let (id, name) = row?;
             out.entry(id).or_insert(name);
+        }
+        Ok(out)
+    }
+
+    /// Canonical search display per resource: headword (`descriptor_name`), plus
+    /// the POS + dialect concept labels. POS and each dialect are top-level
+    /// single-concept nodegroups, so each is its own tile: match tiles by
+    /// `nodegroup_id` (= the node id) and join `concept_id` to the catalog label.
+    /// POS/dialects need the concept catalog (`with_catalog`); without it only
+    /// headwords come back.
+    pub fn search_display(
+        &self,
+        uris: &[String],
+        pos_node: &str,
+        dialect_node: &str,
+    ) -> Result<HashMap<String, SearchRow>, DuckError> {
+        let mut out: HashMap<String, SearchRow> = HashMap::new();
+        if uris.is_empty() {
+            return Ok(out);
+        }
+        let ph = std::iter::repeat("?").take(uris.len()).collect::<Vec<_>>().join(",");
+
+        // Headword (descriptor_name), one per resource.
+        let sql = format!(
+            "SELECT resource_id, descriptor_name FROM tiles \
+             WHERE descriptor_name IS NOT NULL AND descriptor_name <> '' \
+             AND resource_id IN ({ph})"
+        );
+        let mut stmt = self.conn.prepare(&sql)?;
+        let rows = stmt.query_map(duckdb::params_from_iter(uris.iter()), |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+        })?;
+        for row in rows {
+            let (id, name) = row?;
+            out.entry(id).or_default().headword.get_or_insert(name);
+        }
+
+        if !self.has_catalog {
+            return Ok(out);
+        }
+
+        // POS + dialect concept labels: tiles of the given nodegroup ⨝ catalog.
+        // params = [node, uris...]; dialects are cardinality-n so collect a Vec.
+        let node_query = |node: &str| -> Result<Vec<(String, String)>, DuckError> {
+            let sql = format!(
+                "SELECT t.resource_id, c.label FROM tiles t \
+                 JOIN concepts c ON c.concept_id = t.concept_id \
+                 WHERE t.nodegroup_id = ? AND c.label IS NOT NULL \
+                 AND t.resource_id IN ({ph})"
+            );
+            let mut stmt = self.conn.prepare(&sql)?;
+            let params = std::iter::once(node.to_string()).chain(uris.iter().cloned());
+            let rows = stmt.query_map(duckdb::params_from_iter(params), |r| {
+                Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+            })?;
+            rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+        };
+
+        for (id, label) in node_query(pos_node)? {
+            out.entry(id).or_default().pos.get_or_insert(label);
+        }
+        for (id, label) in node_query(dialect_node)? {
+            out.entry(id).or_default().dialects.push(label);
         }
         Ok(out)
     }
