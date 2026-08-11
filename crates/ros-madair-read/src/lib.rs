@@ -765,6 +765,11 @@ pub fn hydrate_tiles_with_labels(
     let ctx = SerializationContext {
         node_config: None,
         external_resolver: Some(&resolver),
+        // concept_lookup threads emit-side concept identity; the read/hydration path
+        // resolves concepts via `external_resolver`, so None (added when alizarin's
+        // 5da3e02 made the field required; keeps the parquet substrate compiling
+        // against the current m1-emitter core).
+        concept_lookup: None,
         resource_resolver: None,
         extension_registry: Some(&registry),
     };
