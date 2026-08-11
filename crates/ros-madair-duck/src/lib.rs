@@ -200,11 +200,10 @@ impl DuckReader {
         graph: &StaticGraph,
         registry: &ExtensionTypeRegistry,
     ) -> Result<Vec<String>, DuckError> {
-        let select = match &query.r#where {
-            Some(expr) => compile_expr(expr, graph, registry, self.has_catalog)?,
-            None => "SELECT DISTINCT resource_id FROM tiles".to_string(),
-        };
-        let sql = format!("SELECT resource_id FROM ({select}) t ORDER BY resource_id");
+        let sql = format!(
+            "SELECT resource_id FROM ({}) t ORDER BY resource_id",
+            self.matching_ids_select(query, graph, registry)?
+        );
         let mut stmt = self.conn.prepare(&sql)?;
         let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
         let mut ids = Vec::new();
@@ -212,6 +211,36 @@ impl DuckReader {
             ids.push(r?);
         }
         Ok(ids)
+    }
+
+    /// Count the matching resources (the `CountRecords` measure): the same
+    /// Expr→SQL compile as `resolve_ids`, wrapped in `COUNT(*)`.
+    pub fn count_records(
+        &self,
+        query: &Query,
+        graph: &StaticGraph,
+        registry: &ExtensionTypeRegistry,
+    ) -> Result<usize, DuckError> {
+        let sql = format!(
+            "SELECT COUNT(*) FROM ({}) t",
+            self.matching_ids_select(query, graph, registry)?
+        );
+        let n: i64 = self.conn.query_row(&sql, [], |r| r.get(0))?;
+        Ok(n.max(0) as usize)
+    }
+
+    /// The `SELECT DISTINCT resource_id` subquery for a query's WHERE - shared by
+    /// `resolve_ids` and `count_records` so both measures compile the IR identically.
+    fn matching_ids_select(
+        &self,
+        query: &Query,
+        graph: &StaticGraph,
+        registry: &ExtensionTypeRegistry,
+    ) -> Result<String, DuckError> {
+        match &query.r#where {
+            Some(expr) => compile_expr(expr, graph, registry, self.has_catalog),
+            None => Ok("SELECT DISTINCT resource_id FROM tiles".to_string()),
+        }
     }
 }
 
