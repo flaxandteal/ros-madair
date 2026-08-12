@@ -712,13 +712,42 @@ impl TileStage {
 
 /// Emit tile-row Parquet for every model in `data_dir` into `out_dir`, one
 /// `tiles_<slug>.parquet` per model. `config_by_graph` maps a graph id to its
-/// [`ClusterConfig`]; graphs without an entry get the default.
+/// [`ClusterConfig`]; graphs without an entry get the default. See
+/// [`emit_parquet_with_progress`] for the progress-reporting variant.
 pub fn emit_parquet(
     data_dir: &str,
     out_dir: &str,
     base_uri: &str,
     registry: &ExtensionTypeRegistry,
     config_by_graph: &HashMap<String, ClusterConfig>,
+) -> Result<Vec<ParquetModelSummary>, EmitError> {
+    emit_parquet_with_progress(
+        data_dir,
+        out_dir,
+        base_uri,
+        registry,
+        config_by_graph,
+        &mut |_| std::ops::ControlFlow::Continue(()),
+    )
+}
+
+/// Like [`emit_parquet`], but reports [`EmitProgress`] through `on_progress`.
+///
+/// Unlike the sqlite `emit_with_progress` (which holds the whole resource `Vec` in
+/// memory and so knows `total`), `emit_parquet` STREAMS resources to stay memory-
+/// bounded and never learns the total. It therefore reports `Streaming { done,
+/// total: 0 }` every [`PROGRESS_STEP`] resources during the (long) ingest, leaving
+/// the caller - which already has its own resource count - to map `done` to a
+/// fraction. Then it fires `Phase("writing")` once before the per-model
+/// `COPY ... ORDER BY -> parquet` external sort, which is a single opaque DuckDB
+/// call with no sub-progress. Returning `Break` from `on_progress` cancels the emit.
+pub fn emit_parquet_with_progress(
+    data_dir: &str,
+    out_dir: &str,
+    base_uri: &str,
+    registry: &ExtensionTypeRegistry,
+    config_by_graph: &HashMap<String, ClusterConfig>,
+    on_progress: &mut dyn FnMut(crate::EmitProgress) -> std::ops::ControlFlow<()>,
 ) -> Result<Vec<ParquetModelSummary>, EmitError> {
     let data_dir = Path::new(data_dir);
     let out = Path::new(out_dir);
@@ -759,6 +788,12 @@ pub fn emit_parquet(
     let scratch = out.join(".rmstage");
     let stage = TileStage::new(&scratch)?;
     let mut nonempty = vec![false; models.len()];
+    // Progress: tick every PROGRESS_STEP resources through the (long) ingest. total
+    // is unknown while streaming, so report `done` with total:0; the caller maps it
+    // to a fraction against the count it already has. A Break cancels the emit.
+    const PROGRESS_STEP: usize = 2000;
+    let mut done: usize = 0;
+    let mut cancelled = false;
     // STREAM the business-data too: element-by-element, never a whole-file parse.
     // Téarma ships as ONE ~486 MB business_data JSON; `fs::read` + whole-file
     // `parse_business_data_bytes` balloons to multiple GB and OOMs on-device (the
@@ -767,6 +802,9 @@ pub fn emit_parquet(
     // element's bytes at a time, so peak memory stays bounded to a single resource
     // plus the disk-spilling DuckDB stage.
     for path in crate::input::business_data_files(data_dir)? {
+        if cancelled {
+            break;
+        }
         let file = fs::File::open(&path)?;
         // Preserve the whole-parse semantics: a *parse* error skips the file
         // (below), but an *append* error is FATAL — capture it out-of-band and
@@ -789,6 +827,15 @@ pub fn emit_parquet(
                     return Err(alizarin_core::loader::LoaderError::Other("append failed".into()));
                 }
                 nonempty[gi] = true;
+                done += 1;
+                if done % PROGRESS_STEP == 0
+                    && on_progress(crate::EmitProgress::Streaming { done, total: 0 }).is_break()
+                {
+                    cancelled = true;
+                    return Err(alizarin_core::loader::LoaderError::Other(
+                        "emit cancelled".into(),
+                    ));
+                }
             }
             Ok(())
         });
@@ -796,12 +843,21 @@ pub fn emit_parquet(
             return Err(e);
         }
         if let Err(e) = stream_res {
+            if cancelled {
+                return Err("emit cancelled".into());
+            }
             eprintln!("skipping {} ({e})", path.display());
             continue;
         }
     }
+    // Land the ingest bar on the true resource count before the write phase.
+    let _ = on_progress(crate::EmitProgress::Streaming { done, total: 0 });
 
     let mut summaries = Vec::new();
+    // The per-model `COPY ... ORDER BY -> parquet` external sort is one opaque DuckDB
+    // call with no sub-progress; report it as a single phase so the UI shows activity
+    // ("writing") rather than a frozen bar for the duration of the sort.
+    let _ = on_progress(crate::EmitProgress::Phase("writing"));
     for (i, m) in models.iter().enumerate() {
         if !nonempty[i] {
             continue;

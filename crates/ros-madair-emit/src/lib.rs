@@ -115,7 +115,8 @@ pub use ros_madair_handlers::default_registry;
 // Slice 1 of the DuckDB+Parquet substrate: the additive tile-row Parquet writer.
 // `crate::` disambiguates the local module from the extern `parquet` crate.
 pub use crate::parquet::{
-    emit_parquet, write_model_parquet, ClusterConfig, ClusterDim, ParquetModelSummary,
+    emit_parquet, emit_parquet_with_progress, write_model_parquet, ClusterConfig, ClusterDim,
+    ParquetModelSummary,
 };
 
 pub fn emit(data_dir: &str, out_dir: &str, base_uri: &str) -> Result<EmitSummary, EmitError> {
