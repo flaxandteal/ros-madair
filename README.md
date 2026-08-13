@@ -116,6 +116,31 @@ rows) established, empirically:
   fetched **2.56% of a file** for a selective query (measured, byte-counting
   server), plus **column projection** RM's whole-tile chunks cannot do.
 
+> ### ⚠️ Platform limitation: the exact spatial fine step is DESKTOP-ONLY
+>
+> The "exact `ST_Intersects`" above needs DuckDB's **`spatial` extension**, and
+> that extension is **not available on mobile (aarch64-android)**:
+>
+> - `spatial` is a heavy **out-of-tree** extension that vendors GEOS + GDAL + PROJ.
+>   It is **not** in the statically-linked amalgamation (only `json`, `parquet`,
+>   `icu` are), and DuckDB publishes **no prebuilt `spatial.duckdb_extension` for
+>   any android platform string** (its extension repo 404s for android). Building
+>   one ourselves means cross-compiling GDAL for aarch64-android — a monolithic,
+>   weeks-scale effort for a payload we do not need.
+> - So the three `SpatialSource` modes resolve as: **`Auto`** (`INSTALL spatial;
+>   LOAD spatial` over the network) is **dev/desktop only**; **`OfflineDir`** has
+>   **no android binary to load**; **`None`** skips spatial and makes any
+>   `Expr::Bbox` **error at query time**.
+>
+> **On mobile, `Expr::Bbox` must be COARSE-ONLY** — the bbox-overlap predicate on
+> the promoted `geo_min/max_lng/lat` zone-map columns, with the `ST_Intersects`
+> fine step **skipped**. This is a strict SUPERSET of true intersection (false
+> positives kept, no false negatives), i.e. **recall-tolerant** — "places near
+> here", never exact containment. If exact intersection is ever required on
+> device, implement the fine step in **Rust `geo` (`geo::Intersects`)** over the
+> geometry parsed from the tile blob — pure Rust, cross-compiles trivially — NOT
+> the DuckDB extension. See `ros-madair-duck` `compile_expr`'s `Expr::Bbox` arm.
+
 Zone-map pruning needs an *order* to prune on, so it applies to structured
 fields (dates, coordinates, ids) and **not** to full text. That asymmetry is
 why **Pagefind stays separate** — full-text wants an inverted index sharded for

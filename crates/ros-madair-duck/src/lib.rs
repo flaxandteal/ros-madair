@@ -87,6 +87,11 @@ impl From<duckdb::Error> for DuckError {
 pub struct DuckReader {
     conn: Connection,
     has_catalog: bool,
+    /// Whether the `spatial` extension actually loaded (ST_Intersects available).
+    /// Drives the `Expr::Bbox` fine step: present -> exact ST_Intersects; absent
+    /// (mobile - no android spatial binary) -> coarse-only bbox-overlap. See the
+    /// README "Platform limitation: the exact spatial fine step is DESKTOP-ONLY".
+    spatial: bool,
 }
 
 /// A resource's search display (from [`DuckReader::search_display`]): headword plus
@@ -135,11 +140,23 @@ impl DuckReader {
         // json_extract* are available with NO INSTALL — the `json` cargo feature
         // statically links the JSON extension into libduckdb. parquet is core.
         configure_spatial(&conn, &spatial);
+        // configure_spatial is best-effort (Auto needs network; OfflineDir needs a
+        // platform binary; None never loads), so DETECT whether it took rather than
+        // trust the source: probe for the ST_Intersects function. This is the switch
+        // between the exact and coarse-only Bbox paths.
+        let spatial: bool = conn
+            .query_row(
+                "SELECT count(*) > 0 FROM duckdb_functions() \
+                 WHERE lower(function_name) = 'st_intersects'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap_or(false);
         conn.execute_batch(&format!(
             "CREATE VIEW tiles AS SELECT * FROM read_parquet('{}');",
             sql_lit(parquet_glob)
         ))?;
-        Ok(Self { conn, has_catalog: false })
+        Ok(Self { conn, has_catalog: false, spatial })
     }
 
     /// Attach a concept catalog (the `concept_catalog.parquet` projected from
@@ -416,7 +433,7 @@ impl DuckReader {
         registry: &ExtensionTypeRegistry,
     ) -> Result<String, DuckError> {
         match &query.r#where {
-            Some(expr) => compile_expr(expr, graph, registry, self.has_catalog),
+            Some(expr) => compile_expr(expr, graph, registry, self.has_catalog, self.spatial),
             None => Ok("SELECT DISTINCT resource_id FROM tiles".to_string()),
         }
     }
@@ -523,6 +540,7 @@ fn compile_expr(
     graph: &StaticGraph,
     registry: &ExtensionTypeRegistry,
     has_catalog: bool,
+    spatial: bool,
 ) -> Result<String, DuckError> {
     match expr {
         Expr::All(children) => {
@@ -531,7 +549,7 @@ fn compile_expr(
             }
             let parts: Result<Vec<_>, _> = children
                 .iter()
-                .map(|c| compile_expr(c, graph, registry, has_catalog))
+                .map(|c| compile_expr(c, graph, registry, has_catalog, spatial))
                 .collect();
             Ok(parts?.join("\nINTERSECT\n"))
         }
@@ -541,12 +559,12 @@ fn compile_expr(
             }
             let parts: Result<Vec<_>, _> = children
                 .iter()
-                .map(|c| compile_expr(c, graph, registry, has_catalog))
+                .map(|c| compile_expr(c, graph, registry, has_catalog, spatial))
                 .collect();
             Ok(parts?.join("\nUNION\n"))
         }
         Expr::Not(inner) => {
-            let inner_sql = compile_expr(inner, graph, registry, has_catalog)?;
+            let inner_sql = compile_expr(inner, graph, registry, has_catalog, spatial)?;
             Ok(format!(
                 "SELECT DISTINCT resource_id FROM tiles EXCEPT {inner_sql}"
             ))
@@ -597,13 +615,26 @@ fn compile_expr(
         Expr::Bbox { path, min_lng, min_lat, max_lng, max_lat } => {
             let (node, ng) = resolve(graph, path)?;
             expect_class(&node, registry, |c| matches!(c, IndexClass::SpatialBbox), path, "bbox")?;
-            // Coarse bbox-overlap prune on the promoted zone-map columns …
+            // Coarse bbox-overlap prune on the promoted zone-map columns. This alone
+            // is a strict SUPERSET of true intersection (false positives kept, no
+            // false negatives) — recall-tolerant, matching Expr::Bbox's contract.
             let coarse = format!(
                 "NOT (geo_min_lng > {max_lng} OR geo_max_lng < {min_lng} \
                   OR geo_min_lat > {max_lat} OR geo_max_lat < {min_lat})"
             );
-            // … then the EXACT fine step: parse the geometry out of the tile blob
-            // and intersect. `data` is `{{ node_id: FeatureCollection }}`.
+            if !spatial {
+                // No spatial extension (mobile: no android spatial binary) → skip the
+                // exact fine step and return the coarse superset. See the README
+                // "Platform limitation". A Rust `geo` fine step could be layered on the
+                // hydrated candidates if exact intersection is ever needed on device.
+                return Ok(format!(
+                    "SELECT DISTINCT resource_id FROM tiles \
+                     WHERE nodegroup_id = '{}' AND {coarse}",
+                    sql_lit(&ng)
+                ));
+            }
+            // EXACT fine step (spatial loaded, desktop/online): parse the geometry out
+            // of the tile blob and intersect. `data` is `{{ node_id: FeatureCollection }}`.
             let geom = format!(
                 "ST_GeomFromGeoJSON(json_extract_string(\
                    json_extract(data, '$.\"{}\".features[0]'), '$.geometry'))",
