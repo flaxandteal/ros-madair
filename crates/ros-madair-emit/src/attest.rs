@@ -21,9 +21,10 @@ use std::path::Path;
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use ed25519_dalek::{Signer, SigningKey};
 use ros_madair_format::attest::{
-    AttestationBundle, Signature, Statement, Subject, DIGEST_KEY, PAYLOAD_TYPE, PREDICATE_AUTHORED,
-    STATEMENT_TYPE,
+    verify_bundle, AttestationBundle, Signature, Statement, Subject, Verdict, DIGEST_KEY,
+    PAYLOAD_TYPE, PREDICATE_AUTHORED, STATEMENT_TYPE,
 };
+use ros_madair_format::{ArtifactEntry, Manifest};
 use sha2::{Digest, Sha256};
 
 use crate::chunks::hex;
@@ -158,10 +159,83 @@ pub fn sign_head(head_dir: &Path, key_path: &Path) -> Result<String, EmitError> 
     Ok(manifest.snapshot_id)
 }
 
+/// Verify an emitted head against its own attestations, RECOMPUTING the
+/// snapshot_id from the artifacts on disk — the read-side gate.
+///
+/// Two independent checks, in order:
+///  1. **Integrity/self-consistency.** Re-hash every file the manifest lists and
+///     re-derive the snapshot_id from those hashes plus the manifest (the exact
+///     emit derivation). If a listed artifact is missing or its bytes changed,
+///     the recomputed id moves off `manifest.snapshot_id` → Untrusted "altered".
+///     This is what turns a swapped chunk into a red verdict.
+///  2. **Authenticity.** With the manifest proven self-consistent, check the
+///     attestation set over that snapshot_id ([`verify_bundle`]). No
+///     `attestations.json` → Untrusted "unsigned" (an old/third-party layer),
+///     distinct from a tamper so the UI can word the two differently.
+///
+/// Returns the [`Verdict`]; the caller (a Tauri command → the enable-time
+/// warning) decides policy. Errors are reserved for "cannot read the manifest at
+/// all" — a malformed head, not an untrusted one.
+pub fn verify_head(head_dir: &Path) -> Result<Verdict, EmitError> {
+    let manifest_path = head_dir.join("manifest.json");
+    let manifest: Manifest = serde_json::from_slice(&fs::read(&manifest_path).map_err(|e| {
+        format!("verify_head: cannot read {} ({e})", manifest_path.display())
+    })?)?;
+    if manifest.snapshot_id.is_empty() {
+        return Ok(Verdict::Untrusted {
+            reason: "manifest carries no snapshot_id".to_string(),
+        });
+    }
+
+    // 1. Re-hash exactly the files the manifest lists (in its order — emit sorted
+    //    them, so the recomputed vec matches byte-for-byte when untampered).
+    let mut recomputed = Vec::with_capacity(manifest.artifacts.len());
+    for a in &manifest.artifacts {
+        let bytes = match fs::read(head_dir.join(&a.path)) {
+            Ok(b) => b,
+            Err(_) => {
+                return Ok(Verdict::Untrusted {
+                    reason: format!("artifact {} is missing (layer is incomplete)", a.path),
+                })
+            }
+        };
+        recomputed.push(ArtifactEntry {
+            path: a.path.clone(),
+            bytes: bytes.len() as u64,
+            sha256: hex(&Sha256::digest(&bytes)),
+        });
+    }
+    // Re-derive the id: hash the id-less manifest carrying the recomputed
+    // artifacts, exactly as emit did. Any changed byte in a listed file moves it.
+    let mut idless = manifest.clone();
+    idless.snapshot_id = String::new();
+    idless.artifacts = recomputed.clone();
+    let recomputed_id =
+        crate::manifest::snapshot_id(&recomputed, &crate::manifest::manifest_digest_bytes(&idless)?);
+    if recomputed_id != manifest.snapshot_id {
+        return Ok(Verdict::Untrusted {
+            reason: "content does not match the manifest — this layer has been altered since it \
+                     was signed"
+                .to_string(),
+        });
+    }
+
+    // 2. The manifest is self-consistent; now check who vouches for it.
+    let att_path = head_dir.join("attestations.json");
+    let bundle: AttestationBundle = match fs::read(&att_path) {
+        Ok(b) => serde_json::from_slice(&b)?,
+        Err(_) => {
+            return Ok(Verdict::Untrusted {
+                reason: "no signature — this layer is unsigned".to_string(),
+            })
+        }
+    };
+    Ok(verify_bundle(&bundle, &manifest.snapshot_id))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ros_madair_format::attest::{verify_bundle, Verdict};
 
     fn tmp_key() -> std::path::PathBuf {
         // A per-test unique path under the target dir; no external tempdir dep.

@@ -391,3 +391,67 @@ fn emit_writes_a_signable_manifest_that_verifies() {
     );
     eprintln!("OK: manifest signed and verified for snapshot {snapshot_id}");
 }
+
+/// Slice 3b: the read-side `verify_head` gate. Unsigned → untrusted; signed +
+/// unmodified → trusted; a byte appended to a LISTED artifact → the recomputed
+/// snapshot_id moves off the signed subject → untrusted. This is the "tamper a
+/// chunk turns the badge red" mechanic, proven without a reader.
+#[test]
+fn verify_head_trusts_signed_and_flags_tamper() {
+    let Some(dir) = corpus() else {
+        eprintln!("demo fixture absent — skipping");
+        return;
+    };
+    let out = scratch("verifyout");
+    let registry = default_registry();
+    let cfg_by_graph = HashMap::new();
+    emit_parquet(
+        dir.to_str().unwrap(),
+        out.to_str().unwrap(),
+        "https://example.org/",
+        &registry,
+        &cfg_by_graph,
+    )
+    .expect("emit_parquet");
+
+    // Unsigned: manifest is self-consistent but nothing vouches for it.
+    assert!(
+        !ros_madair_emit::verify_head(&out).expect("verify_head").is_trusted(),
+        "an unsigned head is untrusted"
+    );
+
+    // Sign, then it verifies.
+    let key = out.join("signing_ed25519.key");
+    ros_madair_emit::sign_head(&out, &key).expect("sign_head");
+    assert!(
+        ros_madair_emit::verify_head(&out).expect("verify_head").is_trusted(),
+        "a signed, unmodified head verifies"
+    );
+
+    // Tamper a listed parquet artifact (robust to partitioning: take the path
+    // from the manifest, not a dir glob).
+    let manifest: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(out.join("manifest.json")).unwrap()).unwrap();
+    let victim_rel = manifest["artifacts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find_map(|a| a["path"].as_str().filter(|p| p.ends_with(".parquet")))
+        .expect("a parquet artifact is listed");
+    {
+        use std::io::Write;
+        let mut f = std::fs::OpenOptions::new()
+            .append(true)
+            .open(out.join(victim_rel))
+            .unwrap();
+        f.write_all(b"\x00").unwrap();
+    }
+
+    match ros_madair_emit::verify_head(&out).expect("verify_head") {
+        ros_madair_emit::Verdict::Untrusted { reason } => {
+            assert!(reason.contains("altered"), "tamper reason names alteration: {reason}");
+            eprintln!("OK: tamper detected -> {reason}");
+        }
+        v => panic!("expected Untrusted after tamper, got {v:?}"),
+    }
+}
