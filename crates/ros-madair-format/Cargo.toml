@@ -29,6 +29,10 @@ rmp-serde = "1"
 # is native, in the emit crate.
 ed25519-dalek = { version = "2", default-features = false, optional = true }
 base64 = { version = "0.22", optional = true }
+# Multibase (base58btc) for the W3C sec:publicKeyMultibase representation of an
+# ed25519 key (the z6Mk… DID-key form) that ties an attestation's signer to a
+# named actor. Pure-Rust, wasm-clean.
+bs58 = { version = "0.5", optional = true }
 
 [features]
 # Authenticity layer ON by default: heads sign, readers verify, out of the box.
@@ -36,7 +40,7 @@ base64 = { version = "0.22", optional = true }
 # size-sensitive browser bundle) drops all curve25519 with
 # `default-features = false`. So: opt-OUT, not baked in.
 default = ["attest"]
-attest = ["dep:ed25519-dalek", "dep:base64"]
+attest = ["dep:ed25519-dalek", "dep:base64", "dep:bs58"]
 
 # WASM: alizarin-core pulls uuid v4 → getrandom 0.2, which refuses to build for
 # wasm32-unknown-unknown unless told where randomness comes from. Enabling the

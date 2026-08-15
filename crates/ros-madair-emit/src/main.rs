@@ -50,10 +50,50 @@ fn usage() -> ExitCode {
 #[cfg(feature = "attest")]
 fn sign_command(args: &[String]) -> ExitCode {
     let (Some(head), Some(key)) = (args.get(2), args.get(3)) else {
-        eprintln!("usage: ros-madair-emit sign <head_dir> <key_path>");
+        eprintln!(
+            "usage: ros-madair-emit sign <head_dir> <key_path> \
+             [--role derived|endorsed --actor <uri> [--actor-name <name>]]"
+        );
         return ExitCode::from(2);
     };
-    match ros_madair_emit::seal_and_sign(Path::new(head), Path::new(key)) {
+    // Optional named attribution: a build-time packager signs `--role derived
+    // --actor <F&T uri>`; the upstream publisher would sign `--role endorsed`.
+    let mut actor: Option<String> = None;
+    let mut actor_name = String::new();
+    let mut role = ros_madair_emit::Role::Derived;
+    let mut i = 4;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--actor" => {
+                i += 1;
+                actor = args.get(i).cloned();
+            }
+            "--actor-name" => {
+                i += 1;
+                actor_name = args.get(i).cloned().unwrap_or_default();
+            }
+            "--role" => {
+                i += 1;
+                role = match args.get(i).map(String::as_str) {
+                    Some("derived") => ros_madair_emit::Role::Derived,
+                    Some("endorsed") => ros_madair_emit::Role::Endorsed,
+                    other => {
+                        eprintln!("--role expects derived|endorsed, got {other:?}");
+                        return ExitCode::from(2);
+                    }
+                };
+            }
+            other => {
+                eprintln!("unknown flag {other:?}");
+                return ExitCode::from(2);
+            }
+        }
+        i += 1;
+    }
+    let attribution = actor
+        .as_deref()
+        .map(|a| (role, a, actor_name.as_str()));
+    match ros_madair_emit::seal_and_sign(Path::new(head), Path::new(key), attribution) {
         Ok(id) => {
             println!("{id}");
             ExitCode::SUCCESS
@@ -81,8 +121,14 @@ fn verify_command(args: &[String]) -> ExitCode {
         return ExitCode::from(2);
     };
     match ros_madair_emit::verify_head(Path::new(head)) {
-        Ok(ros_madair_emit::HeadTrust::Verified { authored }) => {
-            println!("verified ({authored} attestation(s))");
+        Ok(ros_madair_emit::HeadTrust::Verified { authored, attributions }) => {
+            if attributions.is_empty() {
+                println!("verified ({authored} attestation(s); anonymous)");
+            } else {
+                for a in &attributions {
+                    println!("verified: {:?} by {} <{}>", a.role, a.actor_name, a.actor_id);
+                }
+            }
             ExitCode::SUCCESS
         }
         Ok(ros_madair_emit::HeadTrust::Unsigned) => {

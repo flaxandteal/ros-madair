@@ -21,8 +21,9 @@ use std::path::Path;
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use ed25519_dalek::{Signer, SigningKey};
 use ros_madair_format::attest::{
-    verify_bundle, AttestationBundle, HeadTrust, Signature, Statement, Subject, Verdict, DIGEST_KEY,
-    PAYLOAD_TYPE, PREDICATE_AUTHORED, STATEMENT_TYPE,
+    attributions, ed25519_to_multibase, verify_bundle, AttestationBundle, HeadTrust, Role,
+    Signature, Statement, Subject, Verdict, DIGEST_KEY, PAYLOAD_TYPE, PREDICATE_AUTHORED,
+    STATEMENT_TYPE,
 };
 use ros_madair_format::{ArtifactEntry, Budgets, Manifest};
 use sha2::{Digest, Sha256};
@@ -92,15 +93,39 @@ impl SigningIdentity {
         hex(&Sha256::digest(self.key.verifying_key().to_bytes()))[..16].to_string()
     }
 
-    /// Produce the L0 bundle for a head: ONE `authored` attestation binding this
-    /// `snapshot_id`, signed by this identity. `subject_name` is a human label for
-    /// the subject (the head's `base_uri` is a good choice); it never affects
-    /// verification, which keys on the `snapshot_id` digest.
+    /// Produce the bundle for a head: ONE attestation binding this `snapshot_id`,
+    /// signed by this identity. `subject_name` is a human label for the subject
+    /// (the head's `base_uri` is a good choice); it never affects verification,
+    /// which keys on the `snapshot_id` digest.
+    ///
+    /// `attribution = None` → an anonymous L0 `authored` attestation. `Some((role,
+    /// actor_id, actor_name))` → a NAMED attestation (`derived`/`endorsed`)
+    /// carrying the actor URI and THIS key as `publicKeyMultibase`, so a reader
+    /// can attribute the layer to the actor and (later) confirm the key.
     pub fn attest_snapshot(
         &self,
         snapshot_id: &str,
         subject_name: &str,
+        attribution: Option<(Role, &str, &str)>,
     ) -> Result<AttestationBundle, EmitError> {
+        let (predicate_type, predicate) = match attribution {
+            None => (
+                PREDICATE_AUTHORED.to_string(),
+                serde_json::json!({ "snapshot_id": snapshot_id }),
+            ),
+            Some((role, actor_id, actor_name)) => (
+                role.predicate_type().to_string(),
+                serde_json::json!({
+                    "snapshot_id": snapshot_id,
+                    "actor": {
+                        "id": actor_id,
+                        "name": actor_name,
+                        "publicKeyMultibase":
+                            ed25519_to_multibase(&self.key.verifying_key().to_bytes()),
+                    }
+                }),
+            ),
+        };
         let statement = Statement {
             type_: STATEMENT_TYPE.to_string(),
             subject: vec![Subject {
@@ -109,8 +134,8 @@ impl SigningIdentity {
                     .into_iter()
                     .collect(),
             }],
-            predicate_type: PREDICATE_AUTHORED.to_string(),
-            predicate: serde_json::json!({ "snapshot_id": snapshot_id }),
+            predicate_type,
+            predicate,
         };
         // Sign the PAE of the EXACT payload bytes we base64 into the envelope.
         let payload = serde_json::to_vec(&statement)?;
@@ -151,7 +176,7 @@ pub fn sign_head(head_dir: &Path, key_path: &Path) -> Result<String, EmitError> 
         return Err("sign_head: manifest carries no snapshot_id to sign".into());
     }
     let identity = SigningIdentity::load_or_create(key_path)?;
-    let bundle = identity.attest_snapshot(&manifest.snapshot_id, &manifest.base_uri)?;
+    let bundle = identity.attest_snapshot(&manifest.snapshot_id, &manifest.base_uri, None)?;
     fs::write(
         head_dir.join("attestations.json"),
         serde_json::to_vec_pretty(&bundle)?,
@@ -170,8 +195,14 @@ pub fn sign_head(head_dir: &Path, key_path: &Path) -> Result<String, EmitError> 
 /// idempotent on a head emit already sealed. Existing `base_uri`/`handlers`/
 /// `models`/`budgets`/`tier` are preserved from the current manifest when present.
 ///
-/// Returns the (re)computed `snapshot_id`.
-pub fn seal_and_sign(head_dir: &Path, key_path: &Path) -> Result<String, EmitError> {
+/// `attribution = None` signs an anonymous L0 head; `Some((role, actor_id,
+/// actor_name))` signs a NAMED one (a build-time packager passes e.g. `Derived` +
+/// the Flax & Teal actor URI). Returns the (re)computed `snapshot_id`.
+pub fn seal_and_sign(
+    head_dir: &Path,
+    key_path: &Path,
+    attribution: Option<(Role, &str, &str)>,
+) -> Result<String, EmitError> {
     let manifest_path = head_dir.join("manifest.json");
     let mut manifest: Manifest = match fs::read(&manifest_path) {
         Ok(b) => serde_json::from_slice(&b)?,
@@ -201,7 +232,7 @@ pub fn seal_and_sign(head_dir: &Path, key_path: &Path) -> Result<String, EmitErr
     fs::write(&manifest_path, serde_json::to_vec_pretty(&manifest)?)?;
 
     let identity = SigningIdentity::load_or_create(key_path)?;
-    let bundle = identity.attest_snapshot(&id, &manifest.base_uri)?;
+    let bundle = identity.attest_snapshot(&id, &manifest.base_uri, attribution)?;
     fs::write(
         head_dir.join("attestations.json"),
         serde_json::to_vec_pretty(&bundle)?,
@@ -286,9 +317,13 @@ pub fn verify_head(head_dir: &Path) -> Result<HeadTrust, EmitError> {
         });
     }
 
-    // 3. Content matches the signed manifest; check who vouches for it.
+    // 3. Content matches the signed manifest; check who vouches for it, and with
+    //    what named attribution(s) (derived / endorsed by which actor).
     match verify_bundle(&bundle, &manifest.snapshot_id) {
-        Verdict::Trusted { authored } => Ok(HeadTrust::Verified { authored }),
+        Verdict::Trusted { authored } => Ok(HeadTrust::Verified {
+            authored,
+            attributions: attributions(&bundle, &manifest.snapshot_id),
+        }),
         Verdict::Untrusted { reason } => Ok(HeadTrust::Failed { reason }),
     }
 }
@@ -311,11 +346,52 @@ mod tests {
     #[test]
     fn sign_then_verify_roundtrips() {
         let id = SigningIdentity::load_or_create(&tmp_key()).unwrap();
-        let bundle = id.attest_snapshot("deadbeefdeadbeef", "https://example.org/").unwrap();
+        let bundle = id.attest_snapshot("deadbeefdeadbeef", "https://example.org/", None).unwrap();
         assert_eq!(
             verify_bundle(&bundle, "deadbeefdeadbeef"),
             Verdict::Trusted { authored: 1 }
         );
+        // Anonymous: verifies, but names no actor.
+        assert!(attributions(&bundle, "deadbeefdeadbeef").is_empty());
+    }
+
+    #[test]
+    fn a_named_derived_attestation_attributes_the_layer() {
+        let id = SigningIdentity::load_or_create(&tmp_key()).unwrap();
+        let actor = "https://flaxandteal.co.uk/actor/flax-and-teal";
+        let bundle = id
+            .attest_snapshot(
+                "deadbeefdeadbeef",
+                "x",
+                Some((Role::Derived, actor, "Flax & Teal")),
+            )
+            .unwrap();
+        assert!(verify_bundle(&bundle, "deadbeefdeadbeef").is_trusted());
+        let attrs = attributions(&bundle, "deadbeefdeadbeef");
+        assert_eq!(attrs.len(), 1);
+        assert_eq!(attrs[0].actor_id, actor);
+        assert_eq!(attrs[0].actor_name, "Flax & Teal");
+        assert_eq!(attrs[0].role, Role::Derived);
+    }
+
+    /// The actor's claimed key is INSIDE the signed payload, so a forged
+    /// attribution (claim a key you don't hold) requires tampering the payload -
+    /// which breaks the signature. Result: not trusted, not attributed.
+    #[test]
+    fn a_forged_actor_key_is_rejected() {
+        use base64::{engine::general_purpose::STANDARD, Engine as _};
+        let id = SigningIdentity::load_or_create(&tmp_key()).unwrap();
+        let mut bundle = id
+            .attest_snapshot("deadbeefdeadbeef", "x", Some((Role::Endorsed, "urn:actor:x", "X")))
+            .unwrap();
+        let att = &mut bundle.attestations[0];
+        let mut stmt: serde_json::Value =
+            serde_json::from_slice(&STANDARD.decode(&att.payload).unwrap()).unwrap();
+        stmt["predicate"]["actor"]["publicKeyMultibase"] =
+            serde_json::json!(ed25519_to_multibase(&[0u8; 32])); // a key we don't hold
+        att.payload = STANDARD.encode(serde_json::to_vec(&stmt).unwrap());
+        assert!(!verify_bundle(&bundle, "deadbeefdeadbeef").is_trusted());
+        assert!(attributions(&bundle, "deadbeefdeadbeef").is_empty());
     }
 
     /// A tampered chunk moves the reader-computed snapshot_id off the signed
@@ -323,7 +399,7 @@ mod tests {
     #[test]
     fn a_different_snapshot_is_untrusted() {
         let id = SigningIdentity::load_or_create(&tmp_key()).unwrap();
-        let bundle = id.attest_snapshot("deadbeefdeadbeef", "https://example.org/").unwrap();
+        let bundle = id.attest_snapshot("deadbeefdeadbeef", "https://example.org/", None).unwrap();
         assert!(!verify_bundle(&bundle, "0000000000000000").is_trusted());
     }
 
@@ -331,7 +407,7 @@ mod tests {
     #[test]
     fn a_tampered_signature_is_untrusted() {
         let id = SigningIdentity::load_or_create(&tmp_key()).unwrap();
-        let mut bundle = id.attest_snapshot("deadbeefdeadbeef", "x").unwrap();
+        let mut bundle = id.attest_snapshot("deadbeefdeadbeef", "x", None).unwrap();
         // Corrupt one base64 char of the signature deterministically.
         let sig = &mut bundle.attestations[0].signatures[0].sig;
         let first = sig.chars().next().unwrap();
@@ -346,8 +422,8 @@ mod tests {
     #[test]
     fn a_substituted_payload_is_untrusted() {
         let id = SigningIdentity::load_or_create(&tmp_key()).unwrap();
-        let a = id.attest_snapshot("deadbeefdeadbeef", "x").unwrap();
-        let b = id.attest_snapshot("0000000000000000", "x").unwrap();
+        let a = id.attest_snapshot("deadbeefdeadbeef", "x", None).unwrap();
+        let b = id.attest_snapshot("0000000000000000", "x", None).unwrap();
         let mut forged = a.clone();
         // Graft b's payload under a's signature.
         forged.attestations[0].payload = b.attestations[0].payload.clone();

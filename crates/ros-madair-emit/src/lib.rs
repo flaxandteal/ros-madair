@@ -64,7 +64,10 @@ mod parquet;
 #[cfg(feature = "attest")]
 pub use attest::{seal_and_sign, sign_head, verify_head, SigningIdentity};
 #[cfg(feature = "attest")]
-pub use ros_madair_format::attest::{verify_bundle, AttestationBundle, HeadTrust, Verdict};
+pub use ros_madair_format::attest::{
+    attributions, ed25519_to_multibase, multibase_to_ed25519, verify_bundle, AttestationBundle,
+    Attribution, HeadTrust, Role, Verdict,
+};
 pub use closure::{build_closure, Closure, ClosureEntry};
 /// The artifact FORMAT types (manifest contract + chunk-tile wire shape) live
 /// in `ros-madair-format` — WASM-buildable, so a browser/Tauri READER can parse
