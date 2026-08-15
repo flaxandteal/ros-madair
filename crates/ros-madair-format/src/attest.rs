@@ -127,6 +127,10 @@ pub struct Attribution {
     pub actor_id: String,
     pub actor_name: String,
     pub role: Role,
+    /// The signer's key in `sec:publicKeyMultibase` form. A reader CONFIRMS the
+    /// attribution by matching this against a trusted actor→key registry (rooted
+    /// in a pinned key); until then it is self-asserted.
+    pub public_key_multibase: String,
 }
 
 /// The multicodec varint prefix for an ed25519 public key (`0xed 0x01`).
@@ -351,6 +355,7 @@ fn check_attestation(att: &Attestation, snapshot_id: &str) -> Result<Option<Attr
                 actor_id: actor.id,
                 actor_name: actor.name,
                 role,
+                public_key_multibase: actor.public_key_multibase,
             }))
         }
         None => Ok(None),

@@ -152,6 +152,33 @@ fn verify_command(_args: &[String]) -> ExitCode {
     ExitCode::FAILURE
 }
 
+/// `ros-madair-emit pubkey <key_path>` — print the identity's public key in
+/// `sec:publicKeyMultibase` form (mints the key if absent). Use it to obtain the
+/// value to PIN as F&T's root, or to list in an actor→key registry.
+#[cfg(feature = "attest")]
+fn pubkey_command(args: &[String]) -> ExitCode {
+    let Some(key) = args.get(2) else {
+        eprintln!("usage: ros-madair-emit pubkey <key_path>");
+        return ExitCode::from(2);
+    };
+    match ros_madair_emit::SigningIdentity::load_or_create(Path::new(key)) {
+        Ok(id) => {
+            println!("{}", id.public_key_multibase());
+            ExitCode::SUCCESS
+        }
+        Err(e) => {
+            eprintln!("{e}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+#[cfg(not(feature = "attest"))]
+fn pubkey_command(_args: &[String]) -> ExitCode {
+    eprintln!("`pubkey` needs the `attest` feature (it is on by default)");
+    ExitCode::FAILURE
+}
+
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().collect();
     if args.get(1).map(String::as_str) == Some("sign") {
@@ -159,6 +186,9 @@ fn main() -> ExitCode {
     }
     if args.get(1).map(String::as_str) == Some("verify") {
         return verify_command(&args);
+    }
+    if args.get(1).map(String::as_str) == Some("pubkey") {
+        return pubkey_command(&args);
     }
     let mut positional = Vec::new();
     let mut base_uri = "https://example.org/".to_string();

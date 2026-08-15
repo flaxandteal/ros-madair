@@ -88,6 +88,12 @@ impl SigningIdentity {
         STANDARD.encode(self.key.verifying_key().to_bytes())
     }
 
+    /// The public key in `sec:publicKeyMultibase` form (`z6Mk…`) — the value to
+    /// pin as a root or list in an actor→key registry.
+    pub fn public_key_multibase(&self) -> String {
+        ed25519_to_multibase(&self.key.verifying_key().to_bytes())
+    }
+
     /// Stable advisory key id: first 16 hex of sha256(public key bytes).
     pub fn keyid(&self) -> String {
         hex(&Sha256::digest(self.key.verifying_key().to_bytes()))[..16].to_string()
