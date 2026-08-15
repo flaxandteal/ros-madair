@@ -24,7 +24,7 @@ use ros_madair_format::attest::{
     verify_bundle, AttestationBundle, HeadTrust, Signature, Statement, Subject, Verdict, DIGEST_KEY,
     PAYLOAD_TYPE, PREDICATE_AUTHORED, STATEMENT_TYPE,
 };
-use ros_madair_format::{ArtifactEntry, Manifest};
+use ros_madair_format::{ArtifactEntry, Budgets, Manifest};
 use sha2::{Digest, Sha256};
 
 use crate::chunks::hex;
@@ -159,6 +159,56 @@ pub fn sign_head(head_dir: &Path, key_path: &Path) -> Result<String, EmitError> 
     Ok(manifest.snapshot_id)
 }
 
+/// Make a parquet head self-describing and sign it, in one step — the build-time
+/// packaging entry point (the `sign` CLI subcommand).
+///
+/// Unlike [`sign_head`] (which trusts the manifest emit already wrote),
+/// `seal_and_sign` REBUILDS the manifest's content-derived parts by hashing every
+/// file in the head — so a dataset packaged by a tool that wrote a stub manifest
+/// (the old JS `package-parquet-layer.mjs`, `artifacts: []`) becomes a real,
+/// verifiable head, and `graph.json` (copied in after emit) is covered too. It is
+/// idempotent on a head emit already sealed. Existing `base_uri`/`handlers`/
+/// `models`/`budgets`/`tier` are preserved from the current manifest when present.
+///
+/// Returns the (re)computed `snapshot_id`.
+pub fn seal_and_sign(head_dir: &Path, key_path: &Path) -> Result<String, EmitError> {
+    let manifest_path = head_dir.join("manifest.json");
+    let mut manifest: Manifest = match fs::read(&manifest_path) {
+        Ok(b) => serde_json::from_slice(&b)?,
+        Err(_) => Manifest {
+            snapshot_id: String::new(),
+            format_version: ros_madair_format::FORMAT_VERSION,
+            base_uri: "https://example.org/".to_string(),
+            tier: None,
+            handlers: vec![],
+            models: vec![],
+            artifacts: vec![],
+            budgets: Budgets {
+                max_result_rows: 1000,
+                max_group_count: 500,
+            },
+        },
+    };
+    // Rebuild the self-describing parts so verify_head recomputes to this id.
+    manifest.snapshot_id = String::new();
+    manifest.format_version = ros_madair_format::FORMAT_VERSION;
+    manifest.artifacts = crate::manifest::hash_parquet_artifacts(head_dir)?;
+    let id = crate::manifest::snapshot_id(
+        &manifest.artifacts,
+        &crate::manifest::manifest_digest_bytes(&manifest)?,
+    );
+    manifest.snapshot_id = id.clone();
+    fs::write(&manifest_path, serde_json::to_vec_pretty(&manifest)?)?;
+
+    let identity = SigningIdentity::load_or_create(key_path)?;
+    let bundle = identity.attest_snapshot(&id, &manifest.base_uri)?;
+    fs::write(
+        head_dir.join("attestations.json"),
+        serde_json::to_vec_pretty(&bundle)?,
+    )?;
+    Ok(id)
+}
+
 /// Verify an emitted head against its own attestations, RECOMPUTING the
 /// snapshot_id from the artifacts on disk — the read-side gate.
 ///
@@ -182,14 +232,29 @@ pub fn verify_head(head_dir: &Path) -> Result<HeadTrust, EmitError> {
     let manifest: Manifest = serde_json::from_slice(&fs::read(&manifest_path).map_err(|e| {
         format!("verify_head: cannot read {} ({e})", manifest_path.display())
     })?)?;
+
+    // 1. UNSIGNED comes FIRST. An absent attestations.json means nobody vouched
+    //    for this head, so there is nothing to check against — it is Unsigned
+    //    (yellow), FULL STOP. This must precede the recompute: a layer packaged
+    //    before signing carries a stub/empty-artifacts manifest, and recomputing
+    //    its id would spuriously "not match" and cry tamper. Recompute scrutiny
+    //    only makes sense for a head that WAS signed.
+    let att_path = head_dir.join("attestations.json");
+    let bundle: AttestationBundle = match fs::read(&att_path) {
+        Ok(b) => serde_json::from_slice(&b)?,
+        Err(_) => return Ok(HeadTrust::Unsigned),
+    };
+
+    // 2. Signed. From here a mismatch is a real alarm. A signed head must carry a
+    //    snapshot_id (sign_head refuses to sign an empty one).
     if manifest.snapshot_id.is_empty() {
         return Ok(HeadTrust::Failed {
-            reason: "manifest carries no snapshot_id".to_string(),
+            reason: "signed head carries no snapshot_id".to_string(),
         });
     }
 
-    // 1. Re-hash exactly the files the manifest lists (in its order — emit sorted
-    //    them, so the recomputed vec matches byte-for-byte when untampered).
+    // Re-hash exactly the files the manifest lists (in its order — emit sorted
+    // them, so the recomputed vec matches byte-for-byte when untampered).
     let mut recomputed = Vec::with_capacity(manifest.artifacts.len());
     for a in &manifest.artifacts {
         let bytes = match fs::read(head_dir.join(&a.path)) {
@@ -221,13 +286,7 @@ pub fn verify_head(head_dir: &Path) -> Result<HeadTrust, EmitError> {
         });
     }
 
-    // 2. The manifest is self-consistent; now check who vouches for it. An absent
-    //    attestations.json is UNSIGNED (yellow), distinct from a failed check.
-    let att_path = head_dir.join("attestations.json");
-    let bundle: AttestationBundle = match fs::read(&att_path) {
-        Ok(b) => serde_json::from_slice(&b)?,
-        Err(_) => return Ok(HeadTrust::Unsigned),
-    };
+    // 3. Content matches the signed manifest; check who vouches for it.
     match verify_bundle(&bundle, &manifest.snapshot_id) {
         Verdict::Trusted { authored } => Ok(HeadTrust::Verified { authored }),
         Verdict::Untrusted { reason } => Ok(HeadTrust::Failed { reason }),

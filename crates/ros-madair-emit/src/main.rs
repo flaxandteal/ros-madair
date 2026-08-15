@@ -44,8 +44,76 @@ fn usage() -> ExitCode {
     ExitCode::from(2)
 }
 
+/// `ros-madair-emit sign <head_dir> <key_path>` — seal the head's manifest
+/// (rebuild its content hashes / snapshot_id) and write a signed
+/// `attestations.json` beside it. The build-time signing entry point.
+#[cfg(feature = "attest")]
+fn sign_command(args: &[String]) -> ExitCode {
+    let (Some(head), Some(key)) = (args.get(2), args.get(3)) else {
+        eprintln!("usage: ros-madair-emit sign <head_dir> <key_path>");
+        return ExitCode::from(2);
+    };
+    match ros_madair_emit::seal_and_sign(Path::new(head), Path::new(key)) {
+        Ok(id) => {
+            println!("{id}");
+            ExitCode::SUCCESS
+        }
+        Err(e) => {
+            eprintln!("sign failed: {e}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+#[cfg(not(feature = "attest"))]
+fn sign_command(_args: &[String]) -> ExitCode {
+    eprintln!("`sign` needs the `attest` feature (it is on by default)");
+    ExitCode::FAILURE
+}
+
+/// `ros-madair-emit verify <head_dir>` — recompute + verify a head's
+/// attestations, print `verified` / `unsigned` / `tampered: <reason>`. Exit 0
+/// only when verified, so a build/CI step can gate on it.
+#[cfg(feature = "attest")]
+fn verify_command(args: &[String]) -> ExitCode {
+    let Some(head) = args.get(2) else {
+        eprintln!("usage: ros-madair-emit verify <head_dir>");
+        return ExitCode::from(2);
+    };
+    match ros_madair_emit::verify_head(Path::new(head)) {
+        Ok(ros_madair_emit::HeadTrust::Verified { authored }) => {
+            println!("verified ({authored} attestation(s))");
+            ExitCode::SUCCESS
+        }
+        Ok(ros_madair_emit::HeadTrust::Unsigned) => {
+            println!("unsigned");
+            ExitCode::from(1)
+        }
+        Ok(ros_madair_emit::HeadTrust::Failed { reason }) => {
+            println!("tampered: {reason}");
+            ExitCode::from(1)
+        }
+        Err(e) => {
+            eprintln!("verify failed: {e}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+#[cfg(not(feature = "attest"))]
+fn verify_command(_args: &[String]) -> ExitCode {
+    eprintln!("`verify` needs the `attest` feature (it is on by default)");
+    ExitCode::FAILURE
+}
+
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().collect();
+    if args.get(1).map(String::as_str) == Some("sign") {
+        return sign_command(&args);
+    }
+    if args.get(1).map(String::as_str) == Some("verify") {
+        return verify_command(&args);
+    }
     let mut positional = Vec::new();
     let mut base_uri = "https://example.org/".to_string();
     let mut options = EmitOptions::default();

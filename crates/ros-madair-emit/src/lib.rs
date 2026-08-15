@@ -62,7 +62,7 @@ mod manifest;
 mod parquet;
 
 #[cfg(feature = "attest")]
-pub use attest::{sign_head, verify_head, SigningIdentity};
+pub use attest::{seal_and_sign, sign_head, verify_head, SigningIdentity};
 #[cfg(feature = "attest")]
 pub use ros_madair_format::attest::{verify_bundle, AttestationBundle, HeadTrust, Verdict};
 pub use closure::{build_closure, Closure, ClosureEntry};
