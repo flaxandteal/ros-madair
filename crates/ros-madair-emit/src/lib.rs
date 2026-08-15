@@ -49,6 +49,8 @@ use alizarin_core::{
 };
 use rusqlite::Connection;
 
+#[cfg(feature = "attest")]
+mod attest;
 mod chunks;
 mod closure;
 mod composability;
@@ -59,6 +61,10 @@ mod locality;
 mod manifest;
 mod parquet;
 
+#[cfg(feature = "attest")]
+pub use attest::SigningIdentity;
+#[cfg(feature = "attest")]
+pub use ros_madair_format::attest::{verify_bundle, AttestationBundle, Verdict};
 pub use closure::{build_closure, Closure, ClosureEntry};
 /// The artifact FORMAT types (manifest contract + chunk-tile wire shape) live
 /// in `ros-madair-format` — WASM-buildable, so a browser/Tauri READER can parse

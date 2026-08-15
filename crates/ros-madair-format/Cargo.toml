@@ -22,6 +22,21 @@ serde_json = "1"
 # P17 chunk framing (encode_chunk/decode_chunk) lives here so writer and reader
 # share ONE encoder — pure msgpack, WASM-clean.
 rmp-serde = "1"
+# Attestation VERIFY (authenticity over snapshot_id) — behind the `attest`
+# feature so a render/parse-only consumer (and the browser bundle) pulls NO
+# curve25519. Verify-only: no RNG, no std — ed25519-dalek's verify path is
+# no_std and builds for wasm32-unknown-unknown (ring would NOT). Signing/keygen
+# is native, in the emit crate.
+ed25519-dalek = { version = "2", default-features = false, optional = true }
+base64 = { version = "0.22", optional = true }
+
+[features]
+# Authenticity layer ON by default: heads sign, readers verify, out of the box.
+# It stays a removable EXTENSION though — a lean/render-only consumer (or a
+# size-sensitive browser bundle) drops all curve25519 with
+# `default-features = false`. So: opt-OUT, not baked in.
+default = ["attest"]
+attest = ["dep:ed25519-dalek", "dep:base64"]
 
 # WASM: alizarin-core pulls uuid v4 → getrandom 0.2, which refuses to build for
 # wasm32-unknown-unknown unless told where randomness comes from. Enabling the

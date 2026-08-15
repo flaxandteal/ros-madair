@@ -33,6 +33,13 @@ use alizarin_core::StaticTile;
 use ros_madair_handlers::HandlerDecl;
 use serde::{Deserialize, Serialize};
 
+/// Snapshot attestations (authenticity over `snapshot_id`) — DSSE/in-toto types
+/// and the WASM-safe verify policy. Behind the `attest` feature so it is an
+/// opt-in extension, not a crypto tax on render/parse-only consumers. Signing
+/// (native key generation) is in `ros-madair-emit`; this is the verify half.
+#[cfg(feature = "attest")]
+pub mod attest;
+
 /// The on-disk FORMAT version (P17), stamped into every artifact and gated by
 /// every reader. Bump it whenever the head schema, the chunk framing, or the
 /// manifest shape changes in a way an older reader would MISread rather than

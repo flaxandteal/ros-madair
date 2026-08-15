@@ -28,6 +28,14 @@ serde_json = "1"
 rusqlite = { version = "0.32", features = ["bundled"] }
 rmp-serde = "1"
 sha2 = "0.10"
+# Signing half of the attestation layer (native Ed25519 keygen + sign). Optional
+# so the emitter CAN be built crypto-free, but ON by default (see [features]):
+# every emitted head/overlay is signed at L0. Verify types come from the format
+# crate; here we hold the private key. getrandom mints the 32-byte seed (no `rand`
+# pulled in); base64 encodes key/sig for the JSON envelope.
+ed25519-dalek = { version = "2", optional = true }
+base64 = { version = "0.22", optional = true }
+getrandom = { version = "0.2", optional = true }
 # The DuckDB+Parquet substrate writer (`parquet.rs`). The tile path STREAMS
 # through a file-backed DuckDB staging table + `COPY … ORDER BY` (external,
 # disk-spilling sort) so a full-corpus build is memory-bounded — the same engine
@@ -39,6 +47,18 @@ sha2 = "0.10"
 duckdb = { version = "1", features = ["bundled", "json", "parquet"] }
 arrow = "58"
 parquet = "58"
+
+[features]
+# Sign every emitted head/overlay (L0, default-on). Also turns on the format
+# crate's verify half explicitly, so `--no-default-features` on either crate is
+# coherent (both off ⇒ a crypto-free emitter).
+default = ["attest"]
+attest = [
+    "dep:ed25519-dalek",
+    "dep:base64",
+    "dep:getrandom",
+    "ros-madair-format/attest",
+]
 
 [dev-dependencies]
 # The `hydrate_entry` example is a driver over the library read path — it does
