@@ -329,3 +329,65 @@ fn nodegroup_partitioning_isolates_each_nodegroup_into_its_own_file() {
     }
     eprintln!("OK: {} partitions, each isolated to its nodegroup", talk.partitions);
 }
+
+/// Slice 2: `emit_parquet` writes a real, self-describing manifest (a non-empty
+/// `snapshot_id` derived over the content-file hashes, the models, and the
+/// format version), and `sign_head` signs THAT id into an `attestations.json`
+/// that verifies — while a different snapshot (what a reader computes after a
+/// tampered chunk) does not. This is the on-device signing path end to end,
+/// minus the read-side recompute (slice 3).
+#[test]
+fn emit_writes_a_signable_manifest_that_verifies() {
+    let Some(dir) = corpus() else {
+        eprintln!("demo fixture absent — skipping");
+        return;
+    };
+    let out = scratch("signout");
+    let registry = default_registry();
+    let cfg_by_graph = HashMap::new();
+    emit_parquet(
+        dir.to_str().unwrap(),
+        out.to_str().unwrap(),
+        "https://example.org/",
+        &registry,
+        &cfg_by_graph,
+    )
+    .expect("emit_parquet");
+
+    // 1. A real self-describing manifest landed (not the stubbed JS one).
+    let manifest: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(out.join("manifest.json")).expect("manifest.json"))
+            .unwrap();
+    let snapshot_id = manifest["snapshot_id"].as_str().expect("snapshot_id present");
+    assert!(!snapshot_id.is_empty(), "snapshot_id is non-empty");
+    assert_eq!(manifest["format_version"].as_u64(), Some(1), "format_version stamped");
+    assert_eq!(manifest["base_uri"].as_str(), Some("https://example.org/"));
+    assert!(
+        manifest["artifacts"].as_array().is_some_and(|a| !a.is_empty()),
+        "artifacts are hashed (they feed the snapshot_id)"
+    );
+    assert!(
+        manifest["models"].as_array().is_some_and(|a| !a.is_empty()),
+        "models are populated"
+    );
+
+    // 2. sign_head signs the manifest's OWN id, and the bundle verifies.
+    let key = out.join("signing_ed25519.key");
+    let signed = ros_madair_emit::sign_head(&out, &key).expect("sign_head");
+    assert_eq!(signed, snapshot_id, "sign_head signs the manifest's snapshot_id");
+    let bundle: ros_madair_emit::AttestationBundle = serde_json::from_slice(
+        &std::fs::read(out.join("attestations.json")).expect("attestations.json"),
+    )
+    .unwrap();
+    assert!(
+        ros_madair_emit::verify_bundle(&bundle, snapshot_id).is_trusted(),
+        "the signed snapshot verifies"
+    );
+
+    // 3. Tamper-evidence: a different snapshot_id (a swapped chunk moves it) fails.
+    assert!(
+        !ros_madair_emit::verify_bundle(&bundle, "0000000000000000").is_trusted(),
+        "a different snapshot is untrusted"
+    );
+    eprintln!("OK: manifest signed and verified for snapshot {snapshot_id}");
+}

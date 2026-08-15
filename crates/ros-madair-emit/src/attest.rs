@@ -129,6 +129,35 @@ impl SigningIdentity {
     }
 }
 
+/// Sign an already-emitted head in place: read its `manifest.json`, sign the
+/// `snapshot_id` with the identity at `key_path` (minting one on first use), and
+/// write `attestations.json` beside the head. Returns the signed `snapshot_id`.
+///
+/// This is the default-on L0 step a caller runs right after `emit_parquet` /
+/// `emit`: the emitter already wrote a self-describing manifest, so signing is a
+/// pure add-on over its `snapshot_id` — no re-hashing, and it works for any head
+/// (sqlite or parquet) that carries a manifest.
+pub fn sign_head(head_dir: &Path, key_path: &Path) -> Result<String, EmitError> {
+    let manifest_path = head_dir.join("manifest.json");
+    let bytes = fs::read(&manifest_path).map_err(|e| {
+        format!(
+            "sign_head: cannot read {} ({e}) — sign runs AFTER emit writes the manifest",
+            manifest_path.display()
+        )
+    })?;
+    let manifest: ros_madair_format::Manifest = serde_json::from_slice(&bytes)?;
+    if manifest.snapshot_id.is_empty() {
+        return Err("sign_head: manifest carries no snapshot_id to sign".into());
+    }
+    let identity = SigningIdentity::load_or_create(key_path)?;
+    let bundle = identity.attest_snapshot(&manifest.snapshot_id, &manifest.base_uri)?;
+    fs::write(
+        head_dir.join("attestations.json"),
+        serde_json::to_vec_pretty(&bundle)?,
+    )?;
+    Ok(manifest.snapshot_id)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

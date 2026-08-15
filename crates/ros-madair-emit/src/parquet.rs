@@ -868,6 +868,46 @@ pub fn emit_parquet_with_progress(
     }
     drop(stage);
     let _ = fs::remove_dir_all(&scratch);
+
+    // Self-describing manifest (A6/I6/P17) — retires the JS-hand-crafted one for
+    // the on-device path. Same derivation as the sqlite head: a real snapshot_id
+    // over the content-file hashes plus the manifest itself, the ACTUAL handler
+    // set (so the query side rebuilds exactly what was indexed, not a guessed
+    // default), and the models. `models`/`artifacts` are unused by the duck read
+    // path, but `artifacts` is what the id is computed over and a sync client
+    // reads, so it is populated, not stubbed.
+    let manifest_models = summaries
+        .iter()
+        .map(|s| ros_madair_format::ModelManifest {
+            slug: s.slug.clone(),
+            graph_id: s.graph_id.clone(),
+            spine_table: format!("tiles_{}", s.slug.replace('-', "_")),
+            resource_count: s.resources,
+        })
+        .collect();
+    let artifacts = crate::manifest::hash_parquet_artifacts(out)?;
+    let mut manifest = ros_madair_format::Manifest {
+        snapshot_id: String::new(),
+        format_version: ros_madair_format::FORMAT_VERSION,
+        base_uri: base_uri.to_string(),
+        tier: None,
+        handlers: ros_madair_handlers::describe_registry(registry),
+        models: manifest_models,
+        artifacts,
+        budgets: ros_madair_format::Budgets {
+            max_result_rows: 1000,
+            max_group_count: 500,
+        },
+    };
+    manifest.snapshot_id = crate::manifest::snapshot_id(
+        &manifest.artifacts,
+        &crate::manifest::manifest_digest_bytes(&manifest)?,
+    );
+    fs::write(
+        out.join("manifest.json"),
+        serde_json::to_vec_pretty(&manifest)?,
+    )?;
+
     Ok(summaries)
 }
 
