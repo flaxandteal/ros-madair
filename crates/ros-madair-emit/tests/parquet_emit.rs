@@ -414,18 +414,22 @@ fn verify_head_trusts_signed_and_flags_tamper() {
     )
     .expect("emit_parquet");
 
-    // Unsigned: manifest is self-consistent but nothing vouches for it.
-    assert!(
-        !ros_madair_emit::verify_head(&out).expect("verify_head").is_trusted(),
-        "an unsigned head is untrusted"
+    // Unsigned: manifest is self-consistent but nothing vouches for it (yellow).
+    assert_eq!(
+        ros_madair_emit::verify_head(&out).expect("verify_head"),
+        ros_madair_emit::HeadTrust::Unsigned,
+        "an unsigned head reports Unsigned, not Failed"
     );
 
-    // Sign, then it verifies.
+    // Sign, then it verifies (green).
     let key = out.join("signing_ed25519.key");
     ros_madair_emit::sign_head(&out, &key).expect("sign_head");
     assert!(
-        ros_madair_emit::verify_head(&out).expect("verify_head").is_trusted(),
-        "a signed, unmodified head verifies"
+        matches!(
+            ros_madair_emit::verify_head(&out).expect("verify_head"),
+            ros_madair_emit::HeadTrust::Verified { .. }
+        ),
+        "a signed, unmodified head is Verified"
     );
 
     // Tamper a listed parquet artifact (robust to partitioning: take the path
@@ -448,10 +452,10 @@ fn verify_head_trusts_signed_and_flags_tamper() {
     }
 
     match ros_madair_emit::verify_head(&out).expect("verify_head") {
-        ros_madair_emit::Verdict::Untrusted { reason } => {
+        ros_madair_emit::HeadTrust::Failed { reason } => {
             assert!(reason.contains("altered"), "tamper reason names alteration: {reason}");
             eprintln!("OK: tamper detected -> {reason}");
         }
-        v => panic!("expected Untrusted after tamper, got {v:?}"),
+        v => panic!("expected Failed after tamper, got {v:?}"),
     }
 }

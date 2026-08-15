@@ -131,6 +131,23 @@ impl Verdict {
     }
 }
 
+/// The read-side trust state of a whole head, as three distinct outcomes the UI
+/// renders as a green / yellow / red shield. Distinct from [`Verdict`] (the
+/// signature policy) because a reader must tell an UNSIGNED layer (normal for
+/// old/third-party data) from an ALTERED one (a real alarm): both are "not
+/// trusted", but only one is a warning.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum HeadTrust {
+    /// A valid `authored` attestation over the current content — green shield.
+    Verified { authored: usize },
+    /// No `attestations.json` — an unsigned layer (old or third-party). Yellow
+    /// shield: enable with a soft heads-up, not an alarm.
+    Unsigned,
+    /// Verification did NOT hold — content altered since signing, a missing
+    /// artifact, or an invalid/foreign signature. Red shield; `reason` says which.
+    Failed { reason: String },
+}
+
 /// DSSE v1 pre-authentication encoding (PAE): what is actually signed, so a
 /// signature can never be confused across `payloadType`s or truncated payloads.
 ///

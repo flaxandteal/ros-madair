@@ -21,7 +21,7 @@ use std::path::Path;
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use ed25519_dalek::{Signer, SigningKey};
 use ros_madair_format::attest::{
-    verify_bundle, AttestationBundle, Signature, Statement, Subject, Verdict, DIGEST_KEY,
+    verify_bundle, AttestationBundle, HeadTrust, Signature, Statement, Subject, Verdict, DIGEST_KEY,
     PAYLOAD_TYPE, PREDICATE_AUTHORED, STATEMENT_TYPE,
 };
 use ros_madair_format::{ArtifactEntry, Manifest};
@@ -173,16 +173,17 @@ pub fn sign_head(head_dir: &Path, key_path: &Path) -> Result<String, EmitError> 
 ///     `attestations.json` → Untrusted "unsigned" (an old/third-party layer),
 ///     distinct from a tamper so the UI can word the two differently.
 ///
-/// Returns the [`Verdict`]; the caller (a Tauri command → the enable-time
-/// warning) decides policy. Errors are reserved for "cannot read the manifest at
-/// all" — a malformed head, not an untrusted one.
-pub fn verify_head(head_dir: &Path) -> Result<Verdict, EmitError> {
+/// Returns a three-state [`HeadTrust`] — Verified / Unsigned / Failed — so the UI
+/// can green/yellow/red the layer and word an unsigned layer differently from a
+/// tampered one. Errors are reserved for "cannot read the manifest at all" — a
+/// malformed head, not an untrusted one.
+pub fn verify_head(head_dir: &Path) -> Result<HeadTrust, EmitError> {
     let manifest_path = head_dir.join("manifest.json");
     let manifest: Manifest = serde_json::from_slice(&fs::read(&manifest_path).map_err(|e| {
         format!("verify_head: cannot read {} ({e})", manifest_path.display())
     })?)?;
     if manifest.snapshot_id.is_empty() {
-        return Ok(Verdict::Untrusted {
+        return Ok(HeadTrust::Failed {
             reason: "manifest carries no snapshot_id".to_string(),
         });
     }
@@ -194,7 +195,7 @@ pub fn verify_head(head_dir: &Path) -> Result<Verdict, EmitError> {
         let bytes = match fs::read(head_dir.join(&a.path)) {
             Ok(b) => b,
             Err(_) => {
-                return Ok(Verdict::Untrusted {
+                return Ok(HeadTrust::Failed {
                     reason: format!("artifact {} is missing (layer is incomplete)", a.path),
                 })
             }
@@ -213,24 +214,24 @@ pub fn verify_head(head_dir: &Path) -> Result<Verdict, EmitError> {
     let recomputed_id =
         crate::manifest::snapshot_id(&recomputed, &crate::manifest::manifest_digest_bytes(&idless)?);
     if recomputed_id != manifest.snapshot_id {
-        return Ok(Verdict::Untrusted {
+        return Ok(HeadTrust::Failed {
             reason: "content does not match the manifest — this layer has been altered since it \
                      was signed"
                 .to_string(),
         });
     }
 
-    // 2. The manifest is self-consistent; now check who vouches for it.
+    // 2. The manifest is self-consistent; now check who vouches for it. An absent
+    //    attestations.json is UNSIGNED (yellow), distinct from a failed check.
     let att_path = head_dir.join("attestations.json");
     let bundle: AttestationBundle = match fs::read(&att_path) {
         Ok(b) => serde_json::from_slice(&b)?,
-        Err(_) => {
-            return Ok(Verdict::Untrusted {
-                reason: "no signature — this layer is unsigned".to_string(),
-            })
-        }
+        Err(_) => return Ok(HeadTrust::Unsigned),
     };
-    Ok(verify_bundle(&bundle, &manifest.snapshot_id))
+    match verify_bundle(&bundle, &manifest.snapshot_id) {
+        Verdict::Trusted { authored } => Ok(HeadTrust::Verified { authored }),
+        Verdict::Untrusted { reason } => Ok(HeadTrust::Failed { reason }),
+    }
 }
 
 #[cfg(test)]
