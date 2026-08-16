@@ -40,7 +40,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
-use alizarin_core::graph::{StaticGraph, StaticResourceMetadata};
+use alizarin_core::graph::{GraphLookup, StaticGraph, StaticResourceMetadata};
 use alizarin_core::json_conversion::{resource_tiles_to_tree, resource_tiles_to_tree_with_context};
 use alizarin_core::type_serialization::{ExternalResolver, SerializationContext, SerializationOptions};
 use alizarin_core::StaticTile;
@@ -724,7 +724,7 @@ pub fn hydrate_resource(
 pub fn hydrate_tiles(
     tiles: &[StaticTile],
     uuid: &str,
-    graph: &StaticGraph,
+    graph: &impl GraphLookup,
 ) -> Result<serde_json::Value, ReadError> {
     // Re-derive the descriptor from the composed tiles (see the doc above),
     // directly on the borrowed graph — no clone.
@@ -749,7 +749,7 @@ pub fn hydrate_tiles(
 pub fn hydrate_tiles_with_labels(
     tiles: &[StaticTile],
     uuid: &str,
-    graph: &StaticGraph,
+    graph: &impl GraphLookup,
     labels: &HashMap<String, String>,
     languages: &[&str],
 ) -> Result<serde_json::Value, ReadError> {
@@ -780,7 +780,11 @@ pub fn hydrate_tiles_with_labels(
 /// Build the resource metadata (descriptor re-derived from *these* tiles) shared
 /// by every hydrate entry point — see [`hydrate_tiles`] for why the descriptor is
 /// recomputed here rather than read from a stored copy.
-fn build_metadata(uuid: &str, graph: &StaticGraph, tiles: &[StaticTile]) -> StaticResourceMetadata {
+fn build_metadata(
+    uuid: &str,
+    graph: &impl GraphLookup,
+    tiles: &[StaticTile],
+) -> StaticResourceMetadata {
     let descriptors = graph.build_descriptors(tiles);
     StaticResourceMetadata {
         graph_id: graph.graph_id().to_string(),

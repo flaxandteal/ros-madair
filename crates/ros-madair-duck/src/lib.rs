@@ -449,7 +449,7 @@ impl DuckReader {
 pub fn hydrate_layers(
     dirs: &[&Path],
     uuid: &str,
-    graph: &StaticGraph,
+    graph: &alizarin_core::LayeredGraph,
     languages: &[&str],
     layer_ids: Option<&[String]>,
     registry: &alizarin_core::FunctionsRegistry,
@@ -504,13 +504,12 @@ pub fn hydrate_layers(
         // by UUID and merge its JIT tiles in (attested wins; see
         // alizarin_core::apply_derive_functions). An empty registry is a no-op.
         //
-        // `graph` is the base model, which carries the compute-tiles fxg
-        // (declared over the forms nodegroup it already defines); the presence
-        // spine layer gates generation via `is_member`. A computed layer that
-        // introduced its OWN nodegroups would instead be composed here as a
-        // LayeredGraph overlay (alizarin_core::LayeredGraph, whose
-        // functions_x_graphs() unions across layers) - loaded ONCE and cached,
-        // not re-parsed per hydrate. `&StaticGraph` coerces to `&dyn GraphLookup`.
+        // fxgs are NOT base-only: a computed layer carries its compute-tiles
+        // declaration on its OWN graph. `graph` is the caller's composed
+        // LayeredGraph (one layer or many - internal to it); its
+        // `functions_x_graphs()` unions across layers, so an overlay's fxg (and
+        // any nodes it adds) are visible while the base provides the shared
+        // nodegroups. `&LayeredGraph` coerces to the `&dyn GraphLookup` this takes.
         alizarin_core::apply_derive_functions(&mut tiles, graph, uuid, &is_member, registry);
     }
 
@@ -527,7 +526,7 @@ pub fn hydrate_layers(
 /// private `as_resource`).
 fn as_resource(
     uuid: &str,
-    graph: &StaticGraph,
+    graph: &dyn alizarin_core::GraphLookup,
     tiles: Vec<StaticTile>,
 ) -> alizarin_core::graph::StaticResource {
     use alizarin_core::graph::{StaticResource, StaticResourceMetadata};
