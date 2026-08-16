@@ -503,6 +503,14 @@ pub fn hydrate_layers(
         // Resolve each graph-declared Derive function's provider from `registry`
         // by UUID and merge its JIT tiles in (attested wins; see
         // alizarin_core::apply_derive_functions). An empty registry is a no-op.
+        //
+        // `graph` is the base model, which carries the compute-tiles fxg
+        // (declared over the forms nodegroup it already defines); the presence
+        // spine layer gates generation via `is_member`. A computed layer that
+        // introduced its OWN nodegroups would instead be composed here as a
+        // LayeredGraph overlay (alizarin_core::LayeredGraph, whose
+        // functions_x_graphs() unions across layers) - loaded ONCE and cached,
+        // not re-parsed per hydrate. `&StaticGraph` coerces to `&dyn GraphLookup`.
         alizarin_core::apply_derive_functions(&mut tiles, graph, uuid, &is_member, registry);
     }
 
