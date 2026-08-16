@@ -451,6 +451,8 @@ pub fn hydrate_layers(
     uuid: &str,
     graph: &StaticGraph,
     languages: &[&str],
+    layer_ids: Option<&[String]>,
+    registry: &alizarin_core::FunctionsRegistry,
 ) -> Result<serde_json::Value, DuckError> {
     use alizarin_core::graph::{
         merge_resources, unify_cardinality_one_tiles, TileMergeMode,
@@ -482,6 +484,27 @@ pub fn hydrate_layers(
     let mut tiles = merged.resource.tiles.unwrap_or_default();
     unify_cardinality_one_tiles(&mut tiles, graph, false, TileMergeMode::PerNodegroup)
         .map_err(DuckError::Compile)?;
+
+    // Compute-tiles hook: run any compute-tiles functions declared on the graph.
+    // Membership check: resource is "in" a layer if its tiles appeared in that
+    // layer's parquet. `layer_ids` pairs each dir with its layer ID.
+    if let Some(ids) = layer_ids {
+        let present_ids: Vec<&str> = dirs.iter().zip(ids.iter())
+            .filter(|(dir, _)| {
+                open_layer(dir)
+                    .and_then(|d| d.resource_tiles(uuid).map(|t| !t.is_empty()))
+                    .unwrap_or(false)
+            })
+            .map(|(_, id)| id.as_str())
+            .collect();
+        let is_member = |layer_id: &str| -> bool {
+            present_ids.iter().any(|&id| id == layer_id)
+        };
+        // Resolve each graph-declared Derive function's provider from `registry`
+        // by UUID and merge its JIT tiles in (attested wins; see
+        // alizarin_core::apply_derive_functions). An empty registry is a no-op.
+        alizarin_core::apply_derive_functions(&mut tiles, graph, uuid, &is_member, registry);
+    }
 
     // Labels: base-first fold so the topmost layer's label wins on overwrite.
     let mut labels = HashMap::new();
