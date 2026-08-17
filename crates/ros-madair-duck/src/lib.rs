@@ -512,6 +512,18 @@ fn cached_concept_labels(
     Ok(arc)
 }
 
+/// Pre-open + pool every layer's `DuckReader` and build the concept-label cache,
+/// so the FIRST hydrate does not pay the ~75ms/layer DuckDB open cost. Call once
+/// after the layer set is known (ideally off the UI thread). Idempotent: a warmed
+/// layer is skipped by the pool. Errors on individual layers are swallowed - a bad
+/// layer just isn't pre-warmed and pays its open on first use.
+pub fn prewarm(dirs: &[&Path]) {
+    for dir in dirs {
+        let _ = with_layer(dir, |_| Ok(()));
+    }
+    let _ = cached_concept_labels(dirs);
+}
+
 /// Multi-layer composed hydration from Parquet - the counterpart of
 /// ros-madair-read's `Layers::hydrate_resource`. Gathers a resource's tiles from
 /// every layer that has it (TOPMOST first, so `merge_resources`' first-wins ==
