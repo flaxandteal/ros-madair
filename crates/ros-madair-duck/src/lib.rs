@@ -439,6 +439,79 @@ impl DuckReader {
     }
 }
 
+/// Open a layer dir as a `DuckReader` (tiles glob + optional concept catalog).
+fn open_layer(dir: &Path) -> Result<DuckReader, DuckError> {
+    let glob = format!("{}/tiles_*.parquet", dir.display());
+    let mut duck = DuckReader::open_with(&glob, SpatialSource::None)?;
+    let catalog = dir.join("concept_catalog.parquet");
+    if catalog.is_file() {
+        duck = duck.with_catalog(&catalog.to_string_lossy())?;
+    }
+    Ok(duck)
+}
+
+/// Run `f` against a layer's `DuckReader`, opened ONCE and pooled for reuse across
+/// hydrates. Opening a DuckDB per layer was the dominant per-entry cost (~75ms
+/// each, and every layer is opened on every entry open); a resource's tiles are a
+/// query, not a reason to re-open. `resource_tiles`/`concept_labels` take `&self`,
+/// so one pooled reader serves every query. The pool lock is held during the query
+/// - fine for a dictionary app opening entries sequentially; concurrent hydrations
+/// (e.g. parallel cognate loads) serialize briefly on the (fast, post-open) query.
+fn with_layer<T>(
+    dir: &Path,
+    f: impl FnOnce(&DuckReader) -> Result<T, DuckError>,
+) -> Result<T, DuckError> {
+    use std::sync::{Mutex, OnceLock};
+    static POOL: OnceLock<Mutex<HashMap<std::path::PathBuf, DuckReader>>> = OnceLock::new();
+    let mut pool = POOL
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .expect("layer reader pool poisoned");
+    if !pool.contains_key(dir) {
+        let reader = open_layer(dir)?;
+        pool.insert(dir.to_path_buf(), reader);
+    }
+    f(pool.get(dir).expect("just inserted"))
+}
+
+/// The merged concept-label map for a layer set, cached. Concept labels are stable
+/// for a given set of installed layers (they do not change per resource), and
+/// reading every layer's full `concept_catalog.parquet` on every hydrate was ~half
+/// the per-entry cost. Build once per dir set (base-first fold, topmost wins), then
+/// reuse. Keyed by the dir set; a layer install/uninstall changes the set and
+/// rebuilds.
+fn cached_concept_labels(
+    dirs: &[&Path],
+) -> Result<std::sync::Arc<HashMap<String, String>>, DuckError> {
+    use std::sync::{Arc, Mutex, OnceLock};
+    static CACHE: OnceLock<Mutex<HashMap<String, Arc<HashMap<String, String>>>>> = OnceLock::new();
+    let key = dirs
+        .iter()
+        .map(|d| d.to_string_lossy().into_owned())
+        .collect::<Vec<_>>()
+        .join("\n");
+    {
+        let cache = CACHE
+            .get_or_init(|| Mutex::new(HashMap::new()))
+            .lock()
+            .expect("concept-label cache poisoned");
+        if let Some(l) = cache.get(&key) {
+            return Ok(l.clone());
+        }
+    }
+    let mut labels = HashMap::new();
+    for dir in dirs {
+        labels.extend(with_layer(dir, |r| r.concept_labels())?);
+    }
+    let arc = Arc::new(labels);
+    CACHE
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .expect("concept-label cache poisoned")
+        .insert(key, arc.clone());
+    Ok(arc)
+}
+
 /// Multi-layer composed hydration from Parquet - the counterpart of
 /// ros-madair-read's `Layers::hydrate_resource`. Gathers a resource's tiles from
 /// every layer that has it (TOPMOST first, so `merge_resources`' first-wins ==
@@ -458,15 +531,18 @@ pub fn hydrate_layers(
         merge_resources, unify_cardinality_one_tiles, TileMergeMode,
     };
 
-    let open_layer = |dir: &Path| -> Result<DuckReader, DuckError> {
-        let glob = format!("{}/tiles_*.parquet", dir.display());
-        let mut duck = DuckReader::open_with(&glob, SpatialSource::None)?;
-        let catalog = dir.join("concept_catalog.parquet");
-        if catalog.is_file() {
-            duck = duck.with_catalog(&catalog.to_string_lossy())?;
-        }
-        Ok(duck)
-    };
+
+    // Perf instrumentation: RM_HYDRATE_PERF=1 logs per-phase timings to stderr
+    // (RustStdoutStderr in logcat). Zero cost when unset.
+    let perf = std::env::var_os("RM_HYDRATE_PERF").is_some();
+    let t0 = std::time::Instant::now();
+    macro_rules! mark {
+        ($label:expr) => {
+            if perf {
+                eprintln!("[perf] hydrate {:<8} {:>5}ms", $label, t0.elapsed().as_millis());
+            }
+        };
+    }
 
     // Tiles: topmost first (rev of base-first `dirs`). Capture, in the SAME pass,
     // which layers actually carried tiles for this resource - that IS the
@@ -475,7 +551,7 @@ pub fn hydrate_layers(
     let mut stack = Vec::new();
     let mut present_ids: Vec<&str> = Vec::new();
     for (i, dir) in dirs.iter().enumerate().rev() {
-        let tiles = open_layer(dir)?.resource_tiles(uuid)?;
+        let tiles = with_layer(dir, |r| r.resource_tiles(uuid))?;
         if tiles.is_empty() {
             continue;
         }
@@ -489,10 +565,12 @@ pub fn hydrate_layers(
     if stack.is_empty() {
         return Err(DuckError::Compile(format!("resource {uuid} in no layer")));
     }
+    mark!("gather");
     let merged = merge_resources(stack).map_err(DuckError::Compile)?;
     let mut tiles = merged.resource.tiles.unwrap_or_default();
     unify_cardinality_one_tiles(&mut tiles, graph, false, TileMergeMode::PerNodegroup)
         .map_err(DuckError::Compile)?;
+    mark!("unify");
 
     // Compute-tiles hook: run any compute-tiles functions declared on the graph.
     // Membership (`present_ids`) came free from the gather above.
@@ -512,14 +590,17 @@ pub fn hydrate_layers(
         // nodegroups. `&LayeredGraph` coerces to the `&dyn GraphLookup` this takes.
         alizarin_core::apply_derive_functions(&mut tiles, graph, uuid, &is_member, registry);
     }
+    mark!("derive");
 
-    // Labels: base-first fold so the topmost layer's label wins on overwrite.
-    let mut labels = HashMap::new();
-    for dir in dirs {
-        labels.extend(open_layer(dir)?.concept_labels()?);
-    }
-    ros_madair_read::hydrate_tiles_with_labels(&tiles, uuid, graph, &labels, languages)
-        .map_err(|e| DuckError::Compile(format!("hydrate: {e}")))
+    // Labels: cached per layer set (base-first fold, topmost wins) - see
+    // cached_concept_labels. Was ~half the per-entry cost (a full catalog read of
+    // every layer, every hydrate); now built once per installed-layer set.
+    let labels = cached_concept_labels(dirs)?;
+    mark!("labels");
+    let out = ros_madair_read::hydrate_tiles_with_labels(&tiles, uuid, graph, &labels, languages)
+        .map_err(|e| DuckError::Compile(format!("hydrate: {e}")));
+    mark!("tree");
+    out
 }
 
 /// Build a tiles-only `StaticResource` for merging (mirrors ros-madair-read's
