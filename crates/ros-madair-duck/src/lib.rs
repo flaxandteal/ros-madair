@@ -336,6 +336,23 @@ impl DuckReader {
         rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
     }
 
+    /// Reverse-link lookup returning just the citer ids: every resource that links
+    /// to `target` through node `node_id` (the per-node `link_targets` object).
+    /// The parquet counterpart of ros-madair-read's `Layers::cited_by` (used for
+    /// Logainm placenames via the place graph's `element_entry` node, cognates via
+    /// `cognate_entry_id`, external examples via `headword_entry`).
+    pub fn cited_by(&self, node_id: &str, target: &str) -> Result<Vec<String>, DuckError> {
+        let sql = format!(
+            "SELECT DISTINCT resource_id FROM tiles \
+             WHERE json_contains(json_extract(link_targets, '$.\"{}\"'), '\"{}\"')",
+            sql_lit(node_id),
+            sql_lit(target)
+        );
+        let mut stmt = self.conn.prepare(&sql)?;
+        let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
     /// Reconstruct a resource's tiles from the Parquet `data` column - the
     /// hydration tile source, replacing the msgpack chunk read. The `data` column
     /// is the tile's `{node_id: value}` JSON; the other columns give the tile
@@ -522,6 +539,19 @@ pub fn prewarm(dirs: &[&Path]) {
         let _ = with_layer(dir, |_| Ok(()));
     }
     let _ = cached_concept_labels(dirs);
+}
+
+/// `cited_by` across a layer set: every resource (in any layer) that links to
+/// `target` through node `node_id`, unioned + deduped. Pooled reader reuse. The
+/// parquet counterpart of the app's sqlite `Layers::cited_by` path.
+pub fn cited_by(dirs: &[&Path], node_id: &str, target: &str) -> Result<Vec<String>, DuckError> {
+    let mut ids = Vec::new();
+    for dir in dirs {
+        ids.append(&mut with_layer(dir, |r| r.cited_by(node_id, target))?);
+    }
+    ids.sort();
+    ids.dedup();
+    Ok(ids)
 }
 
 /// Multi-layer composed hydration from Parquet - the counterpart of
