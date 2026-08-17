@@ -468,12 +468,21 @@ pub fn hydrate_layers(
         Ok(duck)
     };
 
-    // Tiles: topmost first (rev of base-first `dirs`).
+    // Tiles: topmost first (rev of base-first `dirs`). Capture, in the SAME pass,
+    // which layers actually carried tiles for this resource - that IS the
+    // membership set the compute-tiles hook needs, so we never re-open + re-query
+    // the layers just to test membership.
     let mut stack = Vec::new();
-    for dir in dirs.iter().rev() {
+    let mut present_ids: Vec<&str> = Vec::new();
+    for (i, dir) in dirs.iter().enumerate().rev() {
         let tiles = open_layer(dir)?.resource_tiles(uuid)?;
         if tiles.is_empty() {
             continue;
+        }
+        if let Some(ids) = layer_ids {
+            if let Some(id) = ids.get(i) {
+                present_ids.push(id.as_str());
+            }
         }
         stack.push(as_resource(uuid, graph, tiles));
     }
@@ -486,17 +495,8 @@ pub fn hydrate_layers(
         .map_err(DuckError::Compile)?;
 
     // Compute-tiles hook: run any compute-tiles functions declared on the graph.
-    // Membership check: resource is "in" a layer if its tiles appeared in that
-    // layer's parquet. `layer_ids` pairs each dir with its layer ID.
-    if let Some(ids) = layer_ids {
-        let present_ids: Vec<&str> = dirs.iter().zip(ids.iter())
-            .filter(|(dir, _)| {
-                open_layer(dir)
-                    .and_then(|d| d.resource_tiles(uuid).map(|t| !t.is_empty()))
-                    .unwrap_or(false)
-            })
-            .map(|(_, id)| id.as_str())
-            .collect();
+    // Membership (`present_ids`) came free from the gather above.
+    if layer_ids.is_some() {
         let is_member = |layer_id: &str| -> bool {
             present_ids.iter().any(|&id| id == layer_id)
         };
