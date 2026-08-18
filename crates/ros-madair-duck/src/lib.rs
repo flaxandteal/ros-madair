@@ -613,6 +613,13 @@ pub fn hydrate_layers(
     unify_cardinality_one_tiles(&mut tiles, graph, false, TileMergeMode::PerNodegroup)
         .map_err(DuckError::Compile)?;
     mark!("unify");
+    if perf {
+        let mut ng: HashMap<&str, usize> = HashMap::new();
+        for t in &tiles {
+            *ng.entry(t.nodegroup_id.as_str()).or_default() += 1;
+        }
+        eprintln!("[perf] pre-derive tiles={} by_ng={ng:?}", tiles.len());
+    }
 
     // Compute-tiles hook: run any compute-tiles functions declared on the graph.
     // Membership (`present_ids`) came free from the gather above.
@@ -633,6 +640,13 @@ pub fn hydrate_layers(
         alizarin_core::apply_derive_functions(&mut tiles, graph, uuid, &is_member, registry);
     }
     mark!("derive");
+    if perf {
+        let mut ng: HashMap<&str, usize> = HashMap::new();
+        for t in &tiles {
+            *ng.entry(t.nodegroup_id.as_str()).or_default() += 1;
+        }
+        eprintln!("[perf] post-derive tiles={} by_ng={ng:?}", tiles.len());
+    }
 
     // Labels: cached per layer set (base-first fold, topmost wins) - see
     // cached_concept_labels. Was ~half the per-entry cost (a full catalog read of
