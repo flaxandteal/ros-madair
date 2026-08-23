@@ -1,0 +1,168 @@
+name: Check code
+
+# Per-PR check tier for the DuckDB/Parquet substrate, mirroring alizarin's ci.yml
+# (fmt + clippy + test across rust/wasm/napi/python). Until this existed, RM had
+# only a release-binary build + a docs deploy: 122 #[test] fns and 16 integration
+# test files never ran, and the duck/parquet path was never tested.
+#
+# CACHING the bundled libduckdb build (~12 min cold): two layers, complementary.
+#   - Swatinem/rust-cache restores target/, so on an unchanged Cargo.lock the
+#     compiled libduckdb-sys is reused and NOT rebuilt at all.
+#   - sccache (GitHub Actions cache backend) caches the C++ amalgamation at the
+#     OBJECT level. The duckdb source is identical regardless of Rust lockfile
+#     churn, so an unrelated dep bump (rust-cache miss) still hits sccache and
+#     skips the C++ recompile. RUSTC_WRAPPER caches rustc; CC/CXX route the
+#     cc-crate C/C++ compiles (libduckdb-sys) through sccache too.
+#   NB: `cargo test` (debug) and the binary build (release) compile duckdb in two
+#   profiles; sccache caches both.
+#
+# PREREQUISITES (RM path-deps alizarin by RELATIVE SIBLING PATH `../alizarin-sandbox`):
+#   - The RM repo must have a GitHub remote (both RM repos are local-only today).
+#   - Repo variables:  ALIZARIN_REPO (default flaxandteal/alizarin-sandbox),
+#                      ALIZARIN_REF  (a tag/branch at alizarin >= alpha.128 - the
+#                      CLM crate lives at ext/alizarin-clm/core from a128 on).
+#   - Repo secret:     DEPS_PAT with read on ALIZARIN_REPO (drop if it is public).
+
+on:
+  push:
+    branches: [main, "dev/*"]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  ALIZARIN_REPO: ${{ vars.ALIZARIN_REPO || 'flaxandteal/alizarin-sandbox' }}
+  ALIZARIN_REF: ${{ vars.ALIZARIN_REF || 'main' }}
+  # sccache everywhere: rustc wrapper + GHA cache backend. Native jobs also set
+  # CC/CXX (below) so the libduckdb-sys C++ compile is cached too.
+  SCCACHE_GHA_ENABLED: "true"
+  RUSTC_WRAPPER: "sccache"
+
+jobs:
+  # ── Rust: fmt + clippy + the full test suite (incl. the duck/parquet path) ──
+  rust:
+    name: Rust (fmt, clippy, test) + duck/parquet build
+    runs-on: ubuntu-latest
+    env:
+      # Route the cc-crate (libduckdb-sys bundled build) through sccache.
+      CC: "sccache gcc"
+      CXX: "sccache g++"
+    steps:
+      - uses: actions/checkout@v4
+      - name: Vendor alizarin sibling (>= a128)
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.ALIZARIN_REPO }}
+          ref: ${{ env.ALIZARIN_REF }}
+          path: .deps/alizarin-sandbox
+          token: ${{ secrets.DEPS_PAT }}
+      - name: Link sibling to the path RM expects (../alizarin-sandbox)
+        run: ln -sfn "$GITHUB_WORKSPACE/.deps/alizarin-sandbox" "$(dirname "$GITHUB_WORKSPACE")/alizarin-sandbox"
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - name: sccache
+        uses: mozilla-actions/sccache-action@v0.0.6
+      - name: Rust cache (restores compiled libduckdb-sys on Cargo.lock hit)
+        uses: Swatinem/rust-cache@v2
+
+      - name: Format
+        run: cargo fmt --all -- --check
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: Test workspace (bundled duckdb+json+parquet compiled in ros-madair-duck)
+        run: cargo test --workspace
+      - name: Build the offline parquet indexer binary
+        run: cargo build --release --bin ros-madair-build
+      - name: sccache stats (confirm the C++ compiles are being cached)
+        run: sccache --show-stats
+
+  # ── WASM (client + combined) + JS/TS. No duckdb here (native-only), so no CC wrap. ──
+  wasm-js:
+    name: WASM + TypeScript
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ env.ALIZARIN_REPO }}
+          ref: ${{ env.ALIZARIN_REF }}
+          path: .deps/alizarin-sandbox
+          token: ${{ secrets.DEPS_PAT }}
+      - run: ln -sfn "$GITHUB_WORKSPACE/.deps/alizarin-sandbox" "$(dirname "$GITHUB_WORKSPACE")/alizarin-sandbox"
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - name: Install wasm-pack
+        uses: jetli/wasm-pack-action@v0.4.0
+        with:
+          version: 'v0.13.1'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: sccache
+        uses: mozilla-actions/sccache-action@v0.0.6
+      - uses: Swatinem/rust-cache@v2
+
+      - run: npm ci
+      - name: Build client WASM
+        run: npm run build:wasm
+      - name: Build combined WASM (ros-madair-alizarin - the binary the app links)
+        run: npm run build:combined
+      - name: Build JS bundle
+        run: npm run build:js
+
+  # ── NAPI native addon (may pull duckdb -> CC wrap) ──
+  napi:
+    name: NAPI Build
+    runs-on: ubuntu-latest
+    env:
+      CC: "sccache gcc"
+      CXX: "sccache g++"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ env.ALIZARIN_REPO }}
+          ref: ${{ env.ALIZARIN_REF }}
+          path: .deps/alizarin-sandbox
+          token: ${{ secrets.DEPS_PAT }}
+      - run: ln -sfn "$GITHUB_WORKSPACE/.deps/alizarin-sandbox" "$(dirname "$GITHUB_WORKSPACE")/alizarin-sandbox"
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: sccache
+        uses: mozilla-actions/sccache-action@v0.0.6
+      - uses: Swatinem/rust-cache@v2
+      - name: Build NAPI addon
+        run: npm run build:napi
+
+  # ── Python (pyo3: ros-madair-python; may pull duckdb -> CC wrap) ──
+  python:
+    name: Python (pyo3)
+    runs-on: ubuntu-latest
+    env:
+      CC: "sccache gcc"
+      CXX: "sccache g++"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ env.ALIZARIN_REPO }}
+          ref: ${{ env.ALIZARIN_REF }}
+          path: .deps/alizarin-sandbox
+          token: ${{ secrets.DEPS_PAT }}
+      - run: ln -sfn "$GITHUB_WORKSPACE/.deps/alizarin-sandbox" "$(dirname "$GITHUB_WORKSPACE")/alizarin-sandbox"
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: sccache
+        uses: mozilla-actions/sccache-action@v0.0.6
+      - uses: Swatinem/rust-cache@v2
+      - name: Check pyo3 bindings compile
+        run: cargo check -p ros-madair-python
