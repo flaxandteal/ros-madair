@@ -45,13 +45,13 @@ debug = true
 [workspace.dependencies]
 # Single source of truth for the governance core: the local alizarin
 # checkout. The v2 static-assets stack builds directly against it.
-alizarin-core = { path = "../alizarin-sandbox/crates/alizarin-core" }
+alizarin-core = { path = "../alizarin/crates/alizarin-core" }
 
 # alizarin-wasm is a git dep that brings its own alizarin-core from the
 # same git repo. This patch forces it to use the same single copy of
 # alizarin-core as everything else in the graph.
 [patch.'https://github.com/flaxandteal/alizarin']
-alizarin-core = { path = "../alizarin-sandbox/crates/alizarin-core" }
+alizarin-core = { path = "../alizarin/crates/alizarin-core" }
 
 [patch.crates-io]
-alizarin-core = { path = "../alizarin-sandbox/crates/alizarin-core" }
+alizarin-core = { path = "../alizarin/crates/alizarin-core" }

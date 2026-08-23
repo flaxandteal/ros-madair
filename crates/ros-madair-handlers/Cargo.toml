@@ -17,7 +17,8 @@ description = "The single source of the Rós Madair extension-type registry: han
 # produced it, without dragging in the emitter's SQLite writer. Keep the
 # dependency set to the governance core + the handler providers.
 alizarin-core.workspace = true
-alizarin-clm-core = { path = "../../../alizarin-sandbox/crates/alizarin-clm-core" }
+# CLM moved to ext/alizarin-clm/core in alizarin alpha.128 (CLM consolidation).
+alizarin-clm-core = { path = "../../../alizarin/ext/alizarin-clm/core" }
 serde = { version = "1", features = ["derive"] }
 
 # WASM: alizarin-core pulls uuid v4 → getrandom 0.2, which refuses to build for
