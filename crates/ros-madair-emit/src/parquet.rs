@@ -977,7 +977,10 @@ mod tests {
         fn c(id: &str, broader: &[&str], narrower: &[&str]) -> RdmConcept {
             RdmConcept {
                 id: id.to_string(),
-                pref_label: HashMap::new(),
+                // alizarin a130+ separated id/uri and made pref_label a BTreeMap.
+                uri: None,
+                sort_order: None,
+                pref_label: std::collections::BTreeMap::new(),
                 alt_labels: HashMap::new(),
                 broader: broader.iter().map(|s| s.to_string()).collect(),
                 narrower: narrower.iter().map(|s| s.to_string()).collect(),
