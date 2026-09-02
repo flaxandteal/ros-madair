@@ -6,8 +6,8 @@
 //! + date on four resources), emits it through `emit_parquet`, and reads the
 //! Parquet back to assert: one row per tile, `q_ordered` = the head's date
 //! quantization, `geo_*` = the geometry bbox, and — with a small row-group size —
-//! more than one row group (the "chunk"). Demo fixture outside the repo;
-//! `ROS_MADAIR_DEMO_DATA` relocates it, absent → skip.
+//! more than one row group (the "chunk").
+//! Self-contained: builds a minimal base graph inline (no external fixture).
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -19,7 +19,6 @@ use parquet::file::reader::{FileReader, SerializedFileReader};
 use ros_madair_emit::{default_registry, emit_parquet, ClusterConfig, ClusterDim};
 use serde_json::json;
 
-const DEMO_DATA: &str = "/home/philtweir/Cód/Oscailte/magic/Clódóir/data";
 const TALK_GRAPH: &str = "a6c412db-72e0-4099-a690-ccc75ba841a9";
 const TALK_ROOT: &str = "5a037559-1ae0-11f0-b22a-8fd6f4eb1a02";
 const GEO_NG: &str = "5efd0000-0000-4000-8000-000000000002";
@@ -30,19 +29,31 @@ const R_LSHAPE: &str = "22220000-0000-4000-8000-000000000001";
 const R_FAR: &str = "33330000-0000-4000-8000-000000000001";
 const R_DIAG: &str = "44440000-0000-4000-8000-000000000001";
 
-fn demo_data() -> Option<PathBuf> {
-    let dir = PathBuf::from(
-        std::env::var("ROS_MADAIR_DEMO_DATA").unwrap_or_else(|_| DEMO_DATA.to_string()),
-    );
-    dir.join("graphs").is_dir().then_some(dir)
+/// Write a minimal, self-contained base graph (a `Talk` model = one semantic
+/// root) that `add_geo_node`/`add_date_node` then extend. Self-contained on
+/// purpose: the old external Clódóir demo fixture broke when alizarin renamed its
+/// example data (dead symlinks), so this test no longer depends on it.
+fn write_base_graph(gp: &Path) {
+    std::fs::create_dir_all(gp.parent().unwrap()).unwrap();
+    let root = json!({
+        "nodeid": TALK_ROOT, "name": "Talk", "alias": "talk", "datatype": "semantic",
+        "graph_id": TALK_GRAPH, "istopnode": true,
+    });
+    let doc = json!({ "graph": [{
+        "graphid": TALK_GRAPH, "name": "Talk", "root": root.clone(),
+        "nodes": [root], "nodegroups": [], "edges": [],
+    }]});
+    std::fs::write(gp, serde_json::to_vec_pretty(&doc).unwrap()).unwrap();
 }
 
+/// Recursively copy a directory (used to dump the emitted partition tree — real
+/// files, no symlinks).
 fn copy_dir(src: &Path, dst: &Path) {
     std::fs::create_dir_all(dst).unwrap();
     for e in std::fs::read_dir(src).unwrap() {
         let e = e.unwrap();
         let to = dst.join(e.file_name());
-        if e.file_type().unwrap().is_dir() {
+        if e.path().is_dir() {
             copy_dir(&e.path(), &to);
         } else {
             std::fs::copy(e.path(), to).unwrap();
@@ -122,11 +133,9 @@ fn talk(id: &str, geo_tile: &str, date_tile: &str, geometry: serde_json::Value, 
 }
 
 fn corpus() -> Option<PathBuf> {
-    let demo = demo_data()?;
     let dir = scratch("corpus");
-    copy_dir(&demo.join("graphs"), &dir.join("graphs"));
-    copy_dir(&demo.join("vocabularies"), &dir.join("vocabularies"));
     let gp = dir.join("graphs").join(format!("{TALK_GRAPH}.json"));
+    write_base_graph(&gp);
     add_geo_node(&gp);
     add_date_node(&gp);
     let talk_dir = dir.join("resources").join("talk");

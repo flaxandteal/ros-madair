@@ -9,7 +9,7 @@
 //!   - range/concept agree exactly between the two paths;
 //!   - the DuckDB path's spatial DROPS the bbox false positive (the diagonal)
 //!     that `resolve()` keeps — the exact fine step, finally done.
-//! Demo fixture outside the repo; `ROS_MADAIR_DEMO_DATA` relocates it, absent → skip.
+//! Self-contained: builds a minimal base graph inline (no external fixture).
 
 use std::path::{Path, PathBuf};
 
@@ -21,7 +21,6 @@ use ros_madair_query::{Expr, Measure, Query};
 use ros_madair_read::Layers;
 use serde_json::json;
 
-const DEMO_DATA: &str = "/home/philtweir/Cód/Oscailte/magic/Clódóir/data";
 const TALK_GRAPH: &str = "a6c412db-72e0-4099-a690-ccc75ba841a9";
 const TALK_ROOT: &str = "5a037559-1ae0-11f0-b22a-8fd6f4eb1a02";
 const GEO_NG: &str = "5efd0000-0000-4000-8000-000000000002";
@@ -41,17 +40,21 @@ const R_LSHAPE: &str = "22220000-0000-4000-8000-000000000001";
 const R_FAR: &str = "33330000-0000-4000-8000-000000000001";
 const R_DIAG: &str = "44440000-0000-4000-8000-000000000001";
 
-fn demo_data() -> Option<PathBuf> {
-    let dir = PathBuf::from(std::env::var("ROS_MADAIR_DEMO_DATA").unwrap_or_else(|_| DEMO_DATA.to_string()));
-    dir.join("graphs").is_dir().then_some(dir)
-}
-fn copy_dir(src: &Path, dst: &Path) {
-    std::fs::create_dir_all(dst).unwrap();
-    for e in std::fs::read_dir(src).unwrap() {
-        let e = e.unwrap();
-        let to = dst.join(e.file_name());
-        if e.file_type().unwrap().is_dir() { copy_dir(&e.path(), &to); } else { std::fs::copy(e.path(), to).unwrap(); }
-    }
+/// Write a minimal, self-contained base graph (a `Talk` model = one semantic
+/// root) that `add_node` then extends. Self-contained on purpose: the old
+/// external Clódóir demo fixture broke when alizarin renamed its example data
+/// (dead symlinks), so this test no longer depends on it — it always runs.
+fn write_base_graph(gp: &Path) {
+    std::fs::create_dir_all(gp.parent().unwrap()).unwrap();
+    let root = json!({
+        "nodeid": TALK_ROOT, "name": "Talk", "alias": "talk", "datatype": "semantic",
+        "graph_id": TALK_GRAPH, "istopnode": true,
+    });
+    let doc = json!({ "graph": [{
+        "graphid": TALK_GRAPH, "name": "Talk", "root": root.clone(),
+        "nodes": [root], "nodegroups": [], "edges": [],
+    }]});
+    std::fs::write(gp, serde_json::to_vec_pretty(&doc).unwrap()).unwrap();
 }
 fn scratch(tag: &str) -> PathBuf {
     use std::sync::atomic::{AtomicU64, Ordering};
@@ -94,12 +97,10 @@ fn talk(id: &str, tag: &str, geometry: serde_json::Value, founded: &str, topic: 
 }
 
 /// Emit head + parquet from one corpus; return (head_dir, parquet_file, graph).
-fn corpus() -> Option<(PathBuf, PathBuf, StaticGraph)> {
-    let demo = demo_data()?;
+fn corpus() -> (PathBuf, PathBuf, StaticGraph) {
     let dir = scratch("corpus");
-    copy_dir(&demo.join("graphs"), &dir.join("graphs"));
-    copy_dir(&demo.join("vocabularies"), &dir.join("vocabularies"));
     let gp = dir.join("graphs").join(format!("{TALK_GRAPH}.json"));
+    write_base_graph(&gp);
     add_node(&gp, GEO_NG, "location", "geojson-feature-collection", "5efd0000-0000-4000-8000-0000000000ef");
     add_node(&gp, FOUNDED_NG, "founded", "date", "5efd0000-0000-4000-8000-0000000000ee");
     add_node(&gp, TOPIC_NG, "topic", "reference", "5efd0000-0000-4000-8000-0000000000ed");
@@ -123,7 +124,7 @@ fn corpus() -> Option<(PathBuf, PathBuf, StaticGraph)> {
 
     let raw: serde_json::Value = serde_json::from_slice(&std::fs::read(&gp).unwrap()).unwrap();
     let graph: StaticGraph = serde_json::from_value(raw["graph"][0].clone()).unwrap();
-    Some((head_out, pq_out.join("tiles_talk.parquet"), graph))
+    (head_out, pq_out.join("tiles_talk.parquet"), graph)
 }
 
 fn bbox(min_lng: f64, min_lat: f64, max_lng: f64, max_lat: f64) -> Expr {
@@ -144,7 +145,7 @@ fn links_to(target: Option<&str>) -> Expr {
 
 #[test]
 fn duckdb_path_matches_the_battery_and_is_exact_on_spatial() {
-    let Some((head, pq, graph)) = corpus() else { eprintln!("demo fixture absent — skipping"); return; };
+    let (head, pq, graph) = corpus();
     let registry = default_registry();
     let duck = DuckReader::open(pq.to_str().unwrap()).expect("open duck");
     let ids = |w: Expr| { let mut v = duck.resolve_ids(&q(w), &graph, &registry).unwrap(); v.sort(); v };
