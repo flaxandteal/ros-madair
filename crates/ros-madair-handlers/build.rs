@@ -20,8 +20,9 @@ fn version_line(text: &str) -> Option<String> {
 fn main() {
     let manifest_dir = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap());
     // alizarin alpha.128+ moved CLM from crates/alizarin-clm-core to
-    // ext/alizarin-clm/core, and RM now deps on ../alizarin (not the sandbox).
-    let clm = manifest_dir.join("../../../alizarin/ext/alizarin-clm/core/Cargo.toml");
+    // ext/clm/core (the ext dirs dropped the "alizarin-" prefix), and RM now
+    // deps on ../alizarin (not the sandbox).
+    let clm = manifest_dir.join("../../../alizarin/ext/clm/core/Cargo.toml");
     println!("cargo:rerun-if-changed=build.rs");
 
     let version = read_version(&clm).unwrap_or_else(|| {
