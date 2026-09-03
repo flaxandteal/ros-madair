@@ -15,7 +15,7 @@ use std::path::{Path, PathBuf};
 
 use alizarin_core::graph::StaticGraph;
 use alizarin_core::quantize::quantize_date;
-use ros_madair_duck::DuckReader;
+use ros_madair_duck::{DuckError, DuckReader, SpatialSource};
 use ros_madair_handlers::default_registry;
 use ros_madair_query::{Expr, Measure, Query};
 use ros_madair_read::Layers;
@@ -208,4 +208,62 @@ fn duckdb_path_matches_the_battery_and_is_exact_on_spatial() {
     assert!(!ids(bbox(-1.0, -1.0, 1.0, 1.0)).contains(&R_DIAG.to_string()), "duck path is exact — drops it");
 
     eprintln!("OK: battery matches; spatial + link exact; reference == concept mechanism");
+}
+
+/// Negating a bbox WITHOUT the spatial extension used to silently under-answer:
+/// `Bbox` compiles to the coarse bbox-overlap SUPERSET on the no-spatial (mobile)
+/// path, and `Not` lowered to `EXCEPT <superset>`, which drops real matches (the
+/// diagonal's box overlaps the query box, so `NOT bbox` would wrongly exclude a
+/// resource whose exact shape never intersected). The head compiler refuses this
+/// (`NegatedCoarsePredicate`); the duck backend lost the guard. It must REFUSE,
+/// not mis-answer — a negated bbox requires spatial (exact ST_Intersects).
+#[test]
+fn negating_a_coarse_bbox_without_spatial_is_refused_not_silently_wrong() {
+    let (_head, pq, graph) = corpus();
+    let registry = default_registry();
+    let bx = || bbox(-1.0, -1.0, 1.0, 1.0);
+    let not = |e: Expr| Expr::Not(Box::new(e));
+
+    // No spatial → the guard fires with a typed, repairable compile error.
+    let nospatial = DuckReader::open_with(pq.to_str().unwrap(), SpatialSource::None)
+        .expect("open without spatial");
+    match nospatial.resolve_ids(&q(not(bx())), &graph, &registry) {
+        Err(DuckError::Compile(m)) => {
+            assert!(m.contains("spatial"), "names the missing capability: {m}");
+            assert!(m.contains("bbox"), "names the predicate: {m}");
+        }
+        other => panic!("expected a coarse-negation compile error, got {other:?}"),
+    }
+    // The guard RECURSES: a bbox buried under Not(All([...])) is caught too.
+    match nospatial.resolve_ids(
+        &q(not(Expr::All(vec![bx(), date_range("2000-01-01", "2010-12-31")]))),
+        &graph,
+        &registry,
+    ) {
+        Err(DuckError::Compile(_)) => {}
+        other => panic!("expected the nested bbox under Not to be refused, got {other:?}"),
+    }
+    // But it is NARROW: negating an EXACT predicate (a date range) still compiles
+    // without spatial — only the coarse bbox is refused.
+    assert!(
+        nospatial
+            .resolve_ids(&q(not(date_range("2000-01-01", "2010-12-31"))), &graph, &registry)
+            .is_ok(),
+        "Not over an exact Range must still compile without spatial"
+    );
+
+    // With spatial loaded, Bbox is exact, so negating it is SOUND and allowed.
+    // Probe capability the way the battery test does (exact drops the diagonal) so
+    // this assertion stays green offline, where `Auto` cannot install spatial.
+    let auto = DuckReader::open(pq.to_str().unwrap()).expect("open auto");
+    let exact_spatial = !auto
+        .resolve_ids(&q(bx()), &graph, &registry)
+        .unwrap()
+        .contains(&R_DIAG.to_string());
+    if exact_spatial {
+        assert!(
+            auto.resolve_ids(&q(not(bx())), &graph, &registry).is_ok(),
+            "with spatial loaded, Bbox is exact so Not(Bbox) must be allowed"
+        );
+    }
 }

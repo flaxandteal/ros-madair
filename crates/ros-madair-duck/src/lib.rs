@@ -121,8 +121,10 @@ pub enum SpatialSource<'a> {
     /// with autoinstall disabled — no network. This is the on-device / mobile
     /// path: the app ships the platform's spatial binary and points here.
     OfflineDir(&'a Path),
-    /// Skip spatial — non-spatial queries only (a `Bbox` will then error at the
-    /// DuckDB layer rather than silently mis-answer).
+    /// Skip spatial — no ST_Intersects. A *bare* `Bbox` then compiles to the
+    /// coarse bbox-overlap SUPERSET (recall-tolerant, the mobile path); a
+    /// *negated* `Bbox` is refused at compile time, since you cannot soundly
+    /// complement a superset (see `first_coarse_path` / the `Not` arm).
     None,
 }
 
@@ -912,6 +914,22 @@ fn compile_expr(
             Ok(parts?.join("\nUNION\n"))
         }
         Expr::Not(inner) => {
+            // Soundness: `EXCEPT inner` is set-complement over resource_id, so if
+            // `inner` compiles to a SUPERSET (a coarse predicate) the complement
+            // UNDER-approximates and silently drops real matches. The only coarse
+            // leaf in this backend is a `Bbox` WITHOUT the spatial extension (the
+            // bbox-overlap superset, no exact ST_Intersects fine step). Refuse it
+            // rather than mis-answer — the exact analogue of the head compiler's
+            // `NegatedCoarsePredicate`. With spatial loaded a Bbox is exact and
+            // this passes, so a Bbox under `Not` REQUIRES spatial.
+            if let Some(path) = first_coarse_path(inner, spatial) {
+                return Err(DuckError::Compile(format!(
+                    "cannot negate the bbox predicate on '{path}' without the spatial \
+                     extension: bbox-overlap over-approximates, so EXCEPT would drop \
+                     matching resources; open with the spatial extension (exact \
+                     ST_Intersects) to negate a spatial predicate"
+                )));
+            }
             let inner_sql = compile_expr(inner, graph, graphs, registry, has_catalog, has_edges, spatial)?;
             Ok(format!(
                 "SELECT DISTINCT resource_id FROM tiles EXCEPT {inner_sql}"
@@ -1076,6 +1094,28 @@ fn compile_expr(
                 sql_lit(&src_ng)
             ))
         }
+    }
+}
+
+/// The path of the first predicate in `expr` that compiles to a COARSE superset
+/// under the current backend capabilities, or `None` if every predicate is exact.
+///
+/// In the duck backend the ONLY coarse leaf is a `Bbox` without the spatial
+/// extension (bbox-overlap, no exact ST_Intersects fine step); concept/range are
+/// exact index reads and has-link/on-link are exact over the edge table. Recurses
+/// through the boolean connectives and into an `OnLink`'s inner predicate — an
+/// OnLink over a coarse target set is itself a superset of source resources.
+/// `Not` uses this to refuse negating a superset (which would under-approximate).
+fn first_coarse_path(expr: &Expr, spatial: bool) -> Option<&str> {
+    match expr {
+        Expr::Bbox { path, .. } if !spatial => Some(path.as_str()),
+        Expr::Bbox { .. } => None,
+        Expr::All(children) | Expr::Any(children) => {
+            children.iter().find_map(|c| first_coarse_path(c, spatial))
+        }
+        Expr::Not(inner) => first_coarse_path(inner, spatial),
+        Expr::OnLink { r#where, .. } => first_coarse_path(r#where, spatial),
+        Expr::Concept { .. } | Expr::Range { .. } | Expr::HasLink { .. } => None,
     }
 }
 
