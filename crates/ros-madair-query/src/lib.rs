@@ -140,6 +140,17 @@ pub enum Expr {
         #[serde(rename = "where")]
         r#where: Box<Expr>,
     },
+    /// Same-TILE correlation: every child must be satisfied by ONE tile (one
+    /// nodegroup instance) of the resource — not merely somewhere in the resource
+    /// (that is `All`). "built by Lanyon between 1860–1900" is
+    /// `OnTile([date ∈ range, architect → …Lanyon])`: the SAME construction event
+    /// must carry both, so a resource whose 1855 build was Lanyon's and whose
+    /// 1870 restoration was another's does NOT match. Children must resolve to a
+    /// single nodegroup (a tile belongs to one nodegroup); mixing nodegroups is a
+    /// typed error. Substrate-only — it lowers to a single-tile predicate with any
+    /// link/hop child joined on `edges.src_tile` (`ros-madair-duck`), which the
+    /// head schema cannot express.
+    OnTile(Vec<Expr>),
 }
 
 /// Operators for [`Expr::Concept`].
@@ -486,7 +497,7 @@ pub fn leaf_node_id(
         }
         Expr::Range { path, .. } => Some(resolver.resolve(path)?.nodeid.clone()),
         Expr::Bbox { path, .. } => Some(resolver.resolve(path)?.nodeid.clone()),
-        Expr::All(_) | Expr::Any(_) | Expr::Not(_) | Expr::OnLink { .. } => None,
+        Expr::All(_) | Expr::Any(_) | Expr::Not(_) | Expr::OnLink { .. } | Expr::OnTile(_) => None,
     })
 }
 
@@ -1154,6 +1165,12 @@ fn compile_expr(
         Expr::OnLink { .. } => Err(QueryError::Unsupported {
             feature: "on_link path predicate (use the DuckDB/Parquet backend)".to_string(),
         }),
+        // Substrate-only: OnTile lowers to a single-tile predicate (links joined on
+        // edges.src_tile), and the head schema has neither the tile-row store nor an
+        // edge table. Reject with a typed, repairable error like OnLink.
+        Expr::OnTile(_) => Err(QueryError::Unsupported {
+            feature: "on_tile correlation predicate (use the DuckDB/Parquet backend)".to_string(),
+        }),
     }
 }
 
@@ -1166,9 +1183,9 @@ fn first_coarse_path(expr: &Expr) -> Option<&str> {
         Expr::All(exprs) | Expr::Any(exprs) => exprs.iter().find_map(first_coarse_path),
         Expr::Not(inner) => first_coarse_path(inner),
         // Concept and Range are EXACT (concept_tags / value_tags) — not coarse,
-        // so `Not` over them is safe. OnLink is head-unsupported (rejected in
-        // compile_expr), so it never reaches a soundness check here.
-        Expr::Concept { .. } | Expr::Range { .. } | Expr::OnLink { .. } => None,
+        // so `Not` over them is safe. OnLink and OnTile are head-unsupported
+        // (rejected in compile_expr), so they never reach a soundness check here.
+        Expr::Concept { .. } | Expr::Range { .. } | Expr::OnLink { .. } | Expr::OnTile(_) => None,
     }
 }
 

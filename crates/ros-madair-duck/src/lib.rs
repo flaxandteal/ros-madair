@@ -1094,6 +1094,247 @@ fn compile_expr(
                 sql_lit(&src_ng)
             ))
         }
+        // Same-TILE correlation: every child must hold on ONE tile of the resource.
+        // A tile is one nodegroup instance, so all children must resolve to a single
+        // nodegroup (else unsatisfiable — a typed error). Promoted leaves read that
+        // tile row `t`'s columns directly; a link/hop child becomes `t.tileid IN
+        // (edges semijoin on src_tile)`, so the link must originate from THIS tile.
+        // The result is the resources with such a tile — distinct from `All`, which
+        // only requires each child somewhere in the resource.
+        Expr::OnTile(children) => {
+            let mut ng = None;
+            for c in children {
+                tile_nodegroup(c, graph, &mut ng)?;
+            }
+            let ng = ng.ok_or_else(|| {
+                DuckError::Compile(
+                    "on_tile has no leaf predicate to anchor a nodegroup (it needs at \
+                     least one concept/range/bbox/link condition)"
+                        .to_string(),
+                )
+            })?;
+            let cond = compile_tile_cond(
+                &Expr::All(children.clone()),
+                &ng,
+                graph,
+                graphs,
+                registry,
+                has_catalog,
+                has_edges,
+                spatial,
+            )?;
+            Ok(format!(
+                "SELECT DISTINCT t.resource_id FROM tiles t \
+                 WHERE t.nodegroup_id = '{}' AND {cond}",
+                sql_lit(&ng)
+            ))
+        }
+    }
+}
+
+/// Accumulate the single nodegroup every leaf/link node in an `OnTile` subtree
+/// belongs to, into `acc`. Errors if two children resolve to different nodegroups
+/// — a tile is one nodegroup instance, so correlating across nodegroups is
+/// unsatisfiable and a caller mistake. Leaves `acc == None` if the subtree carries
+/// no leaf (e.g. an empty `All`). The OnLink/HasLink `path` resolves to the LINK
+/// node, whose nodegroup is the source tile's — correct, the link lives in the tile.
+fn tile_nodegroup(
+    expr: &Expr,
+    graph: &StaticGraph,
+    acc: &mut Option<String>,
+) -> Result<(), DuckError> {
+    match expr {
+        Expr::All(cs) | Expr::Any(cs) | Expr::OnTile(cs) => {
+            for c in cs {
+                tile_nodegroup(c, graph, acc)?;
+            }
+            Ok(())
+        }
+        Expr::Not(inner) => tile_nodegroup(inner, graph, acc),
+        Expr::Concept { path, .. }
+        | Expr::Range { path, .. }
+        | Expr::Bbox { path, .. }
+        | Expr::HasLink { path, .. }
+        | Expr::OnLink { path, .. } => {
+            let (_, ng) = resolve(graph, path)?;
+            match acc {
+                None => *acc = Some(ng),
+                Some(existing) if *existing == ng => {}
+                Some(existing) => {
+                    return Err(DuckError::Compile(format!(
+                        "on_tile children must share one nodegroup (a tile is one \
+                         nodegroup instance), but '{path}' is in '{ng}' while a sibling \
+                         is in '{existing}'"
+                    )))
+                }
+            }
+            Ok(())
+        }
+    }
+}
+
+/// Compile an `OnTile` child into a boolean SQL fragment over the tile row bound
+/// as `t` — every fragment constrains THE SAME tile. Promoted leaves read `t`'s
+/// columns; a link/hop child becomes `t.tileid IN (edges semijoin on src_tile)`,
+/// so the link must originate from this tile. Booleans compose. `ng` is the single
+/// nodegroup every child belongs to (validated by [`tile_nodegroup`] first).
+#[allow(clippy::too_many_arguments)]
+fn compile_tile_cond(
+    expr: &Expr,
+    ng: &str,
+    graph: &StaticGraph,
+    graphs: &[&StaticGraph],
+    registry: &ExtensionTypeRegistry,
+    has_catalog: bool,
+    has_edges: bool,
+    spatial: bool,
+) -> Result<String, DuckError> {
+    match expr {
+        Expr::All(children) => {
+            if children.is_empty() {
+                return Ok("true".to_string());
+            }
+            let parts: Result<Vec<_>, _> = children
+                .iter()
+                .map(|c| {
+                    compile_tile_cond(c, ng, graph, graphs, registry, has_catalog, has_edges, spatial)
+                })
+                .collect();
+            Ok(format!("({})", parts?.join(" AND ")))
+        }
+        Expr::Any(children) => {
+            if children.is_empty() {
+                return Ok("false".to_string());
+            }
+            let parts: Result<Vec<_>, _> = children
+                .iter()
+                .map(|c| {
+                    compile_tile_cond(c, ng, graph, graphs, registry, has_catalog, has_edges, spatial)
+                })
+                .collect();
+            Ok(format!("({})", parts?.join(" OR ")))
+        }
+        Expr::Not(inner) => {
+            // Same coarse-negation soundness rule as the top-level `Not`: a coarse
+            // bbox (no spatial) complemented under-approximates.
+            if let Some(path) = first_coarse_path(inner, spatial) {
+                return Err(DuckError::Compile(format!(
+                    "cannot negate the bbox predicate on '{path}' without the spatial \
+                     extension inside on_tile: bbox-overlap over-approximates, so the \
+                     negation would drop matching tiles"
+                )));
+            }
+            Ok(format!(
+                "NOT ({})",
+                compile_tile_cond(inner, ng, graph, graphs, registry, has_catalog, has_edges, spatial)?
+            ))
+        }
+        Expr::Concept { path, op, value } => {
+            let (node, _) = resolve(graph, path)?;
+            expect_class(
+                &node,
+                registry,
+                |c| matches!(c, IndexClass::ConceptHierarchical { .. }),
+                path,
+                "concept",
+            )?;
+            match op {
+                ConceptOp::Is => Ok(format!("t.concept_id = '{}'", sql_lit(value))),
+                ConceptOp::DescendantOrSelfOf => {
+                    if !has_catalog {
+                        return Err(DuckError::Compile(format!(
+                            "descendant-or-self on '{path}' needs the concept catalog — \
+                             open with `open_with_catalog`"
+                        )));
+                    }
+                    Ok(format!(
+                        "t.concept_id IN (SELECT c.concept_id FROM concepts c \
+                         WHERE c.dfs_enter BETWEEN \
+                           (SELECT dfs_enter FROM concepts WHERE concept_id = '{v}') AND \
+                           (SELECT dfs_leave FROM concepts WHERE concept_id = '{v}'))",
+                        v = sql_lit(value)
+                    ))
+                }
+            }
+        }
+        Expr::Range { path, lo, hi } => {
+            let (node, _) = resolve(graph, path)?;
+            expect_class(&node, registry, |c| matches!(c, IndexClass::Ordered), path, "range")?;
+            Ok(format!("t.q_ordered BETWEEN {lo} AND {hi}"))
+        }
+        Expr::Bbox { path, min_lng, min_lat, max_lng, max_lat } => {
+            let (node, _) = resolve(graph, path)?;
+            expect_class(&node, registry, |c| matches!(c, IndexClass::SpatialBbox), path, "bbox")?;
+            let coarse = format!(
+                "NOT (t.geo_min_lng > {max_lng} OR t.geo_max_lng < {min_lng} \
+                  OR t.geo_min_lat > {max_lat} OR t.geo_max_lat < {min_lat})"
+            );
+            if !spatial {
+                return Ok(coarse);
+            }
+            let geom = format!(
+                "ST_GeomFromGeoJSON(json_extract_string(\
+                   json_extract(t.data, '$.\"{}\".features[0]'), '$.geometry'))",
+                sql_lit(&node.nodeid)
+            );
+            let box_wkt = format!(
+                "POLYGON (({min_lng} {min_lat}, {max_lng} {min_lat}, \
+                  {max_lng} {max_lat}, {min_lng} {max_lat}, {min_lng} {min_lat}))"
+            );
+            Ok(format!(
+                "({coarse} AND ST_Intersects({geom}, ST_GeomFromText('{box_wkt}')))"
+            ))
+        }
+        Expr::HasLink { path, target } => {
+            if !has_edges {
+                return Err(DuckError::Compile(format!(
+                    "has-link on '{path}' needs the edge table"
+                )));
+            }
+            let (node, _) = resolve(graph, path)?;
+            expect_class(&node, registry, |c| matches!(c, IndexClass::Link), path, "link")?;
+            let cond = match target {
+                Some(t) => format!(" AND target_resource = '{}'", sql_lit(t)),
+                None => String::new(),
+            };
+            Ok(format!(
+                "t.tileid IN (SELECT src_tile FROM edges \
+                 WHERE src_node = '{}' AND src_nodegroup = '{}'{cond})",
+                sql_lit(&node.nodeid),
+                sql_lit(ng)
+            ))
+        }
+        Expr::OnLink { path, model, r#where } => {
+            if !has_edges {
+                return Err(DuckError::Compile(format!(
+                    "on-link path '{path}' needs the edge table"
+                )));
+            }
+            let (link_node, _) = resolve(graph, path)?;
+            expect_class(&link_node, registry, |c| matches!(c, IndexClass::Link), path, "link")?;
+            let target = graphs
+                .iter()
+                .copied()
+                .find(|g| g.graphid == *model)
+                .ok_or_else(|| {
+                    DuckError::Compile(format!(
+                        "on-link target model '{model}' not available to the compiler"
+                    ))
+                })?;
+            let inner =
+                compile_expr(r#where, target, graphs, registry, has_catalog, has_edges, spatial)?;
+            Ok(format!(
+                "t.tileid IN (SELECT src_tile FROM edges \
+                 WHERE src_node = '{}' AND src_nodegroup = '{}' \
+                   AND target_resource IN ({inner}))",
+                sql_lit(&link_node.nodeid),
+                sql_lit(ng)
+            ))
+        }
+        Expr::OnTile(_) => Err(DuckError::Compile(
+            "nested on_tile is not supported; flatten the conditions into one on_tile"
+                .to_string(),
+        )),
     }
 }
 
@@ -1110,7 +1351,7 @@ fn first_coarse_path(expr: &Expr, spatial: bool) -> Option<&str> {
     match expr {
         Expr::Bbox { path, .. } if !spatial => Some(path.as_str()),
         Expr::Bbox { .. } => None,
-        Expr::All(children) | Expr::Any(children) => {
+        Expr::All(children) | Expr::Any(children) | Expr::OnTile(children) => {
             children.iter().find_map(|c| first_coarse_path(c, spatial))
         }
         Expr::Not(inner) => first_coarse_path(inner, spatial),
