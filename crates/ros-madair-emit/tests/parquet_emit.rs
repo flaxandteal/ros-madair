@@ -468,3 +468,126 @@ fn verify_head_trusts_signed_and_flags_tamper() {
         v => panic!("expected Failed after tamper, got {v:?}"),
     }
 }
+
+// ---------------------------------------------------------------------------
+// Edge slice: a resource-instance link node's targets are unpivoted into
+// `edges_<slug>.parquet` (src_resource, src_node, src_nodegroup, src_tile,
+// target_resource) — the columnar edge table the path/multi-hop compiler and
+// reverse lookups query, alongside the tile row's `link_targets`.
+// ---------------------------------------------------------------------------
+
+const LINK_NG: &str = "5efd0000-0000-4000-8000-000000000003";
+
+fn add_link_node(graph_path: &Path) {
+    let mut doc: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(graph_path).unwrap()).unwrap();
+    let g = &mut doc["graph"][0];
+    g["nodes"].as_array_mut().unwrap().push(json!({
+        "nodeid": LINK_NG, "nodegroup_id": LINK_NG, "name": "Related", "alias": "related",
+        "datatype": "resource-instance", "graph_id": TALK_GRAPH,
+        "istopnode": false, "is_collector": true, "isrequired": false,
+        "issearchable": true, "exportable": false, "sortorder": 0,
+    }));
+    g["nodegroups"].as_array_mut().unwrap().push(json!({
+        "nodegroupid": LINK_NG, "cardinality": "n", "parentnodegroup_id": null,
+    }));
+    g["edges"].as_array_mut().unwrap().push(json!({
+        "edgeid": "5efd0000-0000-4000-8000-0000000000ed",
+        "domainnode_id": TALK_ROOT, "rangenode_id": LINK_NG, "graph_id": TALK_GRAPH,
+    }));
+    std::fs::write(graph_path, serde_json::to_vec_pretty(&doc).unwrap()).unwrap();
+}
+
+fn linker(id: &str, tileid: &str, targets: &[&str]) -> serde_json::Value {
+    let refs: Vec<_> = targets
+        .iter()
+        .map(|t| json!({
+            "resourceId": t, "ontologyProperty": "", "inverseOntologyProperty": "",
+            "resourceXresourceId": "00000000-0000-4000-8000-000000000000",
+        }))
+        .collect();
+    json!({
+        "resourceinstance": {
+            "resourceinstanceid": id, "graph_id": TALK_GRAPH, "name": id, "legacyid": null,
+            "descriptors": { "en": { "name": id, "description": "", "map_popup": "" } },
+        },
+        "tiles": [
+            { "tileid": tileid, "nodegroup_id": LINK_NG, "parenttile_id": null,
+              "resourceinstance_id": id, "sortorder": 0, "provisionaledits": null,
+              "data": { LINK_NG: refs } },
+        ],
+    })
+}
+
+fn link_corpus() -> PathBuf {
+    let dir = scratch("linkcorpus");
+    let gp = dir.join("graphs").join(format!("{TALK_GRAPH}.json"));
+    write_base_graph(&gp);
+    add_link_node(&gp);
+    let rdir = dir.join("resources").join("talk");
+    std::fs::create_dir_all(&rdir).unwrap();
+    let resources = vec![
+        // R_POINT relates to two targets -> two edges.
+        linker(R_POINT, "c0cc0000-0000-4000-8000-000000000010", &[R_FAR, R_LSHAPE]),
+        // R_DIAG relates to nothing -> no edges (empty link array).
+        linker(R_DIAG, "c1cc0000-0000-4000-8000-000000000010", &[]),
+    ];
+    std::fs::write(
+        rdir.join("talks.json"),
+        serde_json::to_vec_pretty(&json!({ "business_data": { "resources": resources } })).unwrap(),
+    )
+    .unwrap();
+    dir
+}
+
+#[test]
+fn edge_table_unpivots_link_targets() {
+    let dir = link_corpus();
+    let out = scratch("edgeout");
+    let registry = default_registry();
+    let cfg_by_graph = HashMap::new(); // default cluster config → single-file tiles + edges
+
+    let summaries = emit_parquet(
+        dir.to_str().unwrap(),
+        out.to_str().unwrap(),
+        "https://example.org/",
+        &registry,
+        &cfg_by_graph,
+    )
+    .expect("emit_parquet");
+
+    let talk = summaries
+        .iter()
+        .find(|s| s.graph_id == TALK_GRAPH)
+        .expect("Talk model emitted");
+    assert_eq!(talk.edges, 2, "R_POINT's two link targets → two edge rows (R_DIAG none)");
+
+    // edges_<slug>.parquet sits beside tiles_<slug>.parquet.
+    let tiles_path = PathBuf::from(&talk.path);
+    let edge_path =
+        tiles_path.with_file_name(format!("edges_{}.parquet", talk.slug.replace('-', "_")));
+    assert!(edge_path.exists(), "edge parquet at {}", edge_path.display());
+
+    let (batches, rows) = read_all(&edge_path);
+    assert_eq!(rows, 2, "two edge rows");
+    let mut targets = Vec::new();
+    for b in &batches {
+        let src_res = col(b, "src_resource").as_any().downcast_ref::<StringArray>().unwrap();
+        let src_node = col(b, "src_node").as_any().downcast_ref::<StringArray>().unwrap();
+        let src_ng = col(b, "src_nodegroup").as_any().downcast_ref::<StringArray>().unwrap();
+        let tgt = col(b, "target_resource").as_any().downcast_ref::<StringArray>().unwrap();
+        for i in 0..b.num_rows() {
+            assert_eq!(src_res.value(i), R_POINT, "edge source is the linking resource");
+            assert_eq!(src_node.value(i), LINK_NG, "edge tagged with the link node id");
+            assert_eq!(src_ng.value(i), LINK_NG, "edge scoped to the link nodegroup");
+            targets.push(tgt.value(i).to_string());
+        }
+    }
+    targets.sort();
+    let mut want = vec![R_FAR.to_string(), R_LSHAPE.to_string()];
+    want.sort();
+    assert_eq!(targets, want, "both link targets became edges");
+
+    // The edge table is in the snapshot: its file is a hashed content artifact.
+    eprintln!("OK: {} edges unpivoted from link_targets → {}", talk.edges, edge_path.display());
+}

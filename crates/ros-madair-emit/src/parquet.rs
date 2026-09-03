@@ -113,6 +113,8 @@ pub struct ParquetModelSummary {
     pub row_groups: usize,
     /// Nodegroup partition count — 0 when written as a single file.
     pub partitions: usize,
+    /// Edge rows written to `edges_<slug>.parquet` (one per link target).
+    pub edges: usize,
 }
 
 // ---------------------------------------------------------------------------
@@ -482,6 +484,11 @@ fn append_resource(
         return Ok(());
     };
     let mut app = stage.conn.appender("stage")?;
+    // Edge rows collected across this resource's tiles: one per (linking tile,
+    // target). Appended after the tile appender flushes (below) — same links as
+    // `link_targets`, unpivoted into the columnar edge table the path/multi-hop
+    // compiler and reverse lookups query.
+    let mut edge_rows: Vec<(String, String, String, Option<String>, String)> = Vec::new();
     for tile in tiles {
         let mut q_ordered = None;
         let mut concept_id = None;
@@ -556,6 +563,19 @@ fn append_resource(
             Some(serde_json::to_string(&link_map)?)
         };
 
+        // Unpivot the same links into edge rows (src tile → each target).
+        for (node_id, targets) in &link_map {
+            for t in targets {
+                edge_rows.push((
+                    tile.resourceinstance_id.clone(),
+                    (*node_id).to_string(),
+                    tile.nodegroup_id.clone(),
+                    tile.tileid.clone(),
+                    t.clone(),
+                ));
+            }
+        }
+
         // Unknown nodegroups sort last (sentinel), so a malformed tile never
         // lands inside a real subtree's range.
         let ng_order = ng_intervals
@@ -592,6 +612,21 @@ fn append_resource(
         ])?;
     }
     app.flush()?;
+    drop(app);
+    if !edge_rows.is_empty() {
+        let mut eapp = stage.conn.appender("edges")?;
+        for (src_resource, src_node, src_nodegroup, src_tile, target) in &edge_rows {
+            eapp.append_row(params![
+                model_slug,
+                src_resource,
+                src_node,
+                src_nodegroup,
+                src_tile,
+                target,
+            ])?;
+        }
+        eapp.flush()?;
+    }
     Ok(())
 }
 
@@ -619,7 +654,10 @@ impl TileStage {
                sortorder INTEGER, cluster_key UBIGINT, ng_order BIGINT,
                q_ordered BIGINT, concept_id VARCHAR, link_targets VARCHAR,
                geo_min_lng DOUBLE, geo_min_lat DOUBLE, geo_max_lng DOUBLE, geo_max_lat DOUBLE,
-               data VARCHAR);",
+               data VARCHAR);
+             CREATE TABLE edges (
+               model_slug VARCHAR, src_resource VARCHAR, src_node VARCHAR,
+               src_nodegroup VARCHAR, src_tile VARCHAR, target_resource VARCHAR);",
             sql_lit(&scratch.display().to_string())
         ))
         .map_err(|e| format!("duckdb stage schema: {e}"))?;
@@ -686,6 +724,26 @@ impl TileStage {
             (path.display().to_string(), path.display().to_string(), 0)
         };
 
+        // Edge table: one row per (linking tile, target), for the path/multi-hop
+        // compiler and reverse lookups. Sorted by (src_node, target_resource) so a
+        // forward hop (filter src_node, semijoin target) and a reverse hop (cited_by
+        // on target) both zone-map prune. Always a single file — nodegroup
+        // partitioning is the TILES layout axis; edges partition by src_node later.
+        let edge_path =
+            path.with_file_name(format!("edges_{}.parquet", slug.replace('-', "_")));
+        if let Some(p) = edge_path.parent() {
+            fs::create_dir_all(p)?;
+        }
+        self.conn
+            .execute_batch(&format!(
+                "COPY (SELECT src_resource, src_node, src_nodegroup, src_tile, target_resource \
+                 FROM edges WHERE model_slug = '{slug_lit}' ORDER BY src_node, target_resource) \
+                 TO '{}' (FORMAT PARQUET, ROW_GROUP_SIZE {rgs});",
+                edge_path.display()
+            ))
+            .map_err(|e| format!("duckdb COPY (edges): {e}"))?;
+        let edges = count("SELECT count(*) FROM edges WHERE model_slug = ?")? as usize;
+
         let row_groups: i64 = self
             .conn
             .query_row(
@@ -706,6 +764,7 @@ impl TileStage {
             tiles,
             row_groups: row_groups as usize,
             partitions,
+            edges,
         })
     }
 }
