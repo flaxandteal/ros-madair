@@ -981,39 +981,12 @@ fn compile_expr(
         Expr::Bbox { path, min_lng, min_lat, max_lng, max_lat } => {
             let (node, ng) = resolve(graph, path)?;
             expect_class(&node, registry, |c| matches!(c, IndexClass::SpatialBbox), path, "bbox")?;
-            // Coarse bbox-overlap prune on the promoted zone-map columns. This alone
-            // is a strict SUPERSET of true intersection (false positives kept, no
-            // false negatives) — recall-tolerant, matching Expr::Bbox's contract.
-            let coarse = format!(
-                "NOT (geo_min_lng > {max_lng} OR geo_max_lng < {min_lng} \
-                  OR geo_min_lat > {max_lat} OR geo_max_lat < {min_lat})"
-            );
-            if !spatial {
-                // No spatial extension (mobile: no android spatial binary) → skip the
-                // exact fine step and return the coarse superset. See the README
-                // "Platform limitation". A Rust `geo` fine step could be layered on the
-                // hydrated candidates if exact intersection is ever needed on device.
-                return Ok(format!(
-                    "SELECT DISTINCT resource_id FROM tiles \
-                     WHERE nodegroup_id = '{}' AND {coarse}",
-                    sql_lit(&ng)
-                ));
-            }
-            // EXACT fine step (spatial loaded, desktop/online): parse the geometry out
-            // of the tile blob and intersect. `data` is `{{ node_id: FeatureCollection }}`.
-            let geom = format!(
-                "ST_GeomFromGeoJSON(json_extract_string(\
-                   json_extract(data, '$.\"{}\".features[0]'), '$.geometry'))",
-                sql_lit(&node.nodeid)
-            );
-            let box_wkt = format!(
-                "POLYGON (({min_lng} {min_lat}, {max_lng} {min_lat}, \
-                  {max_lng} {max_lat}, {min_lng} {max_lat}, {min_lng} {min_lat}))"
-            );
+            // Coarse zone-map overlap (a sound SUPERSET) AND, when spatial is loaded,
+            // an exact ST_Intersects against EVERY feature of the tile (see
+            // `bbox_predicate`). No spatial → coarse-only superset (the mobile path).
+            let pred = bbox_predicate("", &node.nodeid, *min_lng, *min_lat, *max_lng, *max_lat, spatial);
             Ok(format!(
-                "SELECT DISTINCT resource_id FROM tiles \
-                 WHERE nodegroup_id = '{}' AND {coarse} \
-                 AND ST_Intersects({geom}, ST_GeomFromText('{box_wkt}'))",
+                "SELECT DISTINCT resource_id FROM tiles WHERE nodegroup_id = '{}' AND {pred}",
                 sql_lit(&ng)
             ))
         }
@@ -1265,25 +1238,7 @@ fn compile_tile_cond(
         Expr::Bbox { path, min_lng, min_lat, max_lng, max_lat } => {
             let (node, _) = resolve(graph, path)?;
             expect_class(&node, registry, |c| matches!(c, IndexClass::SpatialBbox), path, "bbox")?;
-            let coarse = format!(
-                "NOT (t.geo_min_lng > {max_lng} OR t.geo_max_lng < {min_lng} \
-                  OR t.geo_min_lat > {max_lat} OR t.geo_max_lat < {min_lat})"
-            );
-            if !spatial {
-                return Ok(coarse);
-            }
-            let geom = format!(
-                "ST_GeomFromGeoJSON(json_extract_string(\
-                   json_extract(t.data, '$.\"{}\".features[0]'), '$.geometry'))",
-                sql_lit(&node.nodeid)
-            );
-            let box_wkt = format!(
-                "POLYGON (({min_lng} {min_lat}, {max_lng} {min_lat}, \
-                  {max_lng} {max_lat}, {min_lng} {max_lat}, {min_lng} {min_lat}))"
-            );
-            Ok(format!(
-                "({coarse} AND ST_Intersects({geom}, ST_GeomFromText('{box_wkt}')))"
-            ))
+            Ok(bbox_predicate("t.", &node.nodeid, *min_lng, *min_lat, *max_lng, *max_lat, spatial))
         }
         Expr::HasLink { path, target } => {
             if !has_edges {
@@ -1336,6 +1291,54 @@ fn compile_tile_cond(
                 .to_string(),
         )),
     }
+}
+
+/// The bbox predicate for a geometry node: the coarse zone-map overlap (a sound
+/// SUPERSET of true intersection) AND — when the spatial extension is loaded — an
+/// exact `ST_Intersects` against EVERY feature of the tile's FeatureCollection.
+/// `prefix` qualifies the columns (`""` for a bare `FROM tiles`, `"t."` inside an
+/// OnTile predicate).
+///
+/// Iterating all features is a soundness requirement, not a nicety: emit's
+/// `extract_bbox` unions every feature's coordinates into the promoted bbox, so the
+/// coarse prune admits a tile if *any* feature overlaps. Checking only `features[0]`
+/// in the exact step would then DROP a tile whose later feature is the one that
+/// intersects — a false negative beneath a sound coarse prune.
+fn bbox_predicate(
+    prefix: &str,
+    node_id: &str,
+    min_lng: f64,
+    min_lat: f64,
+    max_lng: f64,
+    max_lat: f64,
+    spatial: bool,
+) -> String {
+    let coarse = format!(
+        "NOT ({p}geo_min_lng > {max_lng} OR {p}geo_max_lng < {min_lng} \
+          OR {p}geo_min_lat > {max_lat} OR {p}geo_max_lat < {min_lat})",
+        p = prefix
+    );
+    if !spatial {
+        // No spatial extension (mobile: no android spatial binary) → coarse-only
+        // superset. A Rust `geo` fine step could refine on hydrated candidates.
+        return coarse;
+    }
+    let box_wkt = format!(
+        "POLYGON (({min_lng} {min_lat}, {max_lng} {min_lat}, \
+          {max_lng} {max_lat}, {min_lng} {max_lat}, {min_lng} {min_lat}))"
+    );
+    // ANY feature intersecting qualifies the tile: unnest the FeatureCollection and
+    // test each feature's geometry. `data` is `{{ node_id: FeatureCollection }}`.
+    let exact = format!(
+        "EXISTS (SELECT 1 FROM (SELECT unnest(\
+           CAST(json_extract({p}data, '$.\"{node}\".features') AS JSON[])) AS feat) \
+         WHERE ST_Intersects(\
+           ST_GeomFromGeoJSON(json_extract_string(feat, '$.geometry')), \
+           ST_GeomFromText('{box_wkt}')))",
+        p = prefix,
+        node = sql_lit(node_id)
+    );
+    format!("({coarse} AND {exact})")
 }
 
 /// The path of the first predicate in `expr` that compiles to a COARSE superset
