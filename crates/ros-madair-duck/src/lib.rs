@@ -87,6 +87,10 @@ impl From<duckdb::Error> for DuckError {
 pub struct DuckReader {
     conn: Connection,
     has_catalog: bool,
+    /// Whether an `edges` view is registered (sibling `edges_*.parquet` next to
+    /// the tiles glob) — drives `Expr::OnLink` path predicates. Absent for a
+    /// tiles-only snapshot; an OnLink then errors rather than mis-compiling.
+    has_edges: bool,
     /// Whether the `spatial` extension actually loaded (ST_Intersects available).
     /// Drives the `Expr::Bbox` fine step: present -> exact ST_Intersects; absent
     /// (mobile - no android spatial binary) -> coarse-only bbox-overlap. See the
@@ -156,7 +160,20 @@ impl DuckReader {
             "CREATE VIEW tiles AS SELECT * FROM read_parquet('{}');",
             sql_lit(parquet_glob)
         ))?;
-        Ok(Self { conn, has_catalog: false, spatial })
+        // Edge table (Expr::OnLink): the sibling edges_*.parquet next to the tiles
+        // glob. Best-effort — a tiles-only snapshot (a pre-edge-slice artifact, a
+        // hand-built fixture, a partial/governed export) still OPENS; only an
+        // OnLink query then errors, with a typed message. This keeps "openable"
+        // independent of "has edges" and fails late (on use), not early (at open).
+        let edge_glob = parquet_glob.replace("tiles_", "edges_");
+        let has_edges = edge_glob != parquet_glob
+            && conn
+                .execute_batch(&format!(
+                    "CREATE VIEW edges AS SELECT * FROM read_parquet('{}');",
+                    sql_lit(&edge_glob)
+                ))
+                .is_ok();
+        Ok(Self { conn, has_catalog: false, has_edges, spatial })
     }
 
     /// Attach a concept catalog (the `concept_catalog.parquet` projected from
@@ -449,8 +466,20 @@ impl DuckReader {
         graph: &StaticGraph,
         registry: &ExtensionTypeRegistry,
     ) -> Result<String, DuckError> {
+        // The model set for cross-resource OnLink target resolution. resolve_ids is
+        // single-model, so the set is just this graph — a same-model (self-)link
+        // resolves; a cross-model OnLink needs a caller that supplies all graphs.
+        let graphs = [graph];
         match &query.r#where {
-            Some(expr) => compile_expr(expr, graph, registry, self.has_catalog, self.spatial),
+            Some(expr) => compile_expr(
+                expr,
+                graph,
+                &graphs,
+                registry,
+                self.has_catalog,
+                self.has_edges,
+                self.spatial,
+            ),
             None => Ok("SELECT DISTINCT resource_id FROM tiles".to_string()),
         }
     }
@@ -702,11 +731,16 @@ pub fn resolve_ids(
 // Expr → a SELECT of DISTINCT resource_id
 // ---------------------------------------------------------------------------
 
+#[allow(clippy::too_many_arguments)]
 fn compile_expr(
     expr: &Expr,
     graph: &StaticGraph,
+    // The model set, for resolving an OnLink hop's target model. `graph` is the
+    // CURRENT model (this level's aliases); `graphs` resolves the link target.
+    graphs: &[&StaticGraph],
     registry: &ExtensionTypeRegistry,
     has_catalog: bool,
+    has_edges: bool,
     spatial: bool,
 ) -> Result<String, DuckError> {
     match expr {
@@ -716,7 +750,7 @@ fn compile_expr(
             }
             let parts: Result<Vec<_>, _> = children
                 .iter()
-                .map(|c| compile_expr(c, graph, registry, has_catalog, spatial))
+                .map(|c| compile_expr(c, graph, graphs, registry, has_catalog, has_edges, spatial))
                 .collect();
             Ok(parts?.join("\nINTERSECT\n"))
         }
@@ -726,12 +760,12 @@ fn compile_expr(
             }
             let parts: Result<Vec<_>, _> = children
                 .iter()
-                .map(|c| compile_expr(c, graph, registry, has_catalog, spatial))
+                .map(|c| compile_expr(c, graph, graphs, registry, has_catalog, has_edges, spatial))
                 .collect();
             Ok(parts?.join("\nUNION\n"))
         }
         Expr::Not(inner) => {
-            let inner_sql = compile_expr(inner, graph, registry, has_catalog, spatial)?;
+            let inner_sql = compile_expr(inner, graph, graphs, registry, has_catalog, has_edges, spatial)?;
             Ok(format!(
                 "SELECT DISTINCT resource_id FROM tiles EXCEPT {inner_sql}"
             ))
@@ -835,6 +869,61 @@ fn compile_expr(
                 "SELECT DISTINCT resource_id FROM tiles \
                  WHERE nodegroup_id = '{}' AND link_targets IS NOT NULL AND {cond}",
                 sql_lit(&ng)
+            ))
+        }
+        // Cross-resource PATH predicate → an edge-table semijoin. Compile the inner
+        // predicate against the TARGET model (a set of target resource ids), then
+        // keep the source resources whose `path` link lands in that set. Nested
+        // OnLinks fold naturally: each wraps the inner set in another semijoin, and
+        // because the inner is nested INSIDE the semijoin the selective leaf is
+        // evaluated first.
+        Expr::OnLink {
+            path,
+            model,
+            r#where,
+        } => {
+            if !has_edges {
+                return Err(DuckError::Compile(format!(
+                    "on-link path '{path}' needs the edge table — this reader has no \
+                     edges_*.parquet (open a snapshot emitted with the edge slice)"
+                )));
+            }
+            let (link_node, src_ng) = resolve(graph, path)?;
+            expect_class(
+                &link_node,
+                registry,
+                |c| matches!(c, IndexClass::Link),
+                path,
+                "link",
+            )?;
+            // The hop declares its target model (the link node's config does not
+            // carry it), so the inner predicate's aliases resolve against the right
+            // model. Match by graph id.
+            let target = graphs
+                .iter()
+                .copied()
+                .find(|g| g.graphid == *model)
+                .ok_or_else(|| {
+                    DuckError::Compile(format!(
+                        "on-link target model '{model}' not available to the compiler \
+                         (open the reader over all linked models)"
+                    ))
+                })?;
+            let inner = compile_expr(
+                r#where,
+                target,
+                graphs,
+                registry,
+                has_catalog,
+                has_edges,
+                spatial,
+            )?;
+            Ok(format!(
+                "SELECT DISTINCT src_resource AS resource_id FROM edges \
+                 WHERE src_node = '{}' AND src_nodegroup = '{}' \
+                   AND target_resource IN ({inner})",
+                sql_lit(&link_node.nodeid),
+                sql_lit(&src_ng)
             ))
         }
     }

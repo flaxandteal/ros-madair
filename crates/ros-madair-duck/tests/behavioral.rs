@@ -198,6 +198,18 @@ fn fixture() -> (PathBuf, StaticGraph) {
     ))
     .unwrap();
 
+    // Edge table: r1 and r2 link to r3 via the `related` node (mirrors the
+    // link_targets on t04/t08). Lets the OnLink path predicate semijoin.
+    con.execute_batch(&format!(
+        "COPY (SELECT * FROM (VALUES \
+            ('{R1}','{NG_LINK}','{NG_LINK}','t04','{R3}'),\
+            ('{R2}','{NG_LINK}','{NG_LINK}','t08','{R3}')\
+        ) e(src_resource, src_node, src_nodegroup, src_tile, target_resource)) \
+         TO '{}' (FORMAT PARQUET)",
+        dir.join("edges_test.parquet").display()
+    ))
+    .unwrap();
+
     (dir, graph())
 }
 
@@ -483,4 +495,51 @@ fn hydrate_layers_single_layer_smoke() {
         &fn_registry,
     );
     assert!(err.is_err(), "missing resource -> error");
+}
+
+#[test]
+fn on_link_path_predicate_semijoins_the_edge_table() {
+    let (dir, graph) = fixture();
+    let registry = default_registry();
+    let duck = DuckReader::open_with_catalog(
+        dir.join("tiles_test.parquet").to_str().unwrap(),
+        dir.join("concept_catalog.parquet").to_str().unwrap(),
+    )
+    .unwrap();
+
+    let on_link_category = |value: &str| {
+        Expr::OnLink {
+            path: "related".into(),
+            model: "test-g".into(),
+            r#where: Box::new(Expr::Concept {
+                path: "category".into(),
+                op: ConceptOp::Is,
+                value: value.into(),
+            }),
+        }
+    };
+
+    // Resources whose `related` target is Category B (r3): r1 and r2 both link to r3.
+    let mut ids = duck.resolve_ids(&q(on_link_category(CAT_B)), &graph, &registry).unwrap();
+    ids.sort();
+    assert_eq!(ids, set(&[R1, R2]), "r1,r2 link to r3, which is Category B");
+
+    // Nobody links to a Category-A resource (r1,r2 ARE category A, but nothing
+    // links to them), so the hop yields the empty set.
+    let none = duck.resolve_ids(&q(on_link_category(CAT_A)), &graph, &registry).unwrap();
+    assert!(none.is_empty(), "nobody links to a Category-A resource");
+
+    // Composes with a local predicate: link-to-B AND own category is A → r1,r2.
+    let mut both = duck
+        .resolve_ids(
+            &q(Expr::All(vec![
+                on_link_category(CAT_B),
+                Expr::Concept { path: "category".into(), op: ConceptOp::Is, value: CAT_A.into() },
+            ])),
+            &graph,
+            &registry,
+        )
+        .unwrap();
+    both.sort();
+    assert_eq!(both, set(&[R1, R2]), "OnLink INTERSECT local concept predicate");
 }

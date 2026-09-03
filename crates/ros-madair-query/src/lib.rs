@@ -126,6 +126,20 @@ pub enum Expr {
         max_lng: f64,
         max_lat: f64,
     },
+    /// Cross-resource PATH predicate: resources whose `path` link points at a
+    /// resource (of `model`) that matches `where`. `path` is a
+    /// `resource-instance(-list)` node alias (dot-qualified to reach it through
+    /// within-resource nodegroups); `model` names the TARGET model the inner
+    /// predicate is evaluated against — the link node's config does not carry the
+    /// target, so the hop declares it. Nestable: a `where` that is itself an
+    /// `OnLink` is a multi-hop chain. Substrate-only — it lowers to an edge-table
+    /// semijoin (`ros-madair-duck`), not head SQL.
+    OnLink {
+        path: String,
+        model: String,
+        #[serde(rename = "where")]
+        r#where: Box<Expr>,
+    },
 }
 
 /// Operators for [`Expr::Concept`].
@@ -192,6 +206,9 @@ pub enum QueryError {
     /// A layered operation was handed no layers. Over zero layers the answer is
     /// not 0, it is a caller bug.
     NoLayers,
+    /// The IR uses a capability the head-SQL compiler does not implement — e.g.
+    /// an `OnLink` path predicate, which is a substrate/DuckDB-backend feature.
+    Unsupported { feature: String },
 }
 
 impl fmt::Display for QueryError {
@@ -242,6 +259,10 @@ impl fmt::Display for QueryError {
             QueryError::NoLayers => write!(
                 f,
                 "layered count over zero layers: pass the layer schemas, base first"
+            ),
+            QueryError::Unsupported { feature } => write!(
+                f,
+                "feature not supported by the head-SQL compiler: {feature}"
             ),
         }
     }
@@ -465,7 +486,7 @@ pub fn leaf_node_id(
         }
         Expr::Range { path, .. } => Some(resolver.resolve(path)?.nodeid.clone()),
         Expr::Bbox { path, .. } => Some(resolver.resolve(path)?.nodeid.clone()),
-        Expr::All(_) | Expr::Any(_) | Expr::Not(_) => None,
+        Expr::All(_) | Expr::Any(_) | Expr::Not(_) | Expr::OnLink { .. } => None,
     })
 }
 
@@ -1127,6 +1148,12 @@ fn compile_expr(
                  AND g.max_lat >= {q_min_lat} AND g.min_lat <= {q_max_lat})"
             ))
         }
+        // Substrate-only: OnLink lowers to an edge-table semijoin, and the head
+        // schema has no edge table. Reject with a typed, repairable error so a
+        // caller routes it to the DuckDB/Parquet backend rather than mis-compiling.
+        Expr::OnLink { .. } => Err(QueryError::Unsupported {
+            feature: "on_link path predicate (use the DuckDB/Parquet backend)".to_string(),
+        }),
     }
 }
 
@@ -1139,8 +1166,9 @@ fn first_coarse_path(expr: &Expr) -> Option<&str> {
         Expr::All(exprs) | Expr::Any(exprs) => exprs.iter().find_map(first_coarse_path),
         Expr::Not(inner) => first_coarse_path(inner),
         // Concept and Range are EXACT (concept_tags / value_tags) — not coarse,
-        // so `Not` over them is safe.
-        Expr::Concept { .. } | Expr::Range { .. } => None,
+        // so `Not` over them is safe. OnLink is head-unsupported (rejected in
+        // compile_expr), so it never reaches a soundness check here.
+        Expr::Concept { .. } | Expr::Range { .. } | Expr::OnLink { .. } => None,
     }
 }
 
@@ -1180,6 +1208,44 @@ mod tests {
             }),
             measures,
             limit: None,
+        }
+    }
+
+    #[test]
+    fn on_link_serde_roundtrips_and_head_rejects() {
+        // The binding/human layer emits this; it round-trips as `on_link` with the
+        // inner predicate under `where`, and nests for multi-hop.
+        let ir = Expr::OnLink {
+            path: "location".to_string(),
+            model: "Place".to_string(),
+            r#where: Box::new(Expr::Bbox {
+                path: "geospatial_coordinates".to_string(),
+                min_lng: 0.0,
+                min_lat: 0.0,
+                max_lng: 1.0,
+                max_lat: 1.0,
+            }),
+        };
+        let json = serde_json::to_string(&ir).unwrap();
+        assert!(json.contains("\"on_link\""), "tagged snake_case: {json}");
+        assert!(json.contains("\"where\""), "inner serialized as `where`: {json}");
+        let back: Expr = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, ir, "round-trips");
+
+        // The head-SQL compiler rejects it with a typed, repairable error, so a
+        // caller routes it to the DuckDB/Parquet backend rather than mis-compiling.
+        let graph = load_group_graph();
+        let q = Query {
+            model: "group".to_string(),
+            r#where: Some(ir),
+            measures: vec![Measure::SelectIds],
+            limit: None,
+        };
+        match compile(&q, &graph) {
+            Err(QueryError::Unsupported { feature }) => {
+                assert!(feature.contains("on_link"), "names the feature: {feature}")
+            }
+            other => panic!("expected Unsupported, got {other:?}"),
         }
     }
 
