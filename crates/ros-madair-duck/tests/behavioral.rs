@@ -543,3 +543,120 @@ fn on_link_path_predicate_semijoins_the_edge_table() {
     both.sort();
     assert_eq!(both, set(&[R1, R2]), "OnLink INTERSECT local concept predicate");
 }
+
+#[test]
+fn open_layers_composes_tiles_with_overlay_precedence() {
+    let base = scratch("lbase");
+    let overlay = scratch("lover");
+
+    // One tile for R1 on the category nodegroup, with a given concept id.
+    let write_tile = |dir: &std::path::Path, concept: &str| {
+        let con = duckdb::Connection::open_in_memory().unwrap();
+        con.execute_batch(
+            "CREATE TABLE t (\
+                resource_id VARCHAR, nodegroup_id VARCHAR, tileid VARCHAR,\
+                parenttile_id VARCHAR, sortorder INTEGER, data VARCHAR,\
+                descriptor_name VARCHAR, concept_id VARCHAR, q_ordered BIGINT,\
+                geo_min_lng DOUBLE, geo_max_lng DOUBLE,\
+                geo_min_lat DOUBLE, geo_max_lat DOUBLE, link_targets VARCHAR)",
+        )
+        .unwrap();
+        con.execute_batch(&format!(
+            "INSERT INTO t VALUES('{R1}','{NG_REF}','tx',NULL,0,'{{}}','Alpha',\
+             '{concept}',NULL,NULL,NULL,NULL,NULL,NULL)"
+        ))
+        .unwrap();
+        con.execute_batch(&format!(
+            "COPY t TO '{}/tiles_test.parquet' (FORMAT PARQUET)",
+            dir.display()
+        ))
+        .unwrap();
+    };
+    write_tile(&base, CAT_A);
+    write_tile(&overlay, CAT_B);
+
+    let duck = DuckReader::open_layers(&[base.as_path(), overlay.as_path()]).unwrap();
+    let registry = default_registry();
+    let hit = |value: &str| {
+        let mut v = duck
+            .resolve_ids(
+                &q(Expr::Concept {
+                    path: "category".into(),
+                    op: ConceptOp::Is,
+                    value: value.into(),
+                }),
+                &graph(),
+                &registry,
+            )
+            .unwrap();
+        v.sort();
+        v
+    };
+    // The overlay's Category-B tile overrides the base's Category-A tile for the
+    // same (resource, nodegroup): the composed search sees B, not A.
+    assert_eq!(hit(CAT_B), set(&[R1]), "overlay's tile wins");
+    assert!(hit(CAT_A).is_empty(), "base's tile is overridden, not unioned");
+}
+
+#[test]
+fn on_link_crosses_layers() {
+    // The building→org shape: the TARGET tile lives in one layer, the linking
+    // EDGE in another. base carries r3 (Category B); overlay carries only the edge
+    // r1→r3. A single OnLink hop must cross the layer boundary.
+    let base = scratch("xlbase");
+    let overlay = scratch("xlover");
+
+    // base: r3's category tile (Category B), no edges.
+    let con = duckdb::Connection::open_in_memory().unwrap();
+    con.execute_batch(
+        "CREATE TABLE t (\
+            resource_id VARCHAR, nodegroup_id VARCHAR, tileid VARCHAR,\
+            parenttile_id VARCHAR, sortorder INTEGER, data VARCHAR,\
+            descriptor_name VARCHAR, concept_id VARCHAR, q_ordered BIGINT,\
+            geo_min_lng DOUBLE, geo_max_lng DOUBLE,\
+            geo_min_lat DOUBLE, geo_max_lat DOUBLE, link_targets VARCHAR)",
+    )
+    .unwrap();
+    con.execute_batch(&format!(
+        "INSERT INTO t VALUES('{R3}','{NG_REF}','tx',NULL,0,'{{}}','Gamma',\
+         '{CAT_B}',NULL,NULL,NULL,NULL,NULL,NULL)"
+    ))
+    .unwrap();
+    con.execute_batch(&format!(
+        "COPY t TO '{}/tiles_test.parquet' (FORMAT PARQUET)",
+        base.display()
+    ))
+    .unwrap();
+
+    // overlay: ONLY the edge r1 → r3 (the link lives in a different layer than the
+    // target it points at).
+    con.execute_batch(&format!(
+        "COPY (SELECT * FROM (VALUES \
+            ('{R1}','{NG_LINK}','{NG_LINK}','t04','{R3}')\
+        ) e(src_resource, src_node, src_nodegroup, src_tile, target_resource)) \
+         TO '{}/edges_test.parquet' (FORMAT PARQUET)",
+        overlay.display()
+    ))
+    .unwrap();
+
+    let duck = DuckReader::open_layers(&[base.as_path(), overlay.as_path()]).unwrap();
+    let registry = default_registry();
+    let ids = duck
+        .resolve_ids(
+            &q(Expr::OnLink {
+                path: "related".into(),
+                model: "test-g".into(),
+                r#where: Box::new(Expr::Concept {
+                    path: "category".into(),
+                    op: ConceptOp::Is,
+                    value: CAT_B.into(),
+                }),
+            }),
+            &graph(),
+            &registry,
+        )
+        .unwrap();
+    // Inner (Category B) matches r3 in the BASE layer; the edge r1→r3 is in the
+    // OVERLAY layer; the composed views join them → r1. No shadow record needed.
+    assert_eq!(ids, set(&[R1]), "hop crosses layers: edge in overlay, target in base");
+}

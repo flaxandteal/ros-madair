@@ -193,6 +193,93 @@ impl DuckReader {
         Self::open(parquet_glob)?.with_catalog(catalog_glob)
     }
 
+    /// Open a LAYERED reader over `dirs` (base first, topmost last): the `tiles`,
+    /// `edges`, and `concepts` views are the layers COMPOSED with overlay
+    /// precedence, so `resolve_ids`/`count_records` — and, crucially, an OnLink
+    /// hop — see the merged state, and a hop can cross layers (an edge in one
+    /// layer semijoins a target tile in another, because the composed views union
+    /// them). The compiler is unchanged; only the views it targets are composed.
+    ///
+    /// Precedence is keyed per `(resource_id, nodegroup_id)` for tiles /
+    /// `(src_resource, src_nodegroup)` for edges — the topmost layer that carries
+    /// that tile wins, and everything it does not touch falls through to the base.
+    /// (This is the cardinality-1 rule; cardinality-n tile merge — as
+    /// `hydrate_layers` does — is a refinement.)
+    pub fn open_layers(dirs: &[&Path]) -> Result<Self, DuckError> {
+        if dirs.is_empty() {
+            return Err(DuckError::Compile("open_layers: no layers".into()));
+        }
+        let conn = Connection::open_in_memory()?;
+        // Match the hydration layer path: no network. A Bbox then compiles coarse.
+        configure_spatial(&conn, &SpatialSource::None);
+        let spatial: bool = conn
+            .query_row(
+                "SELECT count(*) > 0 FROM duckdb_functions() \
+                 WHERE lower(function_name) = 'st_intersects'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap_or(false);
+
+        // base-first: the layer index IS the precedence rank (higher wins).
+        let ranked_union = |layers: &[(usize, String)]| -> String {
+            layers
+                .iter()
+                .map(|(i, g)| format!("SELECT *, {i} AS _layer FROM read_parquet('{}')", sql_lit(g)))
+                .collect::<Vec<_>>()
+                .join("\nUNION ALL BY NAME\n")
+        };
+
+        // Tiles (required): topmost tile per (resource_id, nodegroup_id).
+        let tile_layers = layers_with(&conn, dirs, "tiles_*.parquet");
+        if tile_layers.is_empty() {
+            return Err(DuckError::Compile(
+                "open_layers: no tiles_*.parquet in any layer".into(),
+            ));
+        }
+        conn.execute_batch(&format!(
+            "CREATE VIEW tiles AS SELECT * EXCLUDE (_layer) FROM ({}) \
+             QUALIFY row_number() OVER \
+               (PARTITION BY resource_id, nodegroup_id ORDER BY _layer DESC) = 1;",
+            ranked_union(&tile_layers)
+        ))?;
+
+        // Edges (optional): keep ALL edges from the winning layer per
+        // (src_resource, src_nodegroup) — an overlay that re-links a tile replaces
+        // that tile's whole edge set, not one row.
+        let edge_layers = layers_with(&conn, dirs, "edges_*.parquet");
+        let has_edges = !edge_layers.is_empty();
+        if has_edges {
+            conn.execute_batch(&format!(
+                "CREATE VIEW edges AS \
+                 SELECT src_resource, src_node, src_nodegroup, src_tile, target_resource FROM (\
+                   SELECT *, max(_layer) OVER \
+                     (PARTITION BY src_resource, src_nodegroup) AS _win FROM ({})\
+                 ) WHERE _layer = _win;",
+                ranked_union(&edge_layers)
+            ))?;
+        }
+
+        // Concepts (optional): union the catalogs, topmost wins per concept_id.
+        let cat_layers = layers_with(&conn, dirs, "concept_catalog.parquet");
+        let has_catalog = !cat_layers.is_empty();
+        if has_catalog {
+            conn.execute_batch(&format!(
+                "CREATE VIEW concepts AS \
+                 SELECT concept_id, dfs_enter, dfs_leave, label FROM ({}) \
+                 QUALIFY row_number() OVER (PARTITION BY concept_id ORDER BY _layer DESC) = 1;",
+                ranked_union(&cat_layers)
+            ))?;
+        }
+
+        Ok(Self {
+            conn,
+            has_catalog,
+            has_edges,
+            spatial,
+        })
+    }
+
     /// The label for a concept id, from the catalog (unblocks `v2_closure`-style
     /// display). `None` if no catalog is attached or the concept is unknown.
     pub fn concept_label(&self, concept_id: &str) -> Result<Option<String>, DuckError> {
@@ -486,6 +573,26 @@ impl DuckReader {
 }
 
 /// Open a layer dir as a `DuckReader` (tiles glob + optional concept catalog).
+/// For a per-layer filename pattern, the `(rank, glob)` of the layers that
+/// actually contain matching files — so the composed view never `read_parquet`s
+/// a zero-match glob (which errors at bind). Rank = the layer's index in `dirs`.
+fn layers_with(conn: &Connection, dirs: &[&Path], pattern: &str) -> Vec<(usize, String)> {
+    dirs.iter()
+        .enumerate()
+        .filter_map(|(i, d)| {
+            let glob = format!("{}/{}", d.display(), pattern);
+            let n: i64 = conn
+                .query_row(
+                    &format!("SELECT count(*) FROM glob('{}')", sql_lit(&glob)),
+                    [],
+                    |r| r.get(0),
+                )
+                .unwrap_or(0);
+            (n > 0).then_some((i, glob))
+        })
+        .collect()
+}
+
 fn open_layer(dir: &Path) -> Result<DuckReader, DuckError> {
     let glob = format!("{}/tiles_*.parquet", dir.display());
     let mut duck = DuckReader::open_with(&glob, SpatialSource::None)?;
