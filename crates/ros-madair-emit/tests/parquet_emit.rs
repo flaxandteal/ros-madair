@@ -472,8 +472,9 @@ fn verify_head_trusts_signed_and_flags_tamper() {
 // ---------------------------------------------------------------------------
 // Edge slice: a resource-instance link node's targets are unpivoted into
 // `edges_<slug>.parquet` (src_resource, src_node, src_nodegroup, src_tile,
-// target_resource) — the columnar edge table the path/multi-hop compiler and
-// reverse lookups query, alongside the tile row's `link_targets`.
+// target_resource) — the columnar edge table the path/multi-hop compiler and the
+// reverse lookups (HasLink, cited_by, geo_points) query. Links live ONLY here now;
+// the per-tile `link_targets` JSON column has been dropped.
 // ---------------------------------------------------------------------------
 
 const LINK_NG: &str = "5efd0000-0000-4000-8000-000000000003";

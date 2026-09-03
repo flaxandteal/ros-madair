@@ -228,10 +228,13 @@ the emit-time **tier** (`exclude_nodegroups`) that never ships the bytes at all.
   `tiles`/`edges`/`concepts` views, so cross-layer traversal needs **no shadow
   records** (edges are id-based; unioning per-layer views reconnects a link in one
   layer to its target in another). Dot-qualified paths (`address.location`)
-  resolve through the schema tree. Covered by `tests/behavioral.rs` (OnLink,
-  two-hop chain, cross-layer, cross-model, dotted paths, layered precedence).
-  _Deferred:_ cardinality-n layer merge, edge-side pruning (`src_node` partition /
-  Bloom / dense ordinals), and `link_targets` consolidation.
+  resolve through the schema tree. `link_targets` is now consolidated onto the
+  edge table — `HasLink`/`cited_by`/`geo_points` all query `edges`, and the
+  per-tile JSON column is dropped (hydration reads `data`, links live only in
+  `edges`). Covered by `tests/behavioral.rs` (OnLink, two-hop chain, cross-layer,
+  cross-model, dotted paths, layered precedence) + the emit edge test.
+  _Deferred:_ cardinality-n layer merge, and edge-side pruning (`src_node`
+  partition / Bloom / dense ordinals).
 - **Next — slice 4.** Delete the old engine (`format` chunks, `query` head SQL,
   the emit head/chunk writer, `read::resolve`) once callers move to `duck`;
   rewire the Python binding; browser runtime → DuckDB-WASM (the SQL `duck`

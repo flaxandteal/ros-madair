@@ -159,9 +159,11 @@ spatial a less complete one (the exact-intersection fine step is unimplemented;
     cross-model (`resolve_ids_linked`), and cross-layer via `open_layers`
     (base+overlay composition of the `tiles`/`edges`/`concepts` views — so
     cross-layer traversal needs **no shadow records**). Dot-qualified paths also
-    landed. Deferred: cardinality-n layer merge, edge-side pruning (`src_node`
-    partition / Bloom / dense ordinals), `link_targets` consolidation, and
-    per-node concept promotion (a nodegroup with two concept nodes).
+    landed, and `link_targets` is now consolidated onto the edge table
+    (`HasLink`/`cited_by`/`geo_points` all query `edges`; the per-tile JSON column
+    is dropped). Deferred: cardinality-n layer merge, edge-side pruning (`src_node`
+    partition / Bloom / dense ordinals), and per-node concept promotion (a
+    nodegroup with two concept nodes).
   - **Slice 3 — pending.** Delete the old engine (`format` chunks, `query` head
     SQL, the emit head/chunk writer, `read::resolve`) once `duck` fully subsumes it.
   - **Slice 4 — pending.** Browser runtime → DuckDB-WASM (the same SQL `duck`

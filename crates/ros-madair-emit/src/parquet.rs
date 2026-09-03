@@ -556,14 +556,10 @@ fn append_resource(
             }
         }
 
-        // `{node_id: [targets]}` JSON, or NULL when the tile has no link node.
-        let link_targets: Option<String> = if link_map.is_empty() {
-            None
-        } else {
-            Some(serde_json::to_string(&link_map)?)
-        };
-
-        // Unpivot the same links into edge rows (src tile → each target).
+        // Unpivot the tile's links into edge rows (src tile → each target). This
+        // is now the ONLY consumer of `link_map`: the read path (HasLink,
+        // cited_by, geo_points) queries the columnar edge table, not a per-tile
+        // `link_targets` JSON column (dropped — hydration reads `data`, not it).
         for (node_id, targets) in &link_map {
             for t in targets {
                 edge_rows.push((
@@ -603,7 +599,6 @@ fn append_resource(
             ng_order,
             q_ordered,
             concept_id,
-            link_targets,
             geo.map(|g| g.0),
             geo.map(|g| g.1),
             geo.map(|g| g.2),
@@ -652,7 +647,7 @@ impl TileStage {
                model_slug VARCHAR, resource_id VARCHAR, descriptor_name VARCHAR,
                nodegroup_id VARCHAR, tileid VARCHAR, parenttile_id VARCHAR,
                sortorder INTEGER, cluster_key UBIGINT, ng_order BIGINT,
-               q_ordered BIGINT, concept_id VARCHAR, link_targets VARCHAR,
+               q_ordered BIGINT, concept_id VARCHAR,
                geo_min_lng DOUBLE, geo_min_lat DOUBLE, geo_max_lng DOUBLE, geo_max_lat DOUBLE,
                data VARCHAR);
              CREATE TABLE edges (
@@ -681,7 +676,7 @@ impl TileStage {
         // NB: model_slug is excluded from the output — it is a stage-only routing
         // column, not part of the frozen tile-row schema.
         let cols = "resource_id, descriptor_name, nodegroup_id, tileid, parenttile_id, \
-                    sortorder, cluster_key, ng_order, q_ordered, concept_id, link_targets, \
+                    sortorder, cluster_key, ng_order, q_ordered, concept_id, \
                     geo_min_lng, geo_min_lat, geo_max_lng, geo_max_lat, data";
         let slug_lit = sql_lit(slug);
         let rgs = cfg.row_group_size.max(1);

@@ -18,10 +18,11 @@
 //!     concept catalog is attached (`open_with_catalog`) — a DFS-interval range
 //!     read over the catalog projected from `RdmCache`. Works for `concept` AND
 //!     `reference` (shared `ConceptHierarchical` class).
-//!   - `HasLink` is EXACT — the emitter promotes the tile's actual target ids
-//!     as a per-NODE object `link_targets` = `{node_id: [targets]}`, so membership
-//!     is precise even when a nodegroup holds >1 link node (the head was coarse
-//!     here). `geo_points` uses the same per-node object for reverse lookups.
+//!   - `HasLink`/`cited_by`/`geo_points` are EXACT, over the columnar edge table
+//!     (`edges_<slug>.parquet`, one row per link target) — per node via `src_node`
+//!     (globally unique), so membership is precise even when a nodegroup holds >1
+//!     link node (the head was coarse here). The old per-tile `link_targets` JSON
+//!     column is dropped: hydration reads `data`, and links live only in `edges`.
 //!   - `path` resolves a bare alias OR a dot-qualified path walked from the root
 //!     (e.g. `address.location`), so a hop can reach a link node nested under
 //!     within-resource nodegroups.
@@ -412,21 +413,24 @@ impl DuckReader {
 
     /// Reverse-link geo lookup (Gréasán `v2_geo_points`, MapView): every resource
     /// that links to `target` through node `node_id`, with its descriptor + point
-    /// (`geo_min_lat`/`geo_min_lng`). Node-precise via the per-node `link_targets`
-    /// object. The link and the geometry live on different tiles of the same
+    /// (`geo_min_lat`/`geo_min_lng`). Node-precise via the edge table (`src_node`).
+    /// The link and the geometry live on different tiles of the same
     /// resource, so self-join on `resource_id`.
     pub fn geo_points(
         &self,
         node_id: &str,
         target: &str,
     ) -> Result<Vec<(String, String, f64, f64)>, DuckError> {
+        if !self.has_edges {
+            return Ok(Vec::new());
+        }
         let sql = format!(
-            "SELECT l.resource_id, any_value(l.descriptor_name), \
+            "SELECT e.src_resource, any_value(g.descriptor_name), \
                     any_value(g.geo_min_lat), any_value(g.geo_min_lng) \
-             FROM tiles l \
-             JOIN tiles g ON g.resource_id = l.resource_id AND g.geo_min_lat IS NOT NULL \
-             WHERE json_contains(json_extract(l.link_targets, '$.\"{}\"'), '\"{}\"') \
-             GROUP BY l.resource_id",
+             FROM edges e \
+             JOIN tiles g ON g.resource_id = e.src_resource AND g.geo_min_lat IS NOT NULL \
+             WHERE e.src_node = '{}' AND e.target_resource = '{}' \
+             GROUP BY e.src_resource",
             sql_lit(node_id),
             sql_lit(target)
         );
@@ -443,14 +447,17 @@ impl DuckReader {
     }
 
     /// Reverse-link lookup returning just the citer ids: every resource that links
-    /// to `target` through node `node_id` (the per-node `link_targets` object).
+    /// to `target` through node `node_id` (a reverse scan of the edge table).
     /// The parquet counterpart of ros-madair-read's `Layers::cited_by` (used for
     /// Logainm placenames via the place graph's `element_entry` node, cognates via
     /// `cognate_entry_id`, external examples via `headword_entry`).
     pub fn cited_by(&self, node_id: &str, target: &str) -> Result<Vec<String>, DuckError> {
+        if !self.has_edges {
+            return Ok(Vec::new());
+        }
         let sql = format!(
-            "SELECT DISTINCT resource_id FROM tiles \
-             WHERE json_contains(json_extract(link_targets, '$.\"{}\"'), '\"{}\"')",
+            "SELECT DISTINCT src_resource FROM edges \
+             WHERE src_node = '{}' AND target_resource = '{}'",
             sql_lit(node_id),
             sql_lit(target)
         );
@@ -993,22 +1000,25 @@ fn compile_expr(
             ))
         }
         Expr::HasLink { path, target } => {
-            let (node, ng) = resolve(graph, path)?;
+            if !has_edges {
+                return Err(DuckError::Compile(format!(
+                    "has-link on '{path}' needs the edge table — this reader has no \
+                     edges_*.parquet (open a snapshot emitted with the edge slice)"
+                )));
+            }
+            let (node, _) = resolve(graph, path)?;
             expect_class(&node, registry, |c| matches!(c, IndexClass::Link), path, "link")?;
-            // EXACT, unlike the head's coarse chunk_link_summary. `link_targets` is
-            // now `{node_id: [targets]}` (per-node), so extract THIS node's array -
-            // a multi-link nodegroup (e.g. name_elements) stays precise. A missing
-            // node key → json_extract NULL → the predicate is false.
-            // `None` target = "has any link on this node".
-            let arr = format!("json_extract(link_targets, '$.\"{}\"')", sql_lit(&node.nodeid));
+            // EXACT membership over the columnar edge table — per node via src_node
+            // (globally unique), so a multi-link nodegroup stays precise. `None`
+            // target = "has any link on this node".
             let cond = match target {
-                Some(t) => format!("json_contains({arr}, '\"{}\"')", sql_lit(t)),
-                None => format!("json_array_length({arr}) > 0"),
+                Some(t) => format!(" AND target_resource = '{}'", sql_lit(t)),
+                None => String::new(),
             };
             Ok(format!(
-                "SELECT DISTINCT resource_id FROM tiles \
-                 WHERE nodegroup_id = '{}' AND link_targets IS NOT NULL AND {cond}",
-                sql_lit(&ng)
+                "SELECT DISTINCT src_resource AS resource_id FROM edges \
+                 WHERE src_node = '{}'{cond}",
+                sql_lit(&node.nodeid)
             ))
         }
         // Cross-resource PATH predicate → an edge-table semijoin. Compile the inner
