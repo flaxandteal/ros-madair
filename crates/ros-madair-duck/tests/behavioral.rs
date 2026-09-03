@@ -660,3 +660,102 @@ fn on_link_crosses_layers() {
     // OVERLAY layer; the composed views join them → r1. No shadow record needed.
     assert_eq!(ids, set(&[R1]), "hop crosses layers: edge in overlay, target in base");
 }
+
+#[test]
+fn on_link_crosses_models() {
+    // Two models: Org has a `location` link → Place; Place has a `designation`
+    // (reference) concept. An OnLink from Org filters on the linked Place's
+    // designation — the inner predicate resolves against the Place model, which
+    // the caller supplies via `linked`.
+    const ORG_G: &str = "org-g";
+    const PLACE_G: &str = "place-g";
+    const NG_LOC: &str = "cc000000-0000-4000-8000-000000000005";
+    const NG_DES: &str = "dd000000-0000-4000-8000-000000000006";
+    let r_org = "eeee0000-0000-4000-8000-000000000001";
+    let r_place = "ffff0000-0000-4000-8000-000000000001";
+
+    let org_graph: StaticGraph = serde_json::from_value(json!({
+        "graphid": ORG_G, "name": "Org",
+        "root": {"nodeid": "org-root", "name": "Org", "datatype": "semantic", "graph_id": ORG_G},
+        "nodes": [
+            {"nodeid": "org-root", "name": "Org", "datatype": "semantic", "graph_id": ORG_G},
+            {"nodeid": NG_LOC, "name": "Location", "alias": "location",
+             "datatype": "resource-instance", "nodegroup_id": NG_LOC, "graph_id": ORG_G, "is_collector": true},
+        ],
+        "nodegroups": [{"nodegroupid": NG_LOC, "cardinality": "1", "parentnodegroup_id": null}],
+        "edges": [{"domainnode_id": "org-root", "rangenode_id": NG_LOC, "graph_id": ORG_G}],
+    }))
+    .unwrap();
+    let place_graph: StaticGraph = serde_json::from_value(json!({
+        "graphid": PLACE_G, "name": "Place",
+        "root": {"nodeid": "place-root", "name": "Place", "datatype": "semantic", "graph_id": PLACE_G},
+        "nodes": [
+            {"nodeid": "place-root", "name": "Place", "datatype": "semantic", "graph_id": PLACE_G},
+            {"nodeid": NG_DES, "name": "Designation", "alias": "designation",
+             "datatype": "reference", "nodegroup_id": NG_DES, "graph_id": PLACE_G, "is_collector": true},
+        ],
+        "nodegroups": [{"nodegroupid": NG_DES, "cardinality": "1", "parentnodegroup_id": null}],
+        "edges": [{"domainnode_id": "place-root", "rangenode_id": NG_DES, "graph_id": PLACE_G}],
+    }))
+    .unwrap();
+
+    // One reader over both models' tiles + edges (nodegroup ids are globally
+    // unique, so a single tiles/edges view holding both models is unambiguous).
+    let dir = scratch("xmodel");
+    let con = duckdb::Connection::open_in_memory().unwrap();
+    con.execute_batch(
+        "CREATE TABLE t (\
+            resource_id VARCHAR, nodegroup_id VARCHAR, tileid VARCHAR,\
+            parenttile_id VARCHAR, sortorder INTEGER, data VARCHAR,\
+            descriptor_name VARCHAR, concept_id VARCHAR, q_ordered BIGINT,\
+            geo_min_lng DOUBLE, geo_max_lng DOUBLE,\
+            geo_min_lat DOUBLE, geo_max_lat DOUBLE, link_targets VARCHAR)",
+    )
+    .unwrap();
+    con.execute_batch(&format!(
+        "INSERT INTO t VALUES('{r_place}','{NG_DES}','tp',NULL,0,'{{}}','Place',\
+         '{CAT_B}',NULL,NULL,NULL,NULL,NULL,NULL)"
+    ))
+    .unwrap();
+    con.execute_batch(&format!(
+        "COPY t TO '{}/tiles_test.parquet' (FORMAT PARQUET)",
+        dir.display()
+    ))
+    .unwrap();
+    con.execute_batch(&format!(
+        "COPY (SELECT * FROM (VALUES \
+            ('{r_org}','{NG_LOC}','{NG_LOC}','tl','{r_place}')\
+        ) e(src_resource, src_node, src_nodegroup, src_tile, target_resource)) \
+         TO '{}/edges_test.parquet' (FORMAT PARQUET)",
+        dir.display()
+    ))
+    .unwrap();
+
+    let duck = DuckReader::open(dir.join("tiles_test.parquet").to_str().unwrap()).unwrap();
+    let registry = default_registry();
+
+    let query = Query {
+        model: ORG_G.into(),
+        r#where: Some(Expr::OnLink {
+            path: "location".into(),
+            model: PLACE_G.into(),
+            r#where: Box::new(Expr::Concept {
+                path: "designation".into(),
+                op: ConceptOp::Is,
+                value: CAT_B.into(),
+            }),
+        }),
+        measures: vec![Measure::SelectIds],
+        limit: None,
+    };
+
+    // With the Place model supplied, the hop resolves across models → the org.
+    let ids = duck
+        .resolve_ids_linked(&query, &org_graph, &[&place_graph], &registry)
+        .unwrap();
+    assert_eq!(ids, set(&[r_org]), "Org → Place(designation=B): the linking org");
+
+    // Without it, the target model 'place-g' is unknown to the compiler → error.
+    let err = duck.resolve_ids(&query, &org_graph, &registry);
+    assert!(err.is_err(), "cross-model OnLink without the linked model errors");
+}

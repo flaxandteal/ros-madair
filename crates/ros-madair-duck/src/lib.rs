@@ -516,9 +516,28 @@ impl DuckReader {
         graph: &StaticGraph,
         registry: &ExtensionTypeRegistry,
     ) -> Result<Vec<String>, DuckError> {
+        self.resolve_ids_linked(query, graph, &[], registry)
+    }
+
+    /// Resolve with ADDITIONAL linked models available for cross-model OnLink hops.
+    /// `graph` is the query's model; `linked` are the other models an OnLink `where`
+    /// may target. Their tiles/edges must be in this reader's views — open over a
+    /// glob (or [`open_layers`](Self::open_layers)) spanning every model the query
+    /// traverses (nodegroup/node ids are globally unique, so one `tiles`/`edges`
+    /// view holding several models is unambiguous).
+    pub fn resolve_ids_linked(
+        &self,
+        query: &Query,
+        graph: &StaticGraph,
+        linked: &[&StaticGraph],
+        registry: &ExtensionTypeRegistry,
+    ) -> Result<Vec<String>, DuckError> {
+        let mut graphs: Vec<&StaticGraph> = Vec::with_capacity(1 + linked.len());
+        graphs.push(graph);
+        graphs.extend_from_slice(linked);
         let sql = format!(
             "SELECT resource_id FROM ({}) t ORDER BY resource_id",
-            self.matching_ids_select(query, graph, registry)?
+            self.matching_ids_select(query, graph, &graphs, registry)?
         );
         let mut stmt = self.conn.prepare(&sql)?;
         let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
@@ -537,9 +556,24 @@ impl DuckReader {
         graph: &StaticGraph,
         registry: &ExtensionTypeRegistry,
     ) -> Result<usize, DuckError> {
+        self.count_records_linked(query, graph, &[], registry)
+    }
+
+    /// [`count_records`](Self::count_records) with additional linked models for
+    /// cross-model OnLink hops (see [`resolve_ids_linked`](Self::resolve_ids_linked)).
+    pub fn count_records_linked(
+        &self,
+        query: &Query,
+        graph: &StaticGraph,
+        linked: &[&StaticGraph],
+        registry: &ExtensionTypeRegistry,
+    ) -> Result<usize, DuckError> {
+        let mut graphs: Vec<&StaticGraph> = Vec::with_capacity(1 + linked.len());
+        graphs.push(graph);
+        graphs.extend_from_slice(linked);
         let sql = format!(
             "SELECT COUNT(*) FROM ({}) t",
-            self.matching_ids_select(query, graph, registry)?
+            self.matching_ids_select(query, graph, &graphs, registry)?
         );
         let n: i64 = self.conn.query_row(&sql, [], |r| r.get(0))?;
         Ok(n.max(0) as usize)
@@ -551,17 +585,14 @@ impl DuckReader {
         &self,
         query: &Query,
         graph: &StaticGraph,
+        graphs: &[&StaticGraph],
         registry: &ExtensionTypeRegistry,
     ) -> Result<String, DuckError> {
-        // The model set for cross-resource OnLink target resolution. resolve_ids is
-        // single-model, so the set is just this graph — a same-model (self-)link
-        // resolves; a cross-model OnLink needs a caller that supplies all graphs.
-        let graphs = [graph];
         match &query.r#where {
             Some(expr) => compile_expr(
                 expr,
                 graph,
-                &graphs,
+                graphs,
                 registry,
                 self.has_catalog,
                 self.has_edges,
