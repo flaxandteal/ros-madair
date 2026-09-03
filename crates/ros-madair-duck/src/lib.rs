@@ -22,7 +22,9 @@
 //!     as a per-NODE object `link_targets` = `{node_id: [targets]}`, so membership
 //!     is precise even when a nodegroup holds >1 link node (the head was coarse
 //!     here). `geo_points` uses the same per-node object for reverse lookups.
-//!   - `path` resolves a bare alias; dot-qualified paths are a later increment.
+//!   - `path` resolves a bare alias OR a dot-qualified path walked from the root
+//!     (e.g. `address.location`), so a hop can reach a link node nested under
+//!     within-resource nodegroups.
 //!   - `concept_id` promotion is still "first indexed node of a class per tile", so
 //!     a nodegroup with two CONCEPT nodes is not yet distinguished (links are now
 //!     per-node; concepts would need the same treatment).
@@ -1073,19 +1075,58 @@ fn compile_expr(
 
 /// Resolve a bare-alias path to its node and nodegroup id.
 fn resolve<'g>(graph: &'g StaticGraph, path: &str) -> Result<(&'g StaticNode, String), DuckError> {
-    if path.contains('.') {
-        return Err(DuckError::Compile(format!(
-            "dot-qualified path '{path}' not supported yet (bare alias only)"
-        )));
-    }
-    let node = graph
-        .find_node_by_alias(path)
-        .ok_or_else(|| DuckError::Compile(format!("unknown path alias '{path}'")))?;
+    let node = resolve_node(graph, path)?;
     let ng = node
         .nodegroup_id
         .clone()
         .ok_or_else(|| DuckError::Compile(format!("node '{path}' has no nodegroup")))?;
     Ok((node, ng))
+}
+
+/// Resolve a path to its node: a bare alias (global lookup), or a dot-qualified
+/// path walked from the root by alias through the schema tree (following edges) —
+/// e.g. `address.location`. Mirrors `ros-madair-query`'s `PathResolver` so both
+/// compilers resolve paths identically; independent of `build_indices`.
+fn resolve_node<'g>(graph: &'g StaticGraph, path: &str) -> Result<&'g StaticNode, DuckError> {
+    let components: Vec<&str> = path.split('.').collect();
+    if components.len() == 1 {
+        return graph
+            .find_node_by_alias(components[0])
+            .ok_or_else(|| DuckError::Compile(format!("unknown path alias '{path}'")));
+    }
+    // Dotted: children by edge (domainnode -> rangenode), then walk from the root.
+    let mut children: HashMap<&str, Vec<&str>> = HashMap::new();
+    for edge in graph.edges_slice() {
+        children
+            .entry(edge.domainnode_id.as_str())
+            .or_default()
+            .push(edge.rangenode_id.as_str());
+    }
+    let nodes_by_id: HashMap<&str, &StaticNode> = graph
+        .nodes_slice()
+        .iter()
+        .map(|n| (n.nodeid.as_str(), n))
+        .collect();
+    let mut current: &StaticNode = graph.get_root();
+    for component in &components {
+        let child_ids = children
+            .get(current.nodeid.as_str())
+            .map(Vec::as_slice)
+            .unwrap_or(&[]);
+        match child_ids
+            .iter()
+            .filter_map(|id| nodes_by_id.get(id).copied())
+            .find(|n| n.alias.as_deref() == Some(*component))
+        {
+            Some(node) => current = node,
+            None => {
+                return Err(DuckError::Compile(format!(
+                    "unknown path component '{component}' in '{path}'"
+                )))
+            }
+        }
+    }
+    Ok(current)
 }
 
 fn node_config_value(node: &StaticNode) -> Option<serde_json::Value> {

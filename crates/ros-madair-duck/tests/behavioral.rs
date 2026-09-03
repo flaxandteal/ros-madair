@@ -759,3 +759,139 @@ fn on_link_crosses_models() {
     let err = duck.resolve_ids(&query, &org_graph, &registry);
     assert!(err.is_err(), "cross-model OnLink without the linked model errors");
 }
+
+#[test]
+fn on_link_chain_two_hops() {
+    // a → b → c, with c Category B. A nested OnLink (hop, then hop, then the leaf)
+    // folds to nested edge semijoins: category-B matches c; related-to-c gives b;
+    // related-to-b gives a. So the two-hop chain resolves to {a}.
+    let a = "aa000000-0000-4000-8000-000000000001";
+    let b = "bb000000-0000-4000-8000-000000000001";
+    let c = "cc000000-0000-4000-8000-000000000001";
+
+    let dir = scratch("chain");
+    let con = duckdb::Connection::open_in_memory().unwrap();
+    con.execute_batch(
+        "CREATE TABLE t (\
+            resource_id VARCHAR, nodegroup_id VARCHAR, tileid VARCHAR,\
+            parenttile_id VARCHAR, sortorder INTEGER, data VARCHAR,\
+            descriptor_name VARCHAR, concept_id VARCHAR, q_ordered BIGINT,\
+            geo_min_lng DOUBLE, geo_max_lng DOUBLE,\
+            geo_min_lat DOUBLE, geo_max_lat DOUBLE, link_targets VARCHAR)",
+    )
+    .unwrap();
+    // Only c carries a category tile (Category B) — the leaf of the chain.
+    con.execute_batch(&format!(
+        "INSERT INTO t VALUES('{c}','{NG_REF}','tc',NULL,0,'{{}}','C',\
+         '{CAT_B}',NULL,NULL,NULL,NULL,NULL,NULL)"
+    ))
+    .unwrap();
+    con.execute_batch(&format!(
+        "COPY t TO '{}/tiles_test.parquet' (FORMAT PARQUET)",
+        dir.display()
+    ))
+    .unwrap();
+    // Edges: a → b and b → c, both via `related`.
+    con.execute_batch(&format!(
+        "COPY (SELECT * FROM (VALUES \
+            ('{a}','{NG_LINK}','{NG_LINK}','ta','{b}'),\
+            ('{b}','{NG_LINK}','{NG_LINK}','tb','{c}')\
+        ) e(src_resource, src_node, src_nodegroup, src_tile, target_resource)) \
+         TO '{}/edges_test.parquet' (FORMAT PARQUET)",
+        dir.display()
+    ))
+    .unwrap();
+
+    let duck = DuckReader::open(dir.join("tiles_test.parquet").to_str().unwrap()).unwrap();
+    let registry = default_registry();
+
+    let on_link = |inner: Expr| Expr::OnLink {
+        path: "related".into(),
+        model: "test-g".into(),
+        r#where: Box::new(inner),
+    };
+    let chain = on_link(on_link(Expr::Concept {
+        path: "category".into(),
+        op: ConceptOp::Is,
+        value: CAT_B.into(),
+    }));
+
+    let ids = duck.resolve_ids(&q(chain), &graph(), &registry).unwrap();
+    assert_eq!(ids, set(&[a]), "two-hop chain a→b→c(CategoryB) resolves to a");
+}
+
+#[test]
+fn dot_qualified_path_walks_the_schema_tree() {
+    // root → info (semantic) → category (reference). A dotted path resolves the
+    // nested node, so a predicate can name `info.category`.
+    const G: &str = "nest-g";
+    const INFO: &str = "10000000-0000-4000-8000-000000000001";
+    const CATNG: &str = "20000000-0000-4000-8000-000000000002";
+    let r = "30000000-0000-4000-8000-000000000003";
+
+    let graph: StaticGraph = serde_json::from_value(json!({
+        "graphid": G, "name": "Nest",
+        "root": {"nodeid": "nroot", "name": "Nest", "datatype": "semantic", "graph_id": G},
+        "nodes": [
+            {"nodeid": "nroot", "name": "Nest", "datatype": "semantic", "graph_id": G},
+            {"nodeid": INFO, "name": "Info", "alias": "info", "datatype": "semantic",
+             "nodegroup_id": INFO, "graph_id": G, "is_collector": true},
+            {"nodeid": CATNG, "name": "Category", "alias": "category", "datatype": "reference",
+             "nodegroup_id": CATNG, "graph_id": G, "is_collector": true},
+        ],
+        "nodegroups": [
+            {"nodegroupid": INFO, "cardinality": "1", "parentnodegroup_id": null},
+            {"nodegroupid": CATNG, "cardinality": "1", "parentnodegroup_id": INFO},
+        ],
+        "edges": [
+            {"domainnode_id": "nroot", "rangenode_id": INFO, "graph_id": G},
+            {"domainnode_id": INFO, "rangenode_id": CATNG, "graph_id": G},
+        ],
+    }))
+    .unwrap();
+
+    let dir = scratch("dotted");
+    let con = duckdb::Connection::open_in_memory().unwrap();
+    con.execute_batch(
+        "CREATE TABLE t (\
+            resource_id VARCHAR, nodegroup_id VARCHAR, tileid VARCHAR,\
+            parenttile_id VARCHAR, sortorder INTEGER, data VARCHAR,\
+            descriptor_name VARCHAR, concept_id VARCHAR, q_ordered BIGINT,\
+            geo_min_lng DOUBLE, geo_max_lng DOUBLE,\
+            geo_min_lat DOUBLE, geo_max_lat DOUBLE, link_targets VARCHAR)",
+    )
+    .unwrap();
+    con.execute_batch(&format!(
+        "INSERT INTO t VALUES('{r}','{CATNG}','td',NULL,0,'{{}}','R',\
+         '{CAT_B}',NULL,NULL,NULL,NULL,NULL,NULL)"
+    ))
+    .unwrap();
+    con.execute_batch(&format!(
+        "COPY t TO '{}/tiles_test.parquet' (FORMAT PARQUET)",
+        dir.display()
+    ))
+    .unwrap();
+
+    let duck = DuckReader::open(dir.join("tiles_test.parquet").to_str().unwrap()).unwrap();
+    let registry = default_registry();
+    let query = |path: &str| Query {
+        model: G.into(),
+        r#where: Some(Expr::Concept {
+            path: path.into(),
+            op: ConceptOp::Is,
+            value: CAT_B.into(),
+        }),
+        measures: vec![Measure::SelectIds],
+        limit: None,
+    };
+
+    // The dotted path resolves the nested reference node and matches.
+    let ids = duck.resolve_ids(&query("info.category"), &graph, &registry).unwrap();
+    assert_eq!(ids, set(&[r]), "info.category resolves through the tree");
+
+    // An unknown component is a typed error, not a panic.
+    assert!(
+        duck.resolve_ids(&query("info.nope"), &graph, &registry).is_err(),
+        "unknown dotted component errors"
+    );
+}
