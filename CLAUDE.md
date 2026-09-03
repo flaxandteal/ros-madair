@@ -59,9 +59,9 @@ DuckDB + Parquet substrate):
 | `ros-madair-handlers` | Datatype → index-class classification; the CLM `reference` handler |
 | `ros-madair-format` | On-disk artifact format — manifest + versioned chunk framing (held to `wasm32`) |
 | `ros-madair-emit` | CLI/library: compile a data_dir into head + chunks + manifest, and (substrate) tile-row Parquet |
-| `ros-madair-query` | Head-schema query compiler (`Concept`/`Range`/`Bbox`/`HasLink` → head SQL) — the v1 IR compiler |
+| `ros-madair-query` | The typed `Query`/`Expr` IR (`Concept`/`Range`/`Bbox`/`HasLink`/`OnLink`) + its head-SQL compiler (the v1 backend) |
 | `ros-madair-read` | Native read path — resolve, hydrate, layered overlay, reverse traversal (`cited_by`) |
-| `ros-madair-duck` | **Substrate slice 2:** the SAME `Query` IR → DuckDB SQL over tile-row Parquet (exact spatial, exact links, concept-catalog DFS join); rehomes hydrate/overlay/`cited_by` on Parquet |
+| `ros-madair-duck` | **Substrate slice 2:** the SAME `Query` IR → DuckDB SQL over tile-row Parquet (exact spatial, exact links, concept-catalog DFS join, `OnLink` multi-hop path predicate over an edge table, layered base+overlay); rehomes hydrate/overlay/`cited_by` on Parquet |
 | `ros-madair-python` | PyO3 bindings |
 
 `emit`, `query`, `read`, and `python` depend on `format` and/or `handlers`;
@@ -90,16 +90,23 @@ alizarin graphs + resources + vocabularies (data_dir)
   concept/value/geo/link indexing, concept DFS intervals), `chunks` (msgpack
   chunk writer), `geo` (bbox extraction), `locality` (Hilbert cluster order),
   `closure`/`composability`/`manifest`, and `parquet` (the additive tile-row
-  Parquet writer — first slice of the substrate).
+  Parquet writer, plus the columnar edge table `edges_<slug>.parquet` — one row
+  per link target — that the path/multi-hop query compiler semijoins).
 - `ros-madair-read`: `lib` (open head, resolve, hydrate entry points), `layers`
   (multi-layer overlay composition + reverse traversal).
-- `ros-madair-query`: the typed `Expr`/`Query` IR and its compilation to head SQL.
+- `ros-madair-query`: the typed `Expr`/`Query` IR (incl. `OnLink`, the
+  cross-resource path predicate) and its compilation to head SQL — which rejects
+  `OnLink` as a substrate-only feature.
 - `ros-madair-duck`: `DuckReader` + `compile_expr` — the second compiler for that
-  same IR, lowering `Concept`/`Range`/`Bbox`/`HasLink`/`All`/`Any`/`Not` to DuckDB
-  SQL over the tile-row Parquet (`resolve_ids`, `count_records`), plus
+  same IR, lowering `Concept`/`Range`/`Bbox`/`HasLink`/`OnLink`/`All`/`Any`/`Not`
+  to DuckDB SQL over the tile-row Parquet (`resolve_ids`, `count_records`), plus
   `hydrate_layers`/`cited_by`/`geo_points` read from the Parquet `data` column.
-  Bundled libduckdb (json+parquet static, offline); spatial loads from a local
-  `.duckdb_extension`.
+  `OnLink` compiles to an edge-table semijoin and nests for multi-hop chains;
+  `resolve_ids_linked` supplies extra models for cross-model hops; `open_layers`
+  composes base+overlay `tiles`/`edges`/`concepts` views so a query — and a hop —
+  crosses layers. Dot-qualified paths (`address.location`) resolve through the
+  schema tree. Bundled libduckdb (json+parquet static, offline); spatial loads
+  from a local `.duckdb_extension`.
 
 ### Key design decisions
 
@@ -145,9 +152,16 @@ spatial a less complete one (the exact-intersection fine step is unimplemented;
     tile-row Parquet (all `Expr` variants, exact spatial via `ST_Intersects`,
     exact per-node `HasLink`, `DescendantOrSelfOf` as a concept-catalog DFS-interval
     join), and hydrate/overlay/`cited_by` rehomed on Parquet. Verified by
-    `crates/ros-madair-duck/tests/{behavioral,parity,descendant}.rs`. Deferred
-    within the slice: dot-qualified query paths, and per-node concept promotion
-    for a nodegroup with two concept nodes.
+    `crates/ros-madair-duck/tests/{behavioral,parity,descendant}.rs`.
+  - **Slice 2.5 — path / multi-hop queries — done.** An additive edge table
+    (`edges_<slug>.parquet`, emit) + the `OnLink` predicate (query IR) compiled to
+    leaf-first edge semijoins (duck): cross-resource, nested for multi-hop chains,
+    cross-model (`resolve_ids_linked`), and cross-layer via `open_layers`
+    (base+overlay composition of the `tiles`/`edges`/`concepts` views — so
+    cross-layer traversal needs **no shadow records**). Dot-qualified paths also
+    landed. Deferred: cardinality-n layer merge, edge-side pruning (`src_node`
+    partition / Bloom / dense ordinals), `link_targets` consolidation, and
+    per-node concept promotion (a nodegroup with two concept nodes).
   - **Slice 3 — pending.** Delete the old engine (`format` chunks, `query` head
     SQL, the emit head/chunk writer, `read::resolve`) once `duck` fully subsumes it.
   - **Slice 4 — pending.** Browser runtime → DuckDB-WASM (the same SQL `duck`

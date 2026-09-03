@@ -220,8 +220,18 @@ the emit-time **tier** (`exclude_nodegroups`) that never ships the bytes at all.
   `hydrate_layers` composes base+overlay tiles read from the Parquet `data`
   column (reusing `read`'s tile→tree hydration), and `cited_by`/`geo_points` do
   reverse link lookups over the promoted `link_targets`.
-  _Deferred within the read path:_ dot-qualified query paths, and per-node
-  concept promotion for a nodegroup carrying two concept nodes.
+- **Done — path / multi-hop queries.** An additive edge table
+  (`edges_<slug>.parquet`, one row per link target) plus the `OnLink` path
+  predicate: a cross-resource hop compiles to a leaf-first edge semijoin, nests
+  for multi-hop chains, resolves **cross-model** (`resolve_ids_linked`), and
+  crosses **layers** via `open_layers` — base+overlay composition of the
+  `tiles`/`edges`/`concepts` views, so cross-layer traversal needs **no shadow
+  records** (edges are id-based; unioning per-layer views reconnects a link in one
+  layer to its target in another). Dot-qualified paths (`address.location`)
+  resolve through the schema tree. Covered by `tests/behavioral.rs` (OnLink,
+  two-hop chain, cross-layer, cross-model, dotted paths, layered precedence).
+  _Deferred:_ cardinality-n layer merge, edge-side pruning (`src_node` partition /
+  Bloom / dense ordinals), and `link_targets` consolidation.
 - **Next — slice 4.** Delete the old engine (`format` chunks, `query` head SQL,
   the emit head/chunk writer, `read::resolve`) once callers move to `duck`;
   rewire the Python binding; browser runtime → DuckDB-WASM (the SQL `duck`
