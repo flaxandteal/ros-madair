@@ -98,9 +98,10 @@ RM-specific is kept and rehomed on top of that substrate.
 ### Why: the read engine is a reimplementation, verified
 
 Both RM and DuckDB-over-Parquet serve static files off a CDN, fetch only what
-is needed via HTTP Range, and prune coarse-then-fine. A differential harness
-(`crates/ros-madair-read/tests/duckdb_equiv.rs` + a DuckDB script over the same
-rows) established, empirically:
+is needed via HTTP Range, and prune coarse-then-fine. The original differential
+harness (`duckdb_equiv.rs`) established this empirically; now that the substrate
+read path exists, that equivalence is carried by `ros-madair-duck`'s own
+`tests/parity.rs` (same emitter, same rows, both backends). It established:
 
 - **Ranges / equality match exactly.** RM's `qvalue BETWEEN` on day-quantised
   dates == DuckDB `BETWEEN`. RM here is a hand-built SQLite index matching what
@@ -206,13 +207,26 @@ the emit-time **tier** (`exclude_nodegroups`) that never ships the bytes at all.
   columns, nodegroup partitioning, DFS hierarchical ordering + interval sidecar
   (`crates/ros-madair-emit/tests/parquet_emit.rs`). Verified against DuckDB —
   exact spatial fine step, partition pruning, subtree ranges.
-- **Next — slice 2.** DuckDB query path (SQL over Parquet, exact spatial)
-  replacing the head-SQL compiler (`query`) and the `resolve()` coarse prune;
-  differential parity check against today's `resolve()`.
-- **Slice 3.** Re-source hydration, overlay, and `cited_by` from Parquet.
-- **Slice 4.** Delete `format` (chunks), `query`, and the head/chunk writer once
-  parity holds; rewire the Python binding; browser runtime → DuckDB-WASM;
-  update CI and the `js/` glue (which still reference the removed WASM client).
+- **Done — slice 2 (DuckDB query path).** `ros-madair-duck` compiles the SAME
+  `Query` IR to DuckDB SQL over Parquet: all `Expr` variants (`All`/`Any`/`Not` →
+  `INTERSECT`/`UNION`/`EXCEPT`), `Concept` `Is` + `DescendantOrSelfOf` (catalog
+  DFS-interval join), `Range`, exact per-node `HasLink`, and `Bbox` with an
+  **exact `ST_Intersects` fine step** (the head never implemented it), degrading
+  to the coarse superset where the spatial extension is unavailable. Bundled
+  libduckdb (json+parquet static, offline). Verified by `tests/parity.rs`
+  (parity with the emitter's rows) and `tests/behavioral.rs` (every `Expr`
+  variant + `count_records`).
+- **Done — slice 3 (hydration/overlay/`cited_by` on Parquet).** `duck`'s
+  `hydrate_layers` composes base+overlay tiles read from the Parquet `data`
+  column (reusing `read`'s tile→tree hydration), and `cited_by`/`geo_points` do
+  reverse link lookups over the promoted `link_targets`.
+  _Deferred within the read path:_ dot-qualified query paths, and per-node
+  concept promotion for a nodegroup carrying two concept nodes.
+- **Next — slice 4.** Delete the old engine (`format` chunks, `query` head SQL,
+  the emit head/chunk writer, `read::resolve`) once callers move to `duck`;
+  rewire the Python binding; browser runtime → DuckDB-WASM (the SQL `duck`
+  already compiles); update CI and the `js/` glue (which still reference the
+  removed WASM client).
 
 ## Dependencies
 

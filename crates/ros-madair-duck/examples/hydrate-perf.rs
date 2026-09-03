@@ -67,7 +67,7 @@ fn main() {
         overlays.len(),
         uuid
     );
-    let composed = LayeredGraph::over(base, overlays);
+    let composed = LayeredGraph::new(base, overlays);
     // Empty registry: the derive is one word's paradigm (cheap); this isolates the
     // gather / labels / tree cost that dominates the ~1s.
     let registry = alizarin_core::default_functions_registry();

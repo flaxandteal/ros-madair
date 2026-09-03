@@ -1,0 +1,486 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+//! **Self-contained behavioral tests for the DuckDB read path.**
+//!
+//! Hand-writes minimal Parquet via DuckDB (no external fixtures), covering
+//! query compilation across all `Expr` variants, tile round-trip, display
+//! lookups, and reverse-link geo queries.
+//!
+//! Corpus: three resources × four nodegroups (date, reference, geojson, link).
+//!   r1: founded 2005, category A, point(0,0), links→r3, descriptor "Alpha"
+//!   r2: founded 2020, category A, point(50,50), links→r3, descriptor "Beta"
+//!   r3: founded 1900, category B, point(100,100), no links, descriptor "Gamma"
+//! Concept catalog: A (root, dfs 0..1) → B (leaf, dfs 1..1).
+
+use std::path::PathBuf;
+
+use alizarin_core::graph::StaticGraph;
+use alizarin_core::quantize::quantize_date;
+use ros_madair_duck::DuckReader;
+use ros_madair_handlers::default_registry;
+use ros_madair_query::{ConceptOp, Expr, Measure, Query};
+use serde_json::json;
+
+const NG_DATE: &str = "dd000000-0000-4000-8000-000000000001";
+const NG_REF: &str = "cc000000-0000-4000-8000-000000000002";
+const NG_GEO: &str = "gg000000-0000-4000-8000-000000000003";
+const NG_LINK: &str = "ll000000-0000-4000-8000-000000000004";
+
+const R1: &str = "11110000-0000-4000-8000-000000000001";
+const R2: &str = "22220000-0000-4000-8000-000000000002";
+const R3: &str = "33330000-0000-4000-8000-000000000003";
+
+const CAT_A: &str = "aaaaaaaa-0000-4000-8000-000000000001";
+const CAT_B: &str = "bbbbbbbb-0000-4000-8000-000000000002";
+
+fn scratch(tag: &str) -> PathBuf {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static N: AtomicU64 = AtomicU64::new(0);
+    let n = N.fetch_add(1, Ordering::Relaxed);
+    let dir = std::env::temp_dir().join(format!(
+        "rm-behav-{tag}-{}-{n}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    dir
+}
+
+fn graph() -> StaticGraph {
+    serde_json::from_value(json!({
+        "graphid": "test-g",
+        "name": "TestGraph",
+        "root": {
+            "nodeid": "root", "name": "Root", "datatype": "semantic",
+            "graph_id": "test-g"
+        },
+        "nodes": [
+            {
+                "nodeid": "root", "name": "Root", "datatype": "semantic",
+                "graph_id": "test-g"
+            },
+            {
+                "nodeid": NG_DATE, "name": "Founded", "alias": "founded",
+                "datatype": "date", "nodegroup_id": NG_DATE,
+                "graph_id": "test-g", "is_collector": true
+            },
+            {
+                "nodeid": NG_REF, "name": "Category", "alias": "category",
+                "datatype": "reference", "nodegroup_id": NG_REF,
+                "graph_id": "test-g", "is_collector": true
+            },
+            {
+                "nodeid": NG_GEO, "name": "Location", "alias": "location",
+                "datatype": "geojson-feature-collection", "nodegroup_id": NG_GEO,
+                "graph_id": "test-g", "is_collector": true
+            },
+            {
+                "nodeid": NG_LINK, "name": "Related", "alias": "related",
+                "datatype": "resource-instance-list", "nodegroup_id": NG_LINK,
+                "graph_id": "test-g", "is_collector": true
+            },
+        ],
+        "nodegroups": [
+            {"nodegroupid": NG_DATE, "cardinality": "1", "parentnodegroup_id": null},
+            {"nodegroupid": NG_REF, "cardinality": "1", "parentnodegroup_id": null},
+            {"nodegroupid": NG_GEO, "cardinality": "1", "parentnodegroup_id": null},
+            {"nodegroupid": NG_LINK, "cardinality": "1", "parentnodegroup_id": null},
+        ],
+        "edges": [
+            {"domainnode_id": "root", "rangenode_id": NG_DATE, "graph_id": "test-g"},
+            {"domainnode_id": "root", "rangenode_id": NG_REF, "graph_id": "test-g"},
+            {"domainnode_id": "root", "rangenode_id": NG_GEO, "graph_id": "test-g"},
+            {"domainnode_id": "root", "rangenode_id": NG_LINK, "graph_id": "test-g"},
+        ],
+    }))
+    .unwrap()
+}
+
+// --- data column builders (serde_json avoids manual JSON-in-SQL escaping) ---
+
+fn tile_data(node_id: &str, value: serde_json::Value) -> String {
+    let mut m = serde_json::Map::new();
+    m.insert(node_id.to_string(), value);
+    serde_json::to_string(&serde_json::Value::Object(m)).unwrap()
+}
+
+fn geo_fc(lng: f64, lat: f64) -> serde_json::Value {
+    json!({
+        "type": "FeatureCollection",
+        "features": [{
+            "type": "Feature",
+            "properties": {},
+            "geometry": {"type": "Point", "coordinates": [lng, lat]}
+        }]
+    })
+}
+
+fn link_targets_json(node_id: &str, targets: &[&str]) -> String {
+    let mut m = serde_json::Map::new();
+    m.insert(node_id.to_string(), json!(targets));
+    serde_json::to_string(&serde_json::Value::Object(m)).unwrap()
+}
+
+// --- fixture ---
+
+/// Build a 3-resource, 4-nodegroup tile Parquet + concept catalog.
+/// Returns (dir, graph) — dir holds `tiles_test.parquet` and
+/// `concept_catalog.parquet`.
+fn fixture() -> (PathBuf, StaticGraph) {
+    let dir = scratch("fix");
+    let tiles = dir.join("tiles_test.parquet");
+    let catalog = dir.join("concept_catalog.parquet");
+
+    let q_2005 = quantize_date("2005-06-01").unwrap();
+    let q_2020 = quantize_date("2020-03-15").unwrap();
+    let q_1900 = quantize_date("1900-01-01").unwrap();
+
+    let r1_date = tile_data(NG_DATE, json!("2005-06-01"));
+    let r1_ref = tile_data(NG_REF, json!([CAT_A]));
+    let r1_geo = tile_data(NG_GEO, geo_fc(0.0, 0.0));
+    let r1_link = tile_data(NG_LINK, json!([{"resourceId": R3}]));
+    let r1_lt = link_targets_json(NG_LINK, &[R3]);
+
+    let r2_date = tile_data(NG_DATE, json!("2020-03-15"));
+    let r2_ref = tile_data(NG_REF, json!([CAT_A]));
+    let r2_geo = tile_data(NG_GEO, geo_fc(50.0, 50.0));
+    let r2_link = tile_data(NG_LINK, json!([{"resourceId": R3}]));
+    let r2_lt = link_targets_json(NG_LINK, &[R3]);
+
+    let r3_date = tile_data(NG_DATE, json!("1900-01-01"));
+    let r3_ref = tile_data(NG_REF, json!([CAT_B]));
+    let r3_geo = tile_data(NG_GEO, geo_fc(100.0, 100.0));
+
+    let con = duckdb::Connection::open_in_memory().unwrap();
+    con.execute_batch(
+        "CREATE TABLE t (\
+            resource_id VARCHAR, nodegroup_id VARCHAR, tileid VARCHAR,\
+            parenttile_id VARCHAR, sortorder INTEGER, data VARCHAR,\
+            descriptor_name VARCHAR, concept_id VARCHAR, q_ordered BIGINT,\
+            geo_min_lng DOUBLE, geo_max_lng DOUBLE,\
+            geo_min_lat DOUBLE, geo_max_lat DOUBLE,\
+            link_targets VARCHAR\
+        )",
+    )
+    .unwrap();
+
+    let ins = |sql: &str| con.execute_batch(sql).unwrap();
+
+    // r1 tiles (descriptor "Alpha" on every row, matching emitter behaviour)
+    ins(&format!("INSERT INTO t VALUES('{R1}','{NG_DATE}','t01',NULL,0,'{r1_date}','Alpha',NULL,{q_2005},NULL,NULL,NULL,NULL,NULL)"));
+    ins(&format!("INSERT INTO t VALUES('{R1}','{NG_REF}','t02',NULL,0,'{r1_ref}','Alpha','{CAT_A}',NULL,NULL,NULL,NULL,NULL,NULL)"));
+    ins(&format!("INSERT INTO t VALUES('{R1}','{NG_GEO}','t03',NULL,0,'{r1_geo}','Alpha',NULL,NULL,0.0,0.0,0.0,0.0,NULL)"));
+    ins(&format!("INSERT INTO t VALUES('{R1}','{NG_LINK}','t04',NULL,0,'{r1_link}','Alpha',NULL,NULL,NULL,NULL,NULL,NULL,'{r1_lt}')"));
+
+    // r2 tiles
+    ins(&format!("INSERT INTO t VALUES('{R2}','{NG_DATE}','t05',NULL,0,'{r2_date}','Beta',NULL,{q_2020},NULL,NULL,NULL,NULL,NULL)"));
+    ins(&format!("INSERT INTO t VALUES('{R2}','{NG_REF}','t06',NULL,0,'{r2_ref}','Beta','{CAT_A}',NULL,NULL,NULL,NULL,NULL,NULL)"));
+    ins(&format!("INSERT INTO t VALUES('{R2}','{NG_GEO}','t07',NULL,0,'{r2_geo}','Beta',NULL,NULL,50.0,50.0,50.0,50.0,NULL)"));
+    ins(&format!("INSERT INTO t VALUES('{R2}','{NG_LINK}','t08',NULL,0,'{r2_link}','Beta',NULL,NULL,NULL,NULL,NULL,NULL,'{r2_lt}')"));
+
+    // r3 tiles (no link tile)
+    ins(&format!("INSERT INTO t VALUES('{R3}','{NG_DATE}','t09',NULL,0,'{r3_date}','Gamma',NULL,{q_1900},NULL,NULL,NULL,NULL,NULL)"));
+    ins(&format!("INSERT INTO t VALUES('{R3}','{NG_REF}','t10',NULL,0,'{r3_ref}','Gamma','{CAT_B}',NULL,NULL,NULL,NULL,NULL,NULL)"));
+    ins(&format!("INSERT INTO t VALUES('{R3}','{NG_GEO}','t11',NULL,0,'{r3_geo}','Gamma',NULL,NULL,100.0,100.0,100.0,100.0,NULL)"));
+
+    con.execute_batch(&format!(
+        "COPY t TO '{}' (FORMAT PARQUET)",
+        tiles.display()
+    ))
+    .unwrap();
+
+    // Concept catalog: A is root (dfs 0..1), B is child leaf (dfs 1..1).
+    con.execute_batch(&format!(
+        "COPY (SELECT * FROM (VALUES \
+            ('{CAT_A}',0,1,'Category A'),\
+            ('{CAT_B}',1,1,'Category B')\
+        ) c(concept_id, dfs_enter, dfs_leave, label)) TO '{}' (FORMAT PARQUET)",
+        catalog.display()
+    ))
+    .unwrap();
+
+    (dir, graph())
+}
+
+fn q(w: Expr) -> Query {
+    Query {
+        model: "test-g".into(),
+        r#where: Some(w),
+        measures: vec![Measure::SelectIds],
+        limit: None,
+    }
+}
+
+fn set(xs: &[&str]) -> Vec<String> {
+    let mut v: Vec<String> = xs.iter().map(|s| s.to_string()).collect();
+    v.sort();
+    v
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn query_resolution_covers_all_expr_variants() {
+    let (dir, graph) = fixture();
+    let registry = default_registry();
+    let duck = DuckReader::open_with_catalog(
+        dir.join("tiles_test.parquet").to_str().unwrap(),
+        dir.join("concept_catalog.parquet").to_str().unwrap(),
+    )
+    .unwrap();
+    let ids = |w: Expr| {
+        let mut v = duck.resolve_ids(&q(w), &graph, &registry).unwrap();
+        v.sort();
+        v
+    };
+
+    // Range (date / Ordered)
+    assert_eq!(
+        ids(Expr::Range {
+            path: "founded".into(),
+            lo: quantize_date("2000-01-01").unwrap(),
+            hi: quantize_date("2010-12-31").unwrap(),
+        }),
+        set(&[R1]),
+        "range 2000-2010 = r1"
+    );
+    assert_eq!(
+        ids(Expr::Range {
+            path: "founded".into(),
+            lo: quantize_date("1800-01-01").unwrap(),
+            hi: quantize_date("2100-01-01").unwrap(),
+        }),
+        set(&[R1, R2, R3]),
+        "range 1800-2100 = all"
+    );
+
+    // Concept Is (reference / ConceptHierarchical)
+    assert_eq!(
+        ids(Expr::Concept {
+            path: "category".into(),
+            op: ConceptOp::Is,
+            value: CAT_A.into(),
+        }),
+        set(&[R1, R2]),
+        "concept-is A"
+    );
+    assert_eq!(
+        ids(Expr::Concept {
+            path: "category".into(),
+            op: ConceptOp::Is,
+            value: CAT_B.into(),
+        }),
+        set(&[R3]),
+        "concept-is B"
+    );
+
+    // DescendantOrSelfOf — A is root (dfs 0..1), B is child (dfs 1..1);
+    // subtree(A) covers both, subtree(B) covers only B.
+    assert_eq!(
+        ids(Expr::Concept {
+            path: "category".into(),
+            op: ConceptOp::DescendantOrSelfOf,
+            value: CAT_A.into(),
+        }),
+        set(&[R1, R2, R3]),
+        "descendant-or-self(A) = all"
+    );
+    assert_eq!(
+        ids(Expr::Concept {
+            path: "category".into(),
+            op: ConceptOp::DescendantOrSelfOf,
+            value: CAT_B.into(),
+        }),
+        set(&[R3]),
+        "descendant-or-self(B) = r3"
+    );
+
+    // Bbox — coarse at minimum; fine if spatial is loaded. Point(0,0) is
+    // inside (-1,-1)-(1,1); Point(50,50) and Point(100,100) are not.
+    assert_eq!(
+        ids(Expr::Bbox {
+            path: "location".into(),
+            min_lng: -1.0,
+            min_lat: -1.0,
+            max_lng: 1.0,
+            max_lat: 1.0,
+        }),
+        set(&[R1]),
+        "bbox around origin = r1"
+    );
+
+    // HasLink
+    assert_eq!(
+        ids(Expr::HasLink { path: "related".into(), target: Some(R3.into()) }),
+        set(&[R1, R2]),
+        "haslink(r3)"
+    );
+    assert_eq!(
+        ids(Expr::HasLink { path: "related".into(), target: None }),
+        set(&[R1, R2]),
+        "haslink(any)"
+    );
+    assert_eq!(
+        ids(Expr::HasLink { path: "related".into(), target: Some(R1.into()) }),
+        Vec::<String>::new(),
+        "haslink(r1) = nobody"
+    );
+
+    // Compound: All, Any, Not
+    assert_eq!(
+        ids(Expr::All(vec![
+            Expr::Concept { path: "category".into(), op: ConceptOp::Is, value: CAT_A.into() },
+            Expr::Range {
+                path: "founded".into(),
+                lo: quantize_date("2015-01-01").unwrap(),
+                hi: quantize_date("2025-01-01").unwrap(),
+            },
+        ])),
+        set(&[R2]),
+        "all(cat-A AND 2015-2025) = r2"
+    );
+    assert_eq!(
+        ids(Expr::Any(vec![
+            Expr::Concept { path: "category".into(), op: ConceptOp::Is, value: CAT_A.into() },
+            Expr::Concept { path: "category".into(), op: ConceptOp::Is, value: CAT_B.into() },
+        ])),
+        set(&[R1, R2, R3]),
+        "any(cat-A OR cat-B) = all"
+    );
+    assert_eq!(
+        ids(Expr::Not(Box::new(Expr::Concept {
+            path: "category".into(),
+            op: ConceptOp::Is,
+            value: CAT_A.into(),
+        }))),
+        set(&[R3]),
+        "not(cat-A) = r3"
+    );
+
+    // Vacuous: empty All = all, empty Any = none
+    assert_eq!(ids(Expr::All(vec![])), set(&[R1, R2, R3]), "empty All = all");
+    assert_eq!(ids(Expr::Any(vec![])), Vec::<String>::new(), "empty Any = none");
+
+    // count_records agrees with resolve_ids length
+    let count = duck
+        .count_records(
+            &q(Expr::Range {
+                path: "founded".into(),
+                lo: quantize_date("1800-01-01").unwrap(),
+                hi: quantize_date("2100-01-01").unwrap(),
+            }),
+            &graph,
+            &registry,
+        )
+        .unwrap();
+    assert_eq!(count, 3, "count_records = len(resolve_ids)");
+}
+
+#[test]
+fn resource_tiles_round_trip() {
+    let (dir, _) = fixture();
+    let duck =
+        DuckReader::open(dir.join("tiles_test.parquet").to_str().unwrap()).unwrap();
+
+    let tiles = duck.resource_tiles(R1).unwrap();
+    assert_eq!(tiles.len(), 4, "r1 has 4 tiles");
+
+    let mut ngs: Vec<&str> = tiles.iter().map(|t| t.nodegroup_id.as_str()).collect();
+    ngs.sort();
+    assert_eq!(ngs, {
+        let mut v = vec![NG_DATE, NG_GEO, NG_LINK, NG_REF];
+        v.sort();
+        v
+    });
+
+    let date_tile = tiles.iter().find(|t| t.nodegroup_id == NG_DATE).unwrap();
+    assert_eq!(date_tile.data[NG_DATE], json!("2005-06-01"), "data round-trips");
+    assert_eq!(date_tile.tileid.as_deref(), Some("t01"), "tileid preserved");
+    assert_eq!(date_tile.resourceinstance_id, R1, "resource id set");
+
+    assert!(
+        duck.resource_tiles("nonexistent").unwrap().is_empty(),
+        "missing resource -> empty"
+    );
+}
+
+#[test]
+fn descriptors_and_concept_labels() {
+    let (dir, _) = fixture();
+    let duck = DuckReader::open_with_catalog(
+        dir.join("tiles_test.parquet").to_str().unwrap(),
+        dir.join("concept_catalog.parquet").to_str().unwrap(),
+    )
+    .unwrap();
+
+    let uris = vec![R1.into(), R2.into(), R3.into()];
+    let descs = duck.descriptors(&uris).unwrap();
+    assert_eq!(descs.get(R1).map(String::as_str), Some("Alpha"));
+    assert_eq!(descs.get(R2).map(String::as_str), Some("Beta"));
+    assert_eq!(descs.get(R3).map(String::as_str), Some("Gamma"));
+    assert!(duck.descriptors(&[]).unwrap().is_empty(), "empty in -> empty out");
+
+    let labels = duck.concept_labels().unwrap();
+    assert_eq!(labels.get(CAT_A).map(String::as_str), Some("Category A"));
+    assert_eq!(labels.get(CAT_B).map(String::as_str), Some("Category B"));
+
+    assert_eq!(duck.concept_label(CAT_A).unwrap().as_deref(), Some("Category A"));
+    assert_eq!(duck.concept_label("nonexistent").unwrap(), None);
+}
+
+#[test]
+fn geo_points_reverse_link_lookup() {
+    let (dir, _) = fixture();
+    let duck =
+        DuckReader::open(dir.join("tiles_test.parquet").to_str().unwrap()).unwrap();
+
+    let mut pts = duck.geo_points(NG_LINK, R3).unwrap();
+    pts.sort_by(|a, b| a.0.cmp(&b.0));
+    assert_eq!(pts.len(), 2, "r1 and r2 link to r3");
+    assert_eq!(pts[0].0, R1);
+    assert_eq!(pts[0].1, "Alpha", "descriptor from link tile");
+    assert_eq!((pts[0].2, pts[0].3), (0.0, 0.0), "r1 geo");
+    assert_eq!(pts[1].0, R2);
+    assert_eq!(pts[1].1, "Beta");
+    assert_eq!((pts[1].2, pts[1].3), (50.0, 50.0), "r2 geo");
+
+    assert!(
+        duck.geo_points(NG_LINK, R1).unwrap().is_empty(),
+        "nobody links to r1"
+    );
+}
+
+#[test]
+fn hydrate_layers_single_layer_smoke() {
+    let (dir, graph) = fixture();
+    // hydrate_layers now takes a LayeredGraph. `new` rejects an empty overlay set
+    // ("use StaticGraph directly"), so the degenerate single-layer case is the
+    // base plus a clone as the sole overlay — the same idiom alizarin-core's own
+    // tests use for a one-graph LayeredGraph.
+    let composed = alizarin_core::LayeredGraph::new(
+        std::sync::Arc::new(graph.clone()),
+        vec![std::sync::Arc::new(graph)],
+    );
+    let fn_registry = alizarin_core::default_functions_registry();
+    let result = ros_madair_duck::hydrate_layers(
+        &[dir.as_path()],
+        R1,
+        &composed,
+        &["en"],
+        None,
+        &fn_registry,
+    )
+    .unwrap();
+    assert!(result.is_object(), "hydrate returns a JSON tree");
+
+    let err = ros_madair_duck::hydrate_layers(
+        &[dir.as_path()],
+        "nonexistent",
+        &composed,
+        &["en"],
+        None,
+        &fn_registry,
+    );
+    assert!(err.is_err(), "missing resource -> error");
+}

@@ -51,19 +51,24 @@ zensical build --clean                 # output in site/
 
 ## Architecture
 
-Six-crate Rust workspace (the "v2 static-assets" stack):
+Seven-crate Rust workspace (the "v2 static-assets" stack, mid-migration to the
+DuckDB + Parquet substrate):
 
 | Crate | Purpose |
 |-------|---------|
 | `ros-madair-handlers` | Datatype → index-class classification; the CLM `reference` handler |
 | `ros-madair-format` | On-disk artifact format — manifest + versioned chunk framing (held to `wasm32`) |
-| `ros-madair-emit` | CLI/library: compile a data_dir into head + chunks + manifest |
-| `ros-madair-query` | Head-schema query compiler (`Concept`/`Range`/`Bbox`/`HasLink` → SQL) |
+| `ros-madair-emit` | CLI/library: compile a data_dir into head + chunks + manifest, and (substrate) tile-row Parquet |
+| `ros-madair-query` | Head-schema query compiler (`Concept`/`Range`/`Bbox`/`HasLink` → head SQL) — the v1 IR compiler |
 | `ros-madair-read` | Native read path — resolve, hydrate, layered overlay, reverse traversal (`cited_by`) |
+| `ros-madair-duck` | **Substrate slice 2:** the SAME `Query` IR → DuckDB SQL over tile-row Parquet (exact spatial, exact links, concept-catalog DFS join); rehomes hydrate/overlay/`cited_by` on Parquet |
 | `ros-madair-python` | PyO3 bindings |
 
-`emit`, `query`, `read`, and `python` depend on `format` and/or `handlers`; none
-of them depend on each other in a cycle.
+`emit`, `query`, `read`, and `python` depend on `format` and/or `handlers`;
+`duck` depends on `query` (the IR) and `read` (tile→tree hydration). None form a
+cycle. Note there are now **two compilers for one IR**: `query` → head SQL (v1)
+and `duck` → Parquet SQL (the substrate); a consumer picks a backend without
+rewriting queries.
 
 ### Data flow
 
@@ -89,6 +94,12 @@ alizarin graphs + resources + vocabularies (data_dir)
 - `ros-madair-read`: `lib` (open head, resolve, hydrate entry points), `layers`
   (multi-layer overlay composition + reverse traversal).
 - `ros-madair-query`: the typed `Expr`/`Query` IR and its compilation to head SQL.
+- `ros-madair-duck`: `DuckReader` + `compile_expr` — the second compiler for that
+  same IR, lowering `Concept`/`Range`/`Bbox`/`HasLink`/`All`/`Any`/`Not` to DuckDB
+  SQL over the tile-row Parquet (`resolve_ids`, `count_records`), plus
+  `hydrate_layers`/`cited_by`/`geo_points` read from the Parquet `data` column.
+  Bundled libduckdb (json+parquet static, offline); spatial loads from a local
+  `.duckdb_extension`.
 
 ### Key design decisions
 
@@ -127,13 +138,25 @@ spatial a less complete one (the exact-intersection fine step is unimplemented;
 - **Keep** what Parquet does not give: layered **base+overlay**, reverse
   traversal (`cited_by`), Arches **tile-graph hydration**. **Pagefind stays
   separate** for full-text (zone-maps have no order to prune text on).
-- **Status:** v1 deleted; slice 1 (additive tile-row Parquet emit) built in
-  `ros-madair-emit`'s `parquet` module + tests. Slices 2–4 (DuckDB query path,
-  rehome hydration/overlay/cited_by, delete the old engine, browser →
-  DuckDB-WASM) pending.
+- **Status:**
+  - **Slice 1 — done.** Additive tile-row Parquet emit in `ros-madair-emit`'s
+    `parquet` module (+ tests).
+  - **Slice 2 — done.** `ros-madair-duck`: the `Query` IR → DuckDB SQL over
+    tile-row Parquet (all `Expr` variants, exact spatial via `ST_Intersects`,
+    exact per-node `HasLink`, `DescendantOrSelfOf` as a concept-catalog DFS-interval
+    join), and hydrate/overlay/`cited_by` rehomed on Parquet. Verified by
+    `crates/ros-madair-duck/tests/{behavioral,parity,descendant}.rs`. Deferred
+    within the slice: dot-qualified query paths, and per-node concept promotion
+    for a nodegroup with two concept nodes.
+  - **Slice 3 — pending.** Delete the old engine (`format` chunks, `query` head
+    SQL, the emit head/chunk writer, `read::resolve`) once `duck` fully subsumes it.
+  - **Slice 4 — pending.** Browser runtime → DuckDB-WASM (the same SQL `duck`
+    compiles, run in the browser; the `ros-madair-docs` demos already do this by
+    hand pending a WASM/JS path for the compiler).
 
-See the README's Direction section for the full findings, the differential
-harness (`crates/ros-madair-read/tests/duckdb_equiv.rs`), and the roadmap.
+See the README's Direction section for the full findings and the roadmap. The
+original differential harness (`duckdb_equiv.rs`) has been superseded by
+`ros-madair-duck`'s `tests/parity.rs` (both backends over the emitter's rows).
 
 ## External dependency: alizarin-core
 
