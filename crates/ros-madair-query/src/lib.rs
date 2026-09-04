@@ -1379,6 +1379,109 @@ fn target_models_of(node: &StaticNode) -> Vec<String> {
 }
 
 // ---------------------------------------------------------------------------
+// Explain (IR → English, for verifying a NL → IR translation)
+// ---------------------------------------------------------------------------
+
+/// Render a query back to English prose so a caller — or an LLM/skill — can VERIFY
+/// a natural-language → IR translation before running it. The distinction it exists
+/// to surface: `OnTile` reads as "a single <nodegroup> record where …" (correlated),
+/// while `All` reads as a plain conjunction (independent across the resource) — the
+/// tell that catches a "built by Lanyon in 1860" which silently became two separate
+/// facts.
+///
+/// Values render as-is (concept/resource ids, quantized range endpoints); structure,
+/// not labels, is what catches a mistranslation. A caller holding a label map can
+/// substitute human labels afterward.
+pub fn explain(query: &Query, graph: &StaticGraph) -> String {
+    let resolver = PathResolver::new(graph);
+    let verb = match (
+        query.measures.contains(&Measure::CountRecords),
+        query.measures.contains(&Measure::SelectIds),
+    ) {
+        (true, true) => "Count and list",
+        (true, false) => "Count",
+        _ => "List",
+    };
+    let clause = match &query.r#where {
+        Some(e) => format!("where {}", explain_expr(e, &resolver, graph)),
+        None => "(no filter)".to_string(),
+    };
+    format!("{verb} '{}' records {clause}.", query.model)
+}
+
+fn explain_expr(expr: &Expr, resolver: &PathResolver, graph: &StaticGraph) -> String {
+    match expr {
+        Expr::All(cs) if cs.is_empty() => "anything".to_string(),
+        Expr::Any(cs) if cs.is_empty() => "nothing".to_string(),
+        Expr::All(cs) => explain_join(cs, " and ", resolver, graph),
+        Expr::Any(cs) => explain_join(cs, " or ", resolver, graph),
+        Expr::Not(inner) => format!("not ({})", explain_expr(inner, resolver, graph)),
+        Expr::Concept { path, op, value } => match op {
+            ConceptOp::Is => format!("{path} is {value}"),
+            ConceptOp::DescendantOrSelfOf => format!("{path} is {value} or a narrower concept"),
+        },
+        Expr::Range { path, lo, hi } => format!("{path} is between {lo} and {hi} (quantized)"),
+        Expr::Bbox { path, min_lng, min_lat, max_lng, max_lat } => {
+            format!("{path} lies within ({min_lng}, {min_lat})–({max_lng}, {max_lat})")
+        }
+        Expr::HasLink { path, target } => match target {
+            Some(t) => format!("{path} links to {t}"),
+            None => format!("{path} has any link"),
+        },
+        Expr::OnLink { path, model, r#where } => format!(
+            "{path} points to a '{model}' record where {}",
+            explain_expr(r#where, resolver, graph)
+        ),
+        Expr::OnTile(cs) => format!(
+            "a single {} record where {}",
+            tile_group_name(cs, resolver, graph),
+            explain_join(cs, " and ", resolver, graph)
+        ),
+    }
+}
+
+/// Join child clauses, parenthesizing each when there is more than one.
+fn explain_join(children: &[Expr], sep: &str, resolver: &PathResolver, graph: &StaticGraph) -> String {
+    if children.len() == 1 {
+        return explain_expr(&children[0], resolver, graph);
+    }
+    children
+        .iter()
+        .map(|c| format!("({})", explain_expr(c, resolver, graph)))
+        .collect::<Vec<_>>()
+        .join(sep)
+}
+
+/// A human name for the nodegroup an `OnTile`'s children share — the collector
+/// node's alias, else the nodegroup id, else "record". Best-effort (explain never
+/// errors); the compiler is what enforces a single nodegroup.
+fn tile_group_name(children: &[Expr], resolver: &PathResolver, graph: &StaticGraph) -> String {
+    for c in children {
+        if let Some(ng) = explain_leaf_ng(c, resolver) {
+            if let Some(node) = graph.get_node_by_id(&ng) {
+                return node.alias.clone().unwrap_or(ng);
+            }
+            return ng;
+        }
+    }
+    "record".to_string()
+}
+
+fn explain_leaf_ng(expr: &Expr, resolver: &PathResolver) -> Option<String> {
+    match expr {
+        Expr::Concept { path, .. }
+        | Expr::Range { path, .. }
+        | Expr::Bbox { path, .. }
+        | Expr::HasLink { path, .. }
+        | Expr::OnLink { path, .. } => resolver.resolve(path).ok().and_then(|n| n.nodegroup_id.clone()),
+        Expr::All(cs) | Expr::Any(cs) | Expr::OnTile(cs) => {
+            cs.iter().find_map(|c| explain_leaf_ng(c, resolver))
+        }
+        Expr::Not(inner) => explain_leaf_ng(inner, resolver),
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -1457,6 +1560,40 @@ mod tests {
         // Serializes as a compact snake_case surface for an MCP call.
         let json = serde_json::to_string(&cat).unwrap();
         assert!(json.contains("\"predicate\":\"link\""), "predicate hint present: {json}");
+    }
+
+    #[test]
+    fn explain_surfaces_on_tile_vs_all_distinction() {
+        let g = catalog_graph();
+        let founded = Expr::Range { path: "founded".into(), lo: 100, hi: 200 };
+        let maker = Expr::HasLink { path: "maker".into(), target: Some("x".into()) };
+        let q = |w: Expr| Query {
+            model: "thing".into(),
+            r#where: Some(w),
+            measures: vec![Measure::CountRecords],
+            limit: None,
+        };
+
+        // `All`: a plain conjunction — must NOT read as one record.
+        let all = explain(&q(Expr::All(vec![founded.clone(), maker.clone()])), &g);
+        assert!(all.contains("founded is between 100 and 200"), "{all}");
+        assert!(all.contains("maker links to x"), "{all}");
+        assert!(!all.contains("a single"), "All must not read as one record: {all}");
+
+        // `OnTile`: the same-record tell that catches the mistranslation.
+        let on_tile = explain(&q(Expr::OnTile(vec![founded, maker])), &g);
+        assert!(on_tile.contains("a single"), "OnTile must read as one record: {on_tile}");
+        assert!(on_tile.contains("record where"), "{on_tile}");
+
+        // Concept descendant renders the hierarchy hint.
+        let c = explain(
+            &q(Expr::Concept { path: "kind".into(), op: ConceptOp::DescendantOrSelfOf, value: "z".into() }),
+            &g,
+        );
+        assert!(c.contains("kind is z or a narrower concept"), "{c}");
+
+        // The verb reflects the measure.
+        assert!(all.starts_with("Count 'thing' records where"), "{all}");
     }
 
     /// Same load pattern as json_conversion.rs tests.
