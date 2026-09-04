@@ -1190,6 +1190,195 @@ fn first_coarse_path(expr: &Expr) -> Option<&str> {
 }
 
 // ---------------------------------------------------------------------------
+// Model catalog (discovery surface for an LLM / MCP translation layer)
+// ---------------------------------------------------------------------------
+
+/// Which IR predicate a node answers — the discovery hint a caller needs to know
+/// *which* [`Expr`] to build for a path, without trial-and-error.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum NodePredicate {
+    /// concept / concept-list / domain-value / (ext) reference → [`Expr::Concept`].
+    Concept,
+    /// date / ordered scalar → [`Expr::Range`].
+    Range,
+    /// geometry → [`Expr::Bbox`].
+    Bbox,
+    /// resource-instance(-list) → [`Expr::HasLink`], and [`Expr::OnLink`] for a
+    /// cross-model hop (whose inner predicate can nest an [`Expr::OnTile`]).
+    Link,
+    /// Not substrate-indexed — available only in the hydrated tile (post-filter).
+    Detail,
+}
+
+/// One queryable path in a model: enough for a caller to form a predicate against
+/// it without loading the whole graph.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct PathDescriptor {
+    /// Dotted alias path from the root (e.g. `"construction.founded"`); also usable
+    /// bare (`"founded"`) when the alias is unambiguous.
+    pub path: String,
+    /// The leaf alias.
+    pub alias: String,
+    /// The Arches datatype.
+    pub datatype: String,
+    /// Which IR predicate this node answers.
+    pub predicate: NodePredicate,
+    /// The node's nodegroup id — the correlation unit for [`Expr::OnTile`]: two
+    /// paths sharing a `nodegroup` can be co-required on one tile.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub nodegroup: Option<String>,
+    /// For a `Link` node: the permitted target **model** graph-ids it may point at,
+    /// from the node's `graphs` schema config, so an [`Expr::OnLink`] hop's `model`
+    /// can be discovered. This is schema-level (which models a hop *may* reach), NOT
+    /// the retired per-tile `link_targets` column (actual target resources, now the
+    /// edge table). Empty when the model does not declare them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub target_models: Vec<String>,
+}
+
+/// A compact, serializable description of every queryable path in one model — the
+/// discovery surface for a natural-language → IR translation layer (e.g. Clódóir's
+/// skill / MCP). Build it once per model; hold it or transmit it as JSON. It
+/// answers "what can I filter on, and with which predicate?" so a caller forms a
+/// valid query without holding the whole graph or guessing datatypes.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ModelCatalog {
+    /// The emitted slug (a valid [`Query::model`]).
+    pub model: String,
+    /// The graph UUID.
+    pub graph_id: String,
+    /// The display name.
+    pub name: String,
+    /// Every aliased path, sorted by path for a stable surface.
+    pub paths: Vec<PathDescriptor>,
+}
+
+impl ModelCatalog {
+    /// Build the catalog for `graph`. Pass the extension registry to classify
+    /// extension datatypes (e.g. CLM `reference` → `Concept`); with `None`, only
+    /// core datatypes classify and extension nodes read as `Detail` — the same
+    /// registry discipline [`compile_with_registry`] follows.
+    pub fn build(graph: &StaticGraph, registry: Option<&ExtensionTypeRegistry>) -> Self {
+        let mut children: HashMap<&str, Vec<&str>> = HashMap::new();
+        for e in graph.edges_slice() {
+            children
+                .entry(e.domainnode_id.as_str())
+                .or_default()
+                .push(e.rangenode_id.as_str());
+        }
+        let by_id: HashMap<&str, &StaticNode> = graph
+            .nodes_slice()
+            .iter()
+            .map(|n| (n.nodeid.as_str(), n))
+            .collect();
+
+        let root = graph.get_root();
+        let mut paths = Vec::new();
+        // DFS from root; `path` is the node's dotted path ("" for the root, which is
+        // not itself a queryable component). An aliasless intermediate node is
+        // transparent — it contributes no path component and is not emitted.
+        let mut stack: Vec<(&StaticNode, String)> = vec![(root, String::new())];
+        while let Some((node, path)) = stack.pop() {
+            if node.alias.is_some() && !path.is_empty() {
+                paths.push(PathDescriptor {
+                    path: path.clone(),
+                    alias: node.alias.clone().unwrap_or_default(),
+                    datatype: node.datatype.clone(),
+                    predicate: predicate_of(node, registry),
+                    nodegroup: node.nodegroup_id.clone(),
+                    target_models: target_models_of(node),
+                });
+            }
+            for cid in children
+                .get(node.nodeid.as_str())
+                .map(Vec::as_slice)
+                .unwrap_or(&[])
+            {
+                let Some(child) = by_id.get(cid).copied() else {
+                    continue;
+                };
+                let child_path = match child.alias.as_deref() {
+                    Some(a) if path.is_empty() => a.to_string(),
+                    Some(a) => format!("{path}.{a}"),
+                    None => path.clone(),
+                };
+                stack.push((child, child_path));
+            }
+        }
+        paths.sort_by(|a, b| a.path.cmp(&b.path));
+
+        let name = graph.display_name();
+        ModelCatalog {
+            model: emit_slug(&name),
+            graph_id: graph.graph_id().to_string(),
+            name,
+            paths,
+        }
+    }
+
+    /// Rank paths by closeness to `term` (exact, then substring, then edit distance
+    /// over both the alias and the dotted path), returning up to `limit`. A typo /
+    /// prefix aid — synonym reasoning ("builder" → "architect") is the caller's job,
+    /// over [`paths`](Self::paths) as the vocabulary.
+    pub fn search(&self, term: &str, limit: usize) -> Vec<&PathDescriptor> {
+        let t = term.to_lowercase();
+        let mut scored: Vec<(&PathDescriptor, usize)> = self
+            .paths
+            .iter()
+            .map(|p| {
+                let a = p.alias.to_lowercase();
+                let path = p.path.to_lowercase();
+                let score = if a == t || path == t {
+                    0
+                } else if a.contains(&t) || path.contains(&t) {
+                    1
+                } else {
+                    2 + levenshtein(&t, &a).min(levenshtein(&t, &path))
+                };
+                (p, score)
+            })
+            .collect();
+        scored.sort_by(|x, y| x.1.cmp(&y.1).then_with(|| x.0.path.cmp(&y.0.path)));
+        scored.into_iter().take(limit).map(|(p, _)| p).collect()
+    }
+}
+
+/// Map a node's index class to the IR predicate it answers.
+fn predicate_of(node: &StaticNode, registry: Option<&ExtensionTypeRegistry>) -> NodePredicate {
+    match datatype_index_spec(
+        &node.datatype,
+        &serde_json::Value::Null,
+        node_config_value(node).as_ref(),
+        registry,
+    )
+    .class
+    {
+        IndexClass::ConceptHierarchical { .. } => NodePredicate::Concept,
+        IndexClass::Ordered => NodePredicate::Range,
+        IndexClass::SpatialBbox => NodePredicate::Bbox,
+        IndexClass::Link => NodePredicate::Link,
+        IndexClass::DetailOnly => NodePredicate::Detail,
+    }
+}
+
+/// The permitted target model graph-ids of a resource-instance node, from its
+/// `graphs` config (the Arches convention). Empty when absent — the hop's `model`
+/// then has to be supplied explicitly.
+fn target_models_of(node: &StaticNode) -> Vec<String> {
+    let Some(cfg) = node_config_value(node) else {
+        return Vec::new();
+    };
+    let Some(graphs) = cfg.get("graphs").and_then(|v| v.as_array()) else {
+        return Vec::new();
+    };
+    graphs
+        .iter()
+        .filter_map(|g| g.get("graphid").and_then(|v| v.as_str()).map(String::from))
+        .collect()
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -1198,6 +1387,77 @@ mod tests {
     use super::*;
     use std::fs;
     use std::path::PathBuf;
+
+    /// A minimal inline model exercising the three promoted predicate kinds plus a
+    /// resource-instance link with a declared target — the discovery surface a skill
+    /// reads. Same graph shape the duck integration tests deserialize.
+    fn catalog_graph() -> StaticGraph {
+        const G: &str = "aaaaaaaa-0000-4000-8000-000000000000";
+        const ROOT: &str = "00000000-0000-4000-8000-000000000000";
+        const KIND: &str = "11111111-0000-4000-8000-000000000000";
+        const FOUNDED: &str = "22222222-0000-4000-8000-000000000000";
+        const MAKER: &str = "33333333-0000-4000-8000-000000000000";
+        const TARGET: &str = "99999999-0000-4000-8000-000000000000";
+        let root = serde_json::json!({
+            "nodeid": ROOT, "name": "Thing", "alias": "thing", "datatype": "semantic",
+            "graph_id": G, "istopnode": true,
+        });
+        let node = |id: &str, alias: &str, dt: &str, cfg: serde_json::Value| {
+            serde_json::json!({
+                "nodeid": id, "nodegroup_id": id, "name": alias, "alias": alias, "datatype": dt,
+                "graph_id": G, "istopnode": false, "is_collector": true, "config": cfg,
+            })
+        };
+        let edge = |from: &str, to: &str| {
+            serde_json::json!({ "edgeid": to, "domainnode_id": from, "rangenode_id": to, "graph_id": G })
+        };
+        let doc = serde_json::json!({ "graph": [{
+            "graphid": G, "name": "Thing", "root": root.clone(),
+            "nodes": [
+                root,
+                node(KIND, "kind", "concept", serde_json::json!({})),
+                node(FOUNDED, "founded", "date", serde_json::json!({})),
+                node(MAKER, "maker", "resource-instance-list",
+                     serde_json::json!({ "graphs": [{ "graphid": TARGET }] })),
+            ],
+            "nodegroups": [
+                { "nodegroupid": KIND, "cardinality": "1", "parentnodegroup_id": null },
+                { "nodegroupid": FOUNDED, "cardinality": "1", "parentnodegroup_id": null },
+                { "nodegroupid": MAKER, "cardinality": "1", "parentnodegroup_id": null },
+            ],
+            "edges": [ edge(ROOT, KIND), edge(ROOT, FOUNDED), edge(ROOT, MAKER) ],
+        }]});
+        let mut g: StaticGraph = serde_json::from_value(doc["graph"][0].clone()).unwrap();
+        g.build_indices();
+        g
+    }
+
+    #[test]
+    fn catalog_describes_predicates_and_target_models() {
+        let cat = ModelCatalog::build(&catalog_graph(), None);
+        let by_alias = |a: &str| cat.paths.iter().find(|p| p.alias == a).expect("path present");
+
+        // Each node advertises which IR predicate to build against it.
+        assert_eq!(by_alias("kind").predicate, NodePredicate::Concept);
+        assert_eq!(by_alias("founded").predicate, NodePredicate::Range);
+        let maker = by_alias("maker");
+        assert_eq!(maker.predicate, NodePredicate::Link);
+        // The on_link target model is discovered from the node's `graphs` config.
+        assert_eq!(
+            maker.target_models,
+            vec!["99999999-0000-4000-8000-000000000000".to_string()]
+        );
+
+        // The root (semantic, aliased "thing") is not itself a queryable component.
+        assert!(cat.paths.iter().all(|p| p.alias != "thing"));
+
+        // Fuzzy search tolerates a typo and ranks the intended alias first.
+        assert_eq!(cat.search("foundde", 3)[0].alias, "founded");
+
+        // Serializes as a compact snake_case surface for an MCP call.
+        let json = serde_json::to_string(&cat).unwrap();
+        assert!(json.contains("\"predicate\":\"link\""), "predicate hint present: {json}");
+    }
 
     /// Same load pattern as json_conversion.rs tests.
     fn load_group_graph() -> StaticGraph {
