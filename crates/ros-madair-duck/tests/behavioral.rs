@@ -183,7 +183,11 @@ fn fixture() -> (PathBuf, StaticGraph) {
     ins(&format!("INSERT INTO t VALUES('{R3}','{NG_GEO}','t11',NULL,0,'{r3_geo}','Gamma',NULL,NULL,100.0,100.0,100.0,100.0,NULL)"));
 
     con.execute_batch(&format!(
-        "COPY t TO '{}' (FORMAT PARQUET)",
+        "COPY (SELECT resource_id, nodegroup_id, tileid, parenttile_id, sortorder, data, \
+         descriptor_name, \
+         CASE WHEN concept_id IS NULL THEN NULL ELSE '[\"' || concept_id || '\"]' END AS concept_ids, \
+         q_ordered, geo_min_lng, geo_max_lng, geo_min_lat, geo_max_lat, link_targets FROM t) \
+         TO '{}' (FORMAT PARQUET)",
         tiles.display()
     ))
     .unwrap();
@@ -567,7 +571,11 @@ fn open_layers_composes_tiles_with_overlay_precedence() {
         ))
         .unwrap();
         con.execute_batch(&format!(
-            "COPY t TO '{}/tiles_test.parquet' (FORMAT PARQUET)",
+            "COPY (SELECT resource_id, nodegroup_id, tileid, parenttile_id, sortorder, data, \
+             descriptor_name, \
+             CASE WHEN concept_id IS NULL THEN NULL ELSE '[\"' || concept_id || '\"]' END AS concept_ids, \
+             q_ordered, geo_min_lng, geo_max_lng, geo_min_lat, geo_max_lat, link_targets FROM t) \
+             TO '{}/tiles_test.parquet' (FORMAT PARQUET)",
             dir.display()
         ))
         .unwrap();

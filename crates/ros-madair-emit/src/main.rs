@@ -1,63 +1,40 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //! CLI: ros-madair-emit <data_dir> <out_dir> [--base-uri URI]
-//!                    [--tier <name>:<config.json>]
 //!
 //! data_dir layout (AlizarinProvider/Clódóir convention):
 //!   graphs/*.json          {"graph": [...]} resource models
 //!   resources/**/*.json    business data
 //!   vocabularies/*.xml     SKOS (optional)
 //!
-//! Head membership is datatype-driven — concept/link fields are indexed,
-//! everything else is detail-only — so there is no field-class flag. To index
-//! a subset of concept fields, prune a search graph (prune_graph) upstream.
-//!
-//! --tier (M1.5): emit a named tier as its own complete artifact graph
-//! under <out_dir>/<name>/. The config JSON is
-//!   {"exclude_nodegroups": [...], "exclude_models": [...]}
-//! (both keys optional; models by slug or graph id). Exclusions are
-//! applied at one point before indexing and chunking, so excluded data
-//! appears in NO artifact of that tier (head tables, summaries,
-//! fragment directory, chunk files). Without --tier the plain
-//! single-tier emit writes to <out_dir> directly.
+//! Compiles the data_dir into the DuckDB+Parquet substrate — `tiles_*.parquet`,
+//! `edges_*.parquet`, `concept_catalog.parquet`, and a self-describing
+//! `manifest.json`. The `sign`/`verify`/`pubkey` subcommands attest the emitted
+//! snapshot over its manifest `snapshot_id` (storage-agnostic — the same digest
+//! the reader trusts).
 
+use std::collections::HashMap;
 use std::path::Path;
 use std::process::ExitCode;
 
-use serde::Deserialize;
-
-use ros_madair_emit::{EmitOptions, TierManifest};
-
-const USAGE: &str = "usage: ros-madair-emit <data_dir> <out_dir> \
-     [--base-uri URI] [--tier <name>:<config.json>]";
-
-/// On-disk tier config (the CLI supplies the name).
-#[derive(Deserialize)]
-struct TierConfig {
-    #[serde(default)]
-    exclude_nodegroups: Vec<String>,
-    #[serde(default)]
-    exclude_models: Vec<String>,
-}
+const USAGE: &str = "usage: ros-madair-emit <data_dir> <out_dir> [--base-uri URI]";
 
 fn usage() -> ExitCode {
     eprintln!("{USAGE}");
     ExitCode::from(2)
 }
 
-/// `ros-madair-emit sign <head_dir> <key_path>` — seal the head's manifest
-/// (rebuild its content hashes / snapshot_id) and write a signed
-/// `attestations.json` beside it. The build-time signing entry point.
+/// `ros-madair-emit sign <dir> <key_path>` — seal a snapshot's manifest (rebuild
+/// its content hashes / snapshot_id) and write a signed `attestations.json`
+/// beside it. The build-time signing entry point; works on any emitted snapshot.
 #[cfg(feature = "attest")]
 fn sign_command(args: &[String]) -> ExitCode {
-    let (Some(head), Some(key)) = (args.get(2), args.get(3)) else {
+    let (Some(dir), Some(key)) = (args.get(2), args.get(3)) else {
         eprintln!(
-            "usage: ros-madair-emit sign <head_dir> <key_path> \
+            "usage: ros-madair-emit sign <dir> <key_path> \
              [--role derived|endorsed --actor <uri> [--actor-name <name>]]"
         );
         return ExitCode::from(2);
     };
-    // Optional named attribution: a build-time packager signs `--role derived
-    // --actor <F&T uri>`; the upstream publisher would sign `--role endorsed`.
     let mut actor: Option<String> = None;
     let mut actor_name = String::new();
     let mut role = ros_madair_emit::Role::Derived;
@@ -90,10 +67,8 @@ fn sign_command(args: &[String]) -> ExitCode {
         }
         i += 1;
     }
-    let attribution = actor
-        .as_deref()
-        .map(|a| (role, a, actor_name.as_str()));
-    match ros_madair_emit::seal_and_sign(Path::new(head), Path::new(key), attribution) {
+    let attribution = actor.as_deref().map(|a| (role, a, actor_name.as_str()));
+    match ros_madair_emit::seal_and_sign(Path::new(dir), Path::new(key), attribution) {
         Ok(id) => {
             println!("{id}");
             ExitCode::SUCCESS
@@ -111,16 +86,16 @@ fn sign_command(_args: &[String]) -> ExitCode {
     ExitCode::FAILURE
 }
 
-/// `ros-madair-emit verify <head_dir>` — recompute + verify a head's
-/// attestations, print `verified` / `unsigned` / `tampered: <reason>`. Exit 0
-/// only when verified, so a build/CI step can gate on it.
+/// `ros-madair-emit verify <dir>` — recompute + verify a snapshot's attestations,
+/// print `verified` / `unsigned` / `tampered: <reason>`. Exit 0 only when
+/// verified, so a build/CI step can gate on it.
 #[cfg(feature = "attest")]
 fn verify_command(args: &[String]) -> ExitCode {
-    let Some(head) = args.get(2) else {
-        eprintln!("usage: ros-madair-emit verify <head_dir>");
+    let Some(dir) = args.get(2) else {
+        eprintln!("usage: ros-madair-emit verify <dir>");
         return ExitCode::from(2);
     };
-    match ros_madair_emit::verify_head(Path::new(head)) {
+    match ros_madair_emit::verify_head(Path::new(dir)) {
         Ok(ros_madair_emit::HeadTrust::Verified { authored, attributions }) => {
             if attributions.is_empty() {
                 println!("verified ({authored} attestation(s); anonymous)");
@@ -153,8 +128,7 @@ fn verify_command(_args: &[String]) -> ExitCode {
 }
 
 /// `ros-madair-emit pubkey <key_path>` — print the identity's public key in
-/// `sec:publicKeyMultibase` form (mints the key if absent). Use it to obtain the
-/// value to PIN as F&T's root, or to list in an actor→key registry.
+/// `sec:publicKeyMultibase` form (mints the key if absent).
 #[cfg(feature = "attest")]
 fn pubkey_command(args: &[String]) -> ExitCode {
     let Some(key) = args.get(2) else {
@@ -181,30 +155,20 @@ fn pubkey_command(_args: &[String]) -> ExitCode {
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().collect();
-    if args.get(1).map(String::as_str) == Some("sign") {
-        return sign_command(&args);
+    match args.get(1).map(String::as_str) {
+        Some("sign") => return sign_command(&args),
+        Some("verify") => return verify_command(&args),
+        Some("pubkey") => return pubkey_command(&args),
+        _ => {}
     }
-    if args.get(1).map(String::as_str) == Some("verify") {
-        return verify_command(&args);
-    }
-    if args.get(1).map(String::as_str) == Some("pubkey") {
-        return pubkey_command(&args);
-    }
+
     let mut positional = Vec::new();
     let mut base_uri = "https://example.org/".to_string();
-    let mut options = EmitOptions::default();
-    let mut tier_arg: Option<String> = None;
     let mut i = 1;
     while i < args.len() {
         if args[i] == "--base-uri" {
             i += 1;
             base_uri = args.get(i).cloned().unwrap_or(base_uri);
-        } else if args[i] == "--tier" {
-            i += 1;
-            match args.get(i) {
-                Some(v) => tier_arg = Some(v.clone()),
-                None => return usage(),
-            }
         } else {
             positional.push(args[i].clone());
         }
@@ -214,42 +178,12 @@ fn main() -> ExitCode {
         return usage();
     }
 
-    let mut out_dir = positional[1].clone();
-    if let Some(spec) = tier_arg {
-        let Some((name, config_path)) = spec.split_once(':') else {
-            eprintln!("--tier expects <name>:<config.json>, got: {spec}");
-            return usage();
-        };
-        if name.is_empty() || config_path.is_empty() {
-            eprintln!("--tier expects <name>:<config.json>, got: {spec}");
-            return usage();
-        }
-        let config: TierConfig = match std::fs::read_to_string(config_path)
-            .map_err(|e| e.to_string())
-            .and_then(|s| serde_json::from_str(&s).map_err(|e| e.to_string()))
-        {
-            Ok(c) => c,
-            Err(e) => {
-                eprintln!("failed to read tier config {config_path}: {e}");
-                return ExitCode::FAILURE;
-            }
-        };
-        options.tier = Some(TierManifest {
-            name: name.to_string(),
-            exclude_nodegroups: config.exclude_nodegroups,
-            exclude_models: config.exclude_models,
-        });
-        // Each tier is a complete, self-contained artifact graph in its
-        // own subdirectory of out_dir.
-        out_dir = Path::new(&out_dir).join(name).to_string_lossy().to_string();
-    }
-
-    // Register the CLM reference handler so the plain CLI path indexes
-    // `reference` fields (core knows no `reference` — the handler does).
+    // The CLM reference handler is registered so the CLI indexes `reference`
+    // fields (core knows no `reference` — the handler does). Default per-graph
+    // clustering (geo ⊕ descriptor); pass per-graph config programmatically.
     let registry = ros_madair_emit::default_registry();
-    // Progress to STDERR (stdout stays clean for the summary JSON). Greppable
-    // `PROGRESS …` lines — watch a long emit with `… 2>&1 | grep PROGRESS`, or
-    // read them live when the emit runs as a background process.
+    let config_by_graph: HashMap<String, ros_madair_emit::ClusterConfig> = HashMap::new();
+    // Progress to STDERR (stdout stays clean for the summary JSON).
     let mut on_progress = |p: ros_madair_emit::EmitProgress| {
         match p {
             ros_madair_emit::EmitProgress::Phase(name) => eprintln!("PROGRESS phase {name}"),
@@ -260,16 +194,16 @@ fn main() -> ExitCode {
         }
         std::ops::ControlFlow::Continue(())
     };
-    match ros_madair_emit::emit_with_progress(
+    match ros_madair_emit::emit_parquet_with_progress(
         &positional[0],
-        &out_dir,
+        &positional[1],
         &base_uri,
-        &options,
         &registry,
+        &config_by_graph,
         &mut on_progress,
     ) {
-        Ok(summary) => {
-            println!("{}", serde_json::to_string_pretty(&summary).unwrap());
+        Ok(summaries) => {
+            println!("{}", serde_json::to_string_pretty(&summaries).unwrap());
             ExitCode::SUCCESS
         }
         Err(e) => {

@@ -60,8 +60,9 @@ fn descendant_or_self_is_a_subtree_range() {
     let con = duckdb::Connection::open_in_memory().unwrap();
     con.execute_batch(&format!(
         "COPY (SELECT * FROM (VALUES \
-            ('r1','{NG}','a1'),('r2','{NG}','b'),('r3','{NG}','root'),('r4','{NG}','a') \
-         ) t(resource_id, nodegroup_id, concept_id)) TO '{}' (FORMAT PARQUET); \
+            ('r1','{NG}','[\"a1\"]'),('r2','{NG}','[\"b\"]'),\
+            ('r3','{NG}','[\"root\"]'),('r4','{NG}','[\"a\"]') \
+         ) t(resource_id, nodegroup_id, concept_ids)) TO '{}' (FORMAT PARQUET); \
          COPY (SELECT * FROM (VALUES \
             ('root',0,3,'Root'),('a',1,2,'A'),('a1',2,2,'A1'),('b',3,3,'B') \
          ) c(concept_id, dfs_enter, dfs_leave, label)) TO '{}' (FORMAT PARQUET);",

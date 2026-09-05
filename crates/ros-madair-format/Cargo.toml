@@ -9,19 +9,20 @@ repository.workspace = true
 homepage.workspace = true
 keywords.workspace = true
 categories.workspace = true
-description = "The Rós Madair static-artifact FORMAT: manifest contract types and the msgpack chunk-tile encoding, shared by writer and readers (WASM-buildable)"
+description = "The Rós Madair static-artifact FORMAT: manifest contract types + attestation verify, shared by the writer and readers (WASM-buildable)"
 
 [dependencies]
 # HARD CONSTRAINT: this crate must build for wasm32-unknown-unknown — a
-# browser consumer READS the artifact format (manifest, chunk tiles) but
-# never emits it. No rusqlite, no filesystem: format types only.
-alizarin-core.workspace = true
+# browser/native READER parses the manifest and verifies its attestation but
+# never emits. No rusqlite, no filesystem: contract + trust types only.
 ros-madair-handlers = { path = "../ros-madair-handlers" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-# P17 chunk framing (encode_chunk/decode_chunk) lives here so writer and reader
-# share ONE encoder — pure msgpack, WASM-clean.
-rmp-serde = "1"
+# The snapshot-id digest (a hash over artifact hashes + the id-excluded manifest)
+# lives here now — the ONE derivation both the writer (emit) and the reader-side
+# `verify` module share, so a signed id and a recomputed id cannot drift. Pure,
+# wasm-clean.
+sha2 = "0.10"
 # Attestation VERIFY (authenticity over snapshot_id) — behind the `attest`
 # feature so a render/parse-only consumer (and the browser bundle) pulls NO
 # curve25519. Verify-only: no RNG, no std — ed25519-dalek's verify path is

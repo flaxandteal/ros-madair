@@ -9,7 +9,7 @@ repository.workspace = true
 homepage.workspace = true
 keywords.workspace = true
 categories.workspace = true
-description = "Compile alizarin-governed data into Rós Madair static query artifacts (head DB, chunks, closure, manifest)"
+description = "Compile alizarin-governed data into the Rós Madair DuckDB+Parquet substrate (tile-row + edge Parquet, concept catalog, manifest)"
 
 [[bin]]
 name = "ros-madair-emit"
@@ -20,13 +20,10 @@ alizarin-core.workspace = true
 # A8.2: geometry → bounding box at emit. Native-only — the query side needs no
 # geojson (it compares f64 corners), so this never reaches the WASM query path.
 geojson = "0.24"
-ros-madair-query = { path = "../ros-madair-query" }
 ros-madair-handlers = { path = "../ros-madair-handlers" }
 ros-madair-format = { path = "../ros-madair-format" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-rusqlite = { version = "0.32", features = ["bundled"] }
-rmp-serde = "1"
 sha2 = "0.10"
 # Signing half of the attestation layer (native Ed25519 keygen + sign). Optional
 # so the emitter CAN be built crypto-free, but ON by default (see [features]):
@@ -61,9 +58,6 @@ attest = [
 ]
 
 [dev-dependencies]
-# The `hydrate_entry` example is a driver over the library read path — it does
-# not (any more) re-implement it. Dev-only: the emitter itself never reads.
-ros-madair-read = { path = "../ros-madair-read" }
 # So the Parquet-emit integration test can read its own output back and assert
 # on the promoted columns (integration tests don't see the crate's normal deps).
 arrow = "58"

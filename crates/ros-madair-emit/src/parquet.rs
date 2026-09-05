@@ -11,7 +11,7 @@
 //!   - a **row group** is the RM "chunk" (the unit DuckDB range-fetches + prunes),
 //!   - **row order** — sorted by a per-graph *cluster key* — is the RM "locality"
 //!     (Hilbert page assignment); here a Z-order blend of geo + descriptor name,
-//!   - **promoted typed columns** (`q_ordered`, `concept_id`, `geo_*`) are the
+//!   - **promoted typed columns** (`q_ordered`, `concept_ids`, `geo_*`) are the
 //!     node-level index; their per-row-group min/max stats in the Parquet footer
 //!     ARE the zone-map — no separate index, no `summary_quads`.
 //!
@@ -102,7 +102,7 @@ impl Default for ClusterConfig {
 }
 
 /// What writing one model's Parquet produced.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct ParquetModelSummary {
     pub slug: String,
     pub graph_id: String,
@@ -491,7 +491,7 @@ fn append_resource(
     let mut edge_rows: Vec<(String, String, String, Option<String>, String)> = Vec::new();
     for tile in tiles {
         let mut q_ordered = None;
-        let mut concept_id = None;
+        let mut concept_ids: Vec<String> = Vec::new();
         let mut geo = None;
         // Per-NODE link targets `{node_id: [target,...]}` (not just the first Link
         // node's array): a tile's nodegroup can hold >1 link node (e.g. the place
@@ -537,12 +537,18 @@ fn append_resource(
                         geo = crate::geo::extract_bbox(&s);
                     }
                 }
-                IndexClass::ConceptHierarchical { .. } if concept_id.is_none() => {
-                    // Resolve value-id → concept-id (canonical), falling back
-                    // to the raw key when it is not a controlled-list value.
-                    concept_id = spec.keys.first().map(|k| {
-                        value_to_concept.get(k).cloned().unwrap_or_else(|| k.clone())
-                    });
+                IndexClass::ConceptHierarchical { .. } => {
+                    // Collect EVERY concept id in this tile (each ConceptHierarchical
+                    // node, each value): a concept-list node with several values, or
+                    // two concept nodes in one nodegroup, both contribute — so a
+                    // `Concept` filter on ANY of them matches, not just the first
+                    // (which silently under-matched). Resolve value-id → concept-id
+                    // (canonical), falling back to the raw key when it is not a
+                    // controlled-list value.
+                    for k in &spec.keys {
+                        concept_ids
+                            .push(value_to_concept.get(k).cloned().unwrap_or_else(|| k.clone()));
+                    }
                 }
                 // Links are EXACT here (unlike the head's coarse
                 // chunk_link_summary): the tile carries its actual target ids.
@@ -587,6 +593,17 @@ fn append_resource(
                 .collect::<std::collections::BTreeMap<&String, &serde_json::Value>>(),
         )?;
 
+        // Multi-valued concept promotion: a JSON array of every concept id in the
+        // tile (NULL when none), so a `Concept` filter matches ANY of them. Sorted +
+        // deduped so the content-hashed parquet is byte-identical across emits.
+        concept_ids.sort();
+        concept_ids.dedup();
+        let concept_ids_json = if concept_ids.is_empty() {
+            None
+        } else {
+            Some(serde_json::to_string(&concept_ids)?)
+        };
+
         app.append_row(params![
             model_slug,
             tile.resourceinstance_id,
@@ -598,7 +615,7 @@ fn append_resource(
             key,
             ng_order,
             q_ordered,
-            concept_id,
+            concept_ids_json,
             geo.map(|g| g.0),
             geo.map(|g| g.1),
             geo.map(|g| g.2),
@@ -647,7 +664,7 @@ impl TileStage {
                model_slug VARCHAR, resource_id VARCHAR, descriptor_name VARCHAR,
                nodegroup_id VARCHAR, tileid VARCHAR, parenttile_id VARCHAR,
                sortorder INTEGER, cluster_key UBIGINT, ng_order BIGINT,
-               q_ordered BIGINT, concept_id VARCHAR,
+               q_ordered BIGINT, concept_ids VARCHAR,
                geo_min_lng DOUBLE, geo_min_lat DOUBLE, geo_max_lng DOUBLE, geo_max_lat DOUBLE,
                data VARCHAR);
              CREATE TABLE edges (
@@ -676,7 +693,7 @@ impl TileStage {
         // NB: model_slug is excluded from the output — it is a stage-only routing
         // column, not part of the frozen tile-row schema.
         let cols = "resource_id, descriptor_name, nodegroup_id, tileid, parenttile_id, \
-                    sortorder, cluster_key, ng_order, q_ordered, concept_id, \
+                    sortorder, cluster_key, ng_order, q_ordered, concept_ids, \
                     geo_min_lng, geo_min_lat, geo_max_lng, geo_max_lat, data";
         let slug_lit = sql_lit(slug);
         let rgs = cfg.row_group_size.max(1);
@@ -809,7 +826,7 @@ pub fn emit_parquet_with_progress(
 
     // Build the canonical RDM cache from the collections emit already loads, and
     // project it into (a) the value→concept resolution used for the tile
-    // `concept_id` column and (b) the DFS-ordered concept catalog Parquet that a
+    // `concept_ids` column and (b) the DFS-ordered concept catalog Parquet that a
     // DuckDB `DescendantOrSelfOf` range-joins.
     let collections = crate::closure::load_collections(data_dir, base_uri)?;
     let mut cache = RdmCache::new();
@@ -953,9 +970,9 @@ pub fn emit_parquet_with_progress(
             max_group_count: 500,
         },
     };
-    manifest.snapshot_id = crate::manifest::snapshot_id(
+    manifest.snapshot_id = ros_madair_format::snapshot_id(
         &manifest.artifacts,
-        &crate::manifest::manifest_digest_bytes(&manifest)?,
+        &ros_madair_format::manifest_digest_bytes(&manifest)?,
     );
     fs::write(
         out.join("manifest.json"),

@@ -21,14 +21,12 @@ use std::path::Path;
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use ed25519_dalek::{Signer, SigningKey};
 use ros_madair_format::attest::{
-    attributions, ed25519_to_multibase, verify_bundle, AttestationBundle, HeadTrust, Role,
-    Signature, Statement, Subject, Verdict, DIGEST_KEY, PAYLOAD_TYPE, PREDICATE_AUTHORED,
-    STATEMENT_TYPE,
+    ed25519_to_multibase, AttestationBundle, HeadTrust, Role, Signature, Statement, Subject,
+    DIGEST_KEY, PAYLOAD_TYPE, PREDICATE_AUTHORED, STATEMENT_TYPE,
 };
-use ros_madair_format::{ArtifactEntry, Budgets, Manifest};
+use ros_madair_format::{hex, Budgets, Manifest};
 use sha2::{Digest, Sha256};
 
-use crate::chunks::hex;
 use crate::EmitError;
 
 /// A persisted Ed25519 signing identity for this owner/device.
@@ -230,9 +228,9 @@ pub fn seal_and_sign(
     manifest.snapshot_id = String::new();
     manifest.format_version = ros_madair_format::FORMAT_VERSION;
     manifest.artifacts = crate::manifest::hash_parquet_artifacts(head_dir)?;
-    let id = crate::manifest::snapshot_id(
+    let id = ros_madair_format::snapshot_id(
         &manifest.artifacts,
-        &crate::manifest::manifest_digest_bytes(&manifest)?,
+        &ros_madair_format::manifest_digest_bytes(&manifest)?,
     );
     manifest.snapshot_id = id.clone();
     fs::write(&manifest_path, serde_json::to_vec_pretty(&manifest)?)?;
@@ -246,97 +244,24 @@ pub fn seal_and_sign(
     Ok(id)
 }
 
-/// Verify an emitted head against its own attestations, RECOMPUTING the
-/// snapshot_id from the artifacts on disk — the read-side gate.
+/// Verify an emitted snapshot against its own attestations, RECOMPUTING the
+/// `snapshot_id` from the artifacts on disk — the read-side gate.
 ///
-/// Two independent checks, in order:
-///  1. **Integrity/self-consistency.** Re-hash every file the manifest lists and
-///     re-derive the snapshot_id from those hashes plus the manifest (the exact
-///     emit derivation). If a listed artifact is missing or its bytes changed,
-///     the recomputed id moves off `manifest.snapshot_id` → Untrusted "altered".
-///     This is what turns a swapped chunk into a red verdict.
-///  2. **Authenticity.** With the manifest proven self-consistent, check the
-///     attestation set over that snapshot_id ([`verify_bundle`]). No
-///     `attestations.json` → Untrusted "unsigned" (an old/third-party layer),
-///     distinct from a tamper so the UI can word the two differently.
-///
-/// Returns a three-state [`HeadTrust`] — Verified / Unsigned / Failed — so the UI
-/// can green/yellow/red the layer and word an unsigned layer differently from a
-/// tampered one. Errors are reserved for "cannot read the manifest at all" — a
-/// malformed head, not an untrusted one.
+/// A thin wrapper over [`ros_madair_format::verify::verify_snapshot`] (the ONE
+/// verify implementation, shared with `ros-madair-duck`'s read path). Kept here
+/// so the `verify` CLI subcommand and existing callers of `verify_head` keep
+/// working. Returns the three-state [`HeadTrust`] — Verified / Unsigned / Failed;
+/// an error is reserved for "cannot read the manifest at all".
 pub fn verify_head(head_dir: &Path) -> Result<HeadTrust, EmitError> {
-    let manifest_path = head_dir.join("manifest.json");
-    let manifest: Manifest = serde_json::from_slice(&fs::read(&manifest_path).map_err(|e| {
-        format!("verify_head: cannot read {} ({e})", manifest_path.display())
-    })?)?;
-
-    // 1. UNSIGNED comes FIRST. An absent attestations.json means nobody vouched
-    //    for this head, so there is nothing to check against — it is Unsigned
-    //    (yellow), FULL STOP. This must precede the recompute: a layer packaged
-    //    before signing carries a stub/empty-artifacts manifest, and recomputing
-    //    its id would spuriously "not match" and cry tamper. Recompute scrutiny
-    //    only makes sense for a head that WAS signed.
-    let att_path = head_dir.join("attestations.json");
-    let bundle: AttestationBundle = match fs::read(&att_path) {
-        Ok(b) => serde_json::from_slice(&b)?,
-        Err(_) => return Ok(HeadTrust::Unsigned),
-    };
-
-    // 2. Signed. From here a mismatch is a real alarm. A signed head must carry a
-    //    snapshot_id (sign_head refuses to sign an empty one).
-    if manifest.snapshot_id.is_empty() {
-        return Ok(HeadTrust::Failed {
-            reason: "signed head carries no snapshot_id".to_string(),
-        });
-    }
-
-    // Re-hash exactly the files the manifest lists (in its order — emit sorted
-    // them, so the recomputed vec matches byte-for-byte when untampered).
-    let mut recomputed = Vec::with_capacity(manifest.artifacts.len());
-    for a in &manifest.artifacts {
-        let bytes = match fs::read(head_dir.join(&a.path)) {
-            Ok(b) => b,
-            Err(_) => {
-                return Ok(HeadTrust::Failed {
-                    reason: format!("artifact {} is missing (layer is incomplete)", a.path),
-                })
-            }
-        };
-        recomputed.push(ArtifactEntry {
-            path: a.path.clone(),
-            bytes: bytes.len() as u64,
-            sha256: hex(&Sha256::digest(&bytes)),
-        });
-    }
-    // Re-derive the id: hash the id-less manifest carrying the recomputed
-    // artifacts, exactly as emit did. Any changed byte in a listed file moves it.
-    let mut idless = manifest.clone();
-    idless.snapshot_id = String::new();
-    idless.artifacts = recomputed.clone();
-    let recomputed_id =
-        crate::manifest::snapshot_id(&recomputed, &crate::manifest::manifest_digest_bytes(&idless)?);
-    if recomputed_id != manifest.snapshot_id {
-        return Ok(HeadTrust::Failed {
-            reason: "content does not match the manifest — this layer has been altered since it \
-                     was signed"
-                .to_string(),
-        });
-    }
-
-    // 3. Content matches the signed manifest; check who vouches for it, and with
-    //    what named attribution(s) (derived / endorsed by which actor).
-    match verify_bundle(&bundle, &manifest.snapshot_id) {
-        Verdict::Trusted { authored } => Ok(HeadTrust::Verified {
-            authored,
-            attributions: attributions(&bundle, &manifest.snapshot_id),
-        }),
-        Verdict::Untrusted { reason } => Ok(HeadTrust::Failed { reason }),
-    }
+    ros_madair_format::verify::verify_snapshot(head_dir).map_err(|e| -> EmitError { Box::new(e) })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    // Verify helpers exercised only by these tests (verify_head now delegates to
+    // the format crate, so they are not used by the non-test build).
+    use ros_madair_format::attest::{attributions, verify_bundle, Verdict};
 
     fn tmp_key() -> std::path::PathBuf {
         // A per-test unique path under the target dir; no external tempdir dep.

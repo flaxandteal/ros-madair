@@ -28,15 +28,19 @@ duckdb = { version = "1", features = ["bundled", "json", "parquet"] }
 # takes — so both backends answer the same queries. This crate is the second
 # compiler for that IR (→ DuckDB SQL), not a second IR.
 ros-madair-query = { path = "../ros-madair-query" }
-# The storage-agnostic tile→tree hydration half (hydrate_tiles_with_labels): the
-# duck read path reuses it with tiles read from the Parquet `data` column.
-ros-madair-read = { path = "../ros-madair-read" }
+# THE registry: the CLM `reference` handler `hydrate_tiles_with_labels` renders
+# reference fields through (in the `hydrate` module — the tile→tree half, moved
+# here from the retired ros-madair-read crate).
+ros-madair-handlers = { path = "../ros-madair-handlers" }
+# The snapshot contract + reader-side attestation VERIFY (`format::verify`):
+# `open_layers` refuses a layer whose signed content has been altered. `attest`
+# is on by default, so this pulls the verify half (no signing/keys here).
+ros-madair-format = { path = "../ros-madair-format" }
 alizarin-core.workspace = true
 serde_json = "1"
 
 [dev-dependencies]
 ros-madair-emit = { path = "../ros-madair-emit" }
-ros-madair-read = { path = "../ros-madair-read" }
 ros-madair-handlers = { path = "../ros-madair-handlers" }
 # Integration tests don't see the crate's normal deps — mirror the ones the
 # parity test builds queries and graphs with.

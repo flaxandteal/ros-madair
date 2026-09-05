@@ -33,7 +33,7 @@ dependencies = [
 
 [[package]]
 name = "alizarin-clm-core"
-version = "2.0.0-alpha.133"
+version = "2.0.0-alpha.134"
 dependencies = [
  "alizarin-core",
  "alizarin-extension-api",
@@ -46,7 +46,7 @@ dependencies = [
 
 [[package]]
 name = "alizarin-core"
-version = "2.0.0-alpha.133"
+version = "2.0.0-alpha.134"
 dependencies = [
  "alizarin-extension-api",
  "chrono",
@@ -65,7 +65,7 @@ dependencies = [
 
 [[package]]
 name = "alizarin-extension-api"
-version = "2.0.0-alpha.133"
+version = "2.0.0-alpha.134"
 dependencies = [
  "serde",
  "serde_json",
@@ -682,7 +682,7 @@ dependencies = [
  "comfy-table",
  "fallible-iterator",
  "fallible-streaming-iterator",
- "hashlink 0.10.0",
+ "hashlink",
  "libduckdb-sys",
  "num-integer",
  "strum",
@@ -949,15 +949,6 @@ checksum = "ed5909b6e89a2db4456e54cd5f673791d7eca6732202bbf2a9cc504fe2f9b84a"
 
 [[package]]
 name = "hashlink"
-version = "0.9.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6ba4ff7128dee98c7dc9794b6a411377e1404dba1c97deb8d1a55297bd25d8af"
-dependencies = [
- "hashbrown 0.14.5",
-]
-
-[[package]]
-name = "hashlink"
 version = "0.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7382cf6263419f2d8df38c55d7da83da5c18aef87fc7a7fc1fb1e344edfe14c1"
@@ -1198,17 +1189,6 @@ name = "libm"
 version = "0.2.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b6d2cec3eae94f9f509c767b45932f1ada8350c4bdb85af2fcab4a3c14807981"
-
-[[package]]
-name = "libsqlite3-sys"
-version = "0.30.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2e99fb7a497b1e3339bc746195567ed8d3e24945ecd636e3619d20b9de9e9149"
-dependencies = [
- "cc",
- "pkg-config",
- "vcpkg",
-]
 
 [[package]]
 name = "linux-raw-sys"
@@ -1648,9 +1628,9 @@ dependencies = [
  "alizarin-core",
  "duckdb",
  "ros-madair-emit",
+ "ros-madair-format",
  "ros-madair-handlers",
  "ros-madair-query",
- "ros-madair-read",
  "serde_json",
 ]
 
@@ -1666,12 +1646,8 @@ dependencies = [
  "geojson",
  "getrandom 0.2.17",
  "parquet",
- "rmp-serde",
  "ros-madair-format",
  "ros-madair-handlers",
- "ros-madair-query",
- "ros-madair-read",
- "rusqlite",
  "serde",
  "serde_json",
  "sha2",
@@ -1681,15 +1657,14 @@ dependencies = [
 name = "ros-madair-format"
 version = "0.1.0-alpha.15"
 dependencies = [
- "alizarin-core",
  "base64",
  "bs58",
  "ed25519-dalek",
  "getrandom 0.2.17",
- "rmp-serde",
  "ros-madair-handlers",
  "serde",
  "serde_json",
+ "sha2",
 ]
 
 [[package]]
@@ -1708,9 +1683,9 @@ version = "0.1.0-alpha.15"
 dependencies = [
  "alizarin-core",
  "pyo3",
+ "ros-madair-duck",
  "ros-madair-handlers",
  "ros-madair-query",
- "ros-madair-read",
  "serde_json",
 ]
 
@@ -1721,20 +1696,6 @@ dependencies = [
  "alizarin-core",
  "getrandom 0.2.17",
  "serde",
- "serde_json",
-]
-
-[[package]]
-name = "ros-madair-read"
-version = "0.1.0-alpha.15"
-dependencies = [
- "alizarin-core",
- "rmp-serde",
- "ros-madair-emit",
- "ros-madair-format",
- "ros-madair-handlers",
- "ros-madair-query",
- "rusqlite",
  "serde_json",
 ]
 
@@ -1796,20 +1757,6 @@ dependencies = [
  "heapless 0.8.0",
  "num-traits",
  "serde",
- "smallvec",
-]
-
-[[package]]
-name = "rusqlite"
-version = "0.32.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7753b721174eb8ff87a9a0e799e2d7bc3749323e773db92e0984debb00019d6e"
-dependencies = [
- "bitflags",
- "fallible-iterator",
- "fallible-streaming-iterator",
- "hashlink 0.9.1",
- "libsqlite3-sys",
  "smallvec",
 ]
 

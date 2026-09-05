@@ -26,9 +26,12 @@
 //!   - `path` resolves a bare alias OR a dot-qualified path walked from the root
 //!     (e.g. `address.location`), so a hop can reach a link node nested under
 //!     within-resource nodegroups.
-//!   - `concept_id` promotion is still "first indexed node of a class per tile", so
-//!     a nodegroup with two CONCEPT nodes is not yet distinguished (links are now
-//!     per-node; concepts would need the same treatment).
+//!   - `concept_ids` promotes EVERY concept id in a tile as a JSON array (a
+//!     concept-list node, or two CONCEPT nodes in one nodegroup, both contribute),
+//!     so a `Concept` filter is membership (`json_contains`), not equality. Node-
+//!     level distinction within a nodegroup is still coarse (the filter keys on the
+//!     nodegroup, matching any of its concepts) — the same node-vs-nodegroup
+//!     granularity the head had.
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -39,6 +42,9 @@ use alizarin_core::graph::{StaticGraph, StaticNode};
 use alizarin_core::StaticTile;
 use duckdb::Connection;
 use ros_madair_query::{ConceptOp, Expr, Query};
+
+mod hydrate;
+pub use hydrate::hydrate_tiles_with_labels;
 
 /// Apply the spatial-extension source to a fresh connection. Best-effort for the
 /// online path (a non-spatial query still works if it fails); for the offline
@@ -83,6 +89,18 @@ impl From<duckdb::Error> for DuckError {
     fn from(e: duckdb::Error) -> Self {
         DuckError::Duck(e)
     }
+}
+
+/// Verify a snapshot directory's signed content: recompute its `snapshot_id` from
+/// the files on disk and check it against the attestation. Returns the
+/// three-state [`ros_madair_format::attest::HeadTrust`] — Verified / Unsigned /
+/// Failed — for a caller that wants to inspect trust explicitly. [`DuckReader::open_layers`]
+/// calls this and refuses a `Failed` (tampered) layer; `Unsigned` and unsigned
+/// local builds proceed. The verify implementation lives in `ros-madair-format`
+/// (shared with the emitter's signing), so a signed id and a recomputed id
+/// cannot drift.
+pub fn verify_snapshot(dir: &Path) -> Result<ros_madair_format::attest::HeadTrust, DuckError> {
+    ros_madair_format::verify::verify_snapshot(dir).map_err(|e| DuckError::Compile(e.to_string()))
 }
 
 /// A DuckDB connection with a `tiles` view over one model's Parquet, and
@@ -213,6 +231,21 @@ impl DuckReader {
     pub fn open_layers(dirs: &[&Path]) -> Result<Self, DuckError> {
         if dirs.is_empty() {
             return Err(DuckError::Compile("open_layers: no layers".into()));
+        }
+        // Refuse a layer whose SIGNED content has been altered since it was
+        // signed — the read-side gate that closes the sign→verify loop. A layer
+        // with no manifest/attestations (a local or unsigned build) verifies as
+        // Unsigned, or is simply not a signed snapshot; both proceed. Only a
+        // proven tamper (`Failed`) is fatal.
+        for dir in dirs {
+            if let Ok(ros_madair_format::attest::HeadTrust::Failed { reason }) =
+                ros_madair_format::verify::verify_snapshot(dir)
+            {
+                return Err(DuckError::Compile(format!(
+                    "layer {}: snapshot verification failed — {reason}",
+                    dir.display()
+                )));
+            }
         }
         let conn = Connection::open_in_memory()?;
         // Match the hydration layer path: no network. A Bbox then compiles coarse.
@@ -373,7 +406,7 @@ impl DuckReader {
         let node_query = |node: &str| -> Result<Vec<(String, String)>, DuckError> {
             let sql = format!(
                 "SELECT t.resource_id, c.label FROM tiles t \
-                 JOIN concepts c ON c.concept_id = t.concept_id \
+                 JOIN concepts c ON json_contains(t.concept_ids, concat('\"', c.concept_id, '\"')) \
                  WHERE t.nodegroup_id = ? AND c.label IS NOT NULL \
                  AND t.resource_id IN ({ph})"
             );
@@ -450,7 +483,8 @@ impl DuckReader {
 
     /// Reverse-link lookup returning just the citer ids: every resource that links
     /// to `target` through node `node_id` (a reverse scan of the edge table).
-    /// The parquet counterpart of ros-madair-read's `Layers::cited_by` (used for
+    /// Reverse traversal over the edge table — the retired SQLite `Layers::cited_by`
+    /// counterpart, now over Parquet (used for
     /// Logainm placenames via the place graph's `element_entry` node, cognates via
     /// `cognate_entry_id`, external examples via `headword_entry`).
     pub fn cited_by(&self, node_id: &str, target: &str) -> Result<Vec<String>, DuckError> {
@@ -506,8 +540,8 @@ impl DuckReader {
 
     /// Hydrate a resource to a display JSON tree from Parquet: tiles from the
     /// `data` column ([`resource_tiles`]) + concept labels from the catalog, fed
-    /// to ros-madair-read's storage-agnostic `hydrate_tiles_with_labels` (the
-    /// tile→tree half of hydration). The catalog must be attached for labels.
+    /// to the crate's storage-agnostic [`hydrate_tiles_with_labels`] (the tile→tree
+    /// half of hydration). The catalog must be attached for labels.
     pub fn hydrate(
         &self,
         uuid: &str,
@@ -516,7 +550,7 @@ impl DuckReader {
     ) -> Result<serde_json::Value, DuckError> {
         let tiles = self.resource_tiles(uuid)?;
         let labels = self.concept_labels()?;
-        ros_madair_read::hydrate_tiles_with_labels(&tiles, uuid, graph, &labels, languages)
+        hydrate_tiles_with_labels(&tiles, uuid, graph, &labels, languages)
             .map_err(|e| DuckError::Compile(format!("hydrate: {e}")))
     }
 
@@ -732,8 +766,8 @@ pub fn cited_by(dirs: &[&Path], node_id: &str, target: &str) -> Result<Vec<Strin
     Ok(ids)
 }
 
-/// Multi-layer composed hydration from Parquet - the counterpart of
-/// ros-madair-read's `Layers::hydrate_resource`. Gathers a resource's tiles from
+/// Multi-layer composed hydration from Parquet - the retired SQLite
+/// `Layers::hydrate_resource` counterpart. Gathers a resource's tiles from
 /// every layer that has it (TOPMOST first, so `merge_resources`' first-wins ==
 /// topmost-wins), merges with per-nodegroup precedence, folds concept labels
 /// base-first (topmost label wins on overwrite), and hydrates. `dirs` is base-first
@@ -831,14 +865,13 @@ pub fn hydrate_layers(
     // every layer, every hydrate); now built once per installed-layer set.
     let labels = cached_concept_labels(dirs)?;
     mark!("labels");
-    let out = ros_madair_read::hydrate_tiles_with_labels(&tiles, uuid, graph, &labels, languages)
+    let out = hydrate_tiles_with_labels(&tiles, uuid, graph, &labels, languages)
         .map_err(|e| DuckError::Compile(format!("hydrate: {e}")));
     mark!("tree");
     out
 }
 
-/// Build a tiles-only `StaticResource` for merging (mirrors ros-madair-read's
-/// private `as_resource`).
+/// Build a tiles-only `StaticResource` for merging.
 fn as_resource(
     uuid: &str,
     graph: &dyn alizarin_core::GraphLookup,
@@ -939,15 +972,19 @@ fn compile_expr(
             let (node, ng) = resolve(graph, path)?;
             expect_class(&node, registry, |c| matches!(c, IndexClass::ConceptHierarchical { .. }), path, "concept")?;
             match op {
+                // Multi-valued: the tile promotes a JSON array of its concept ids, so
+                // a match is membership, not equality — a concept-list or multi-concept
+                // tile carries several, and a filter on any of them matches.
                 ConceptOp::Is => Ok(format!(
                     "SELECT DISTINCT resource_id FROM tiles \
-                     WHERE nodegroup_id = '{}' AND concept_id = '{}'",
+                     WHERE nodegroup_id = '{}' AND json_contains(concept_ids, '\"{}\"')",
                     sql_lit(&ng),
                     sql_lit(value)
                 )),
-                // Descendant-or-self: the tile's concept must fall in the queried
-                // concept's DFS interval. One range read over the DFS-ordered
-                // catalog (works for `concept` AND `reference` — shared class).
+                // Descendant-or-self: ANY of the tile's concepts must fall in the
+                // queried concept's DFS interval. Unnest the tile's concept array and
+                // range-join the DFS-ordered catalog (works for `concept` AND
+                // `reference` — shared class).
                 ConceptOp::DescendantOrSelfOf => {
                     if !has_catalog {
                         return Err(DuckError::Compile(format!(
@@ -956,9 +993,10 @@ fn compile_expr(
                         )));
                     }
                     Ok(format!(
-                        "SELECT DISTINCT t.resource_id FROM tiles t \
-                         JOIN concepts c ON c.concept_id = t.concept_id \
-                         WHERE t.nodegroup_id = '{}' \
+                        "SELECT DISTINCT t.resource_id FROM tiles t, \
+                         unnest(from_json(t.concept_ids, '[\"VARCHAR\"]')) AS u(cid), \
+                         concepts c \
+                         WHERE t.nodegroup_id = '{}' AND c.concept_id = u.cid \
                            AND c.dfs_enter BETWEEN \
                              (SELECT dfs_enter FROM concepts WHERE concept_id = '{}') AND \
                              (SELECT dfs_leave FROM concepts WHERE concept_id = '{}')",
@@ -1212,7 +1250,10 @@ fn compile_tile_cond(
                 "concept",
             )?;
             match op {
-                ConceptOp::Is => Ok(format!("t.concept_id = '{}'", sql_lit(value))),
+                // Membership over the tile's concept array (see the top-level Concept).
+                ConceptOp::Is => {
+                    Ok(format!("json_contains(t.concept_ids, '\"{}\"')", sql_lit(value)))
+                }
                 ConceptOp::DescendantOrSelfOf => {
                     if !has_catalog {
                         return Err(DuckError::Compile(format!(
@@ -1220,8 +1261,11 @@ fn compile_tile_cond(
                              open with `open_with_catalog`"
                         )));
                     }
+                    // ANY of the tile's concepts falls in the DFS interval.
                     Ok(format!(
-                        "t.concept_id IN (SELECT c.concept_id FROM concepts c \
+                        "EXISTS (SELECT 1 FROM \
+                           unnest(from_json(t.concept_ids, '[\"VARCHAR\"]')) AS u(cid) \
+                           JOIN concepts c ON c.concept_id = u.cid \
                          WHERE c.dfs_enter BETWEEN \
                            (SELECT dfs_enter FROM concepts WHERE concept_id = '{v}') AND \
                            (SELECT dfs_leave FROM concepts WHERE concept_id = '{v}'))",
