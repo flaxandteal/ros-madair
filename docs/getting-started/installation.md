@@ -5,11 +5,11 @@ Rós Madair is a Rust workspace. The current stack is six crates:
 | Crate | Purpose |
 |-------|---------|
 | `ros-madair-handlers` | Datatype → index-class classification; the CLM `reference` handler |
-| `ros-madair-format` | On-disk artifact format — manifest + versioned chunk framing (WASM-safe) |
-| `ros-madair-emit` | CLI: compile a data directory into head + chunks + manifest |
-| `ros-madair-query` | Head-schema query compiler (`Concept` / `Range` / `Bbox` / `HasLink` → SQL) |
-| `ros-madair-read` | Native read path — resolve, hydrate, layered overlay, reverse traversal |
-| `ros-madair-python` | PyO3 bindings (`compile_query`, `hydrate_*`) |
+| `ros-madair-format` | The snapshot contract (manifest + `FORMAT_VERSION` + snapshot-id derivation) and attestation **verify**; held to `wasm32` |
+| `ros-madair-emit` | CLI/library: compile a data directory into the tile-row + edge Parquet substrate + concept catalog + manifest; `sign`/`verify`/`pubkey` |
+| `ros-madair-query` | The typed `Query`/`Expr` IR + `ModelCatalog` (discovery) and `explain` — backend-agnostic |
+| `ros-madair-duck` | The IR → DuckDB SQL over Parquet, tile-graph hydration, `cited_by`, and reader-side snapshot verify |
+| `ros-madair-python` | PyO3 bindings (over `duck`) |
 
 ## Prerequisites
 
@@ -44,8 +44,8 @@ pip install maturin
 maturin develop -m crates/ros-madair-python/Cargo.toml
 ```
 
-This produces an importable extension module exposing `compile_query` and the
-`hydrate_*` entry points.
+This produces an importable extension module exposing the `duck`-backed reader
+(`Graph` + `Reader`: resolve, count, resource tiles, hydrate).
 
 ## Documentation site
 

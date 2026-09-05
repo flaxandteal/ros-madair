@@ -96,8 +96,8 @@ alizarin graphs + resources + vocabularies (data_dir)
   snapshot id), `attest` (build-time signing over the manifest).
 - `ros-madair-query`: the typed `Expr`/`Query` IR (incl. `OnLink`/`OnTile`), the
   `ModelCatalog` discovery surface (paths → predicate family, for NL→IR
-  authoring), and `explain` (IR → English). The v1 head-SQL compiler is still
-  present but unused — nothing consumes it; it is slated for removal.
+  authoring), and `explain` (IR → English). Backend-agnostic — no compiler; `duck`
+  lowers the IR to SQL.
 - `ros-madair-duck`: `DuckReader` + `compile_expr` — the only compiler for that
   same IR, lowering `Concept`/`Range`/`Bbox`/`HasLink`/`OnLink`/`All`/`Any`/`Not`
   to DuckDB SQL over the tile-row Parquet (`resolve_ids`, `count_records`), plus

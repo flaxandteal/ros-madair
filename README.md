@@ -1,55 +1,54 @@
 # Rós Madair
 
-A static-file SPARQL query engine for heritage data. Pre-built binary indexes
-are served from CDNs or static file hosts and queried entirely in the browser
-via WebAssembly — no backend database required.
+A static-file query engine for heritage (Arches) graph data. The
+`ros-madair-emit` CLI compiles alizarin graph + resource data into a **DuckDB +
+Parquet substrate** — tile-row Parquet with promoted, zone-mapped columns, a
+columnar edge table, a concept catalog, and a signed manifest — served from a CDN
+or static host and queried without a backend database. A reader compiles the
+typed query IR to DuckDB SQL, fetches only the row groups it needs via HTTP
+Range, and hydrates matches into a schema-shaped tree.
 
-Typical queries transfer ~2% of the total dataset (~540 KB on a 22 MB /
-160K-resource index).
-
-> **Status — architecture in transition (branch `prune/duckdb-substrate`).**
-> The coarse/fine read engine described in *How It Works* below is being
-> **replaced by a DuckDB + Parquet substrate**. The v1 page-index island
-> (`core`/`builder`/`client`/`alizarin`/`napi`) has been removed; the v2
-> head+chunk read path is next. See
-> [Direction: DuckDB + Parquet substrate](#direction-duckdb--parquet-substrate)
-> for the rationale, the layout, and the roadmap. Sections between here and
-> there describe the engine being retired.
+> **Status.** The v1 coarse/fine head+chunk read engine has been **deleted** (the
+> substrate subsumes it). The `ros-madair-read` crate is gone (its tile-graph
+> hydration folded into `ros-madair-duck`); `ros-madair-query` is now a
+> backend-agnostic IR (no compiler); `ros-madair-format` is the snapshot contract
+> + attestation verify. The browser runtime (DuckDB-WASM) is the remaining slice —
+> see [Direction](#direction-duckdb--parquet-substrate).
 
 ## How It Works
 
-The `ros-madair-emit` CLI compiles alizarin (Arches) graph + resource data into
-static artifacts. A reader queries a small indexed "head", fetches only the tile
-fragments it needs, and hydrates them into a schema-shaped tree — no backend
+The `ros-madair-emit` CLI compiles a `data_dir` (alizarin/Arches graphs +
+resources + optional SKOS) into the substrate. A reader (`ros-madair-duck`
+natively; DuckDB-WASM in the browser) compiles the `Query` IR to SQL, prunes row
+groups on the zone-map, filters exactly, and hydrates the matches — no backend
 database.
 
 ```
 alizarin graphs + resources + vocabularies (a data_dir)
         │  ros-madair-emit   (CLI)
         ▼
-  head.sqlite       indexed spine / concept / value / geo / link tables — the coarse index
-  chunks/*.msgpack  content-hashed tile detail — the hydration payload
-  manifest.json     layout + format-version contract
-        │  ros-madair-read (native) / a browser consumer
+  tiles_<slug>.parquet   tile = row; promoted columns (concept_ids / q_ordered / geo_*)
+                         whose row-group min/max stats ARE the zone-map; `data` = hydration JSON
+  edges_<slug>.parquet   one row per link target — HasLink / OnLink / cited_by semijoin this
+  concept_catalog.parquet  concept DFS intervals (hierarchy = a range join)
+  manifest.json          layout + FORMAT_VERSION contract; signed snapshot_id
+        │  ros-madair-duck (native) / DuckDB-WASM (browser)
         ▼
-  query the head to select resources + chunks → fetch only those (HTTP Range)
-  → hydrate tiles into a schema-shaped JSON tree (overlay + cited_by aware)
+  compile the Query IR → DuckDB SQL (zone-map prune → exact filter, over HTTP Range)
+  → hydrate matches into a schema-shaped JSON tree (overlay + cited_by aware)
+  → verify the manifest signature before trusting a snapshot
 ```
-
-This coarse/fine read engine is what the
-[Direction](#direction-duckdb--parquet-substrate) replaces with DuckDB + Parquet;
-the hydration, overlay, and reverse-traversal layers on top of it are kept.
 
 ## Crates
 
 | Crate | Purpose |
 |-------|---------|
 | `ros-madair-handlers` | Datatype → index-class classification; the CLM `reference` handler |
-| `ros-madair-format` | On-disk artifact format — manifest + versioned chunk framing (WASM-safe) |
-| `ros-madair-emit` | CLI: compile a data_dir into head + chunks + manifest (and, additively, tile-row Parquet — see Direction) |
-| `ros-madair-query` | Head-schema query compiler (`Concept` / `Range` / `Bbox` / `HasLink` → SQL) |
-| `ros-madair-read` | Native read path — resolve, hydrate, layered overlay, reverse traversal (`cited_by`) |
-| `ros-madair-python` | PyO3 bindings (`compile_query`, `hydrate_*`) |
+| `ros-madair-format` | The snapshot **contract** (manifest types + `FORMAT_VERSION`, the shared snapshot-id derivation) and attestation **verify** (`format::verify`); held to `wasm32` |
+| `ros-madair-emit` | CLI/library: compile a data_dir into the tile-row + edge Parquet substrate + concept catalog + manifest; `sign`/`verify`/`pubkey` subcommands |
+| `ros-madair-query` | The typed `Query`/`Expr` IR (`Concept`/`Range`/`Bbox`/`HasLink`/`OnLink`/`OnTile`) + `ModelCatalog` (discovery) and `explain`. Backend-agnostic — no compiler |
+| `ros-madair-duck` | The IR → DuckDB SQL over Parquet (exact spatial, links, DFS concept join, multi-hop `OnLink`, layered overlay), **tile-graph hydration**, `cited_by`, and reader-side snapshot **verify** |
+| `ros-madair-python` | PyO3 bindings (over `duck`) |
 
 ## Quick Start
 
@@ -75,9 +74,22 @@ The `data_dir` follows the alizarin/Clódóir convention:
   vocabularies/*.xml      SKOS (optional)
 ```
 
-Output (`<out_dir>`): `head.sqlite`, `chunks/`, `manifest.json`. Tiers
-(`--tier <name>:<config.json>` with `exclude_nodegroups` / `exclude_models`)
-emit an audience-scoped artifact that omits restricted data entirely.
+Output (`<out_dir>`): `tiles_<slug>.parquet`, `edges_<slug>.parquet`,
+`concept_catalog.parquet`, `manifest.json`. Sign it with
+`ros-madair-emit sign <out_dir> <key>` (attests the manifest `snapshot_id`);
+`verify` / `pubkey` round out the attestation CLI.
+
+### Runnable example: the whole flow in ~100 lines
+
+```bash
+cargo run -p ros-madair-duck --example substrate_end_to_end
+```
+
+Self-contained (no data files, no network): it writes a tiny `data_dir`, emits +
+signs it, verifies the snapshot, opens it with `DuckReader`, runs `Range`/`Bbox`
+queries from the IR, and hydrates a match into a JSON tree. Two more read-side
+examples take an existing snapshot directory:
+`--example cited-by` (reverse links) and `--example hydrate-perf`.
 
 ## Documentation
 
@@ -89,19 +101,22 @@ in [Direction](#direction-duckdb--parquet-substrate) above.
 
 ## Direction: DuckDB + Parquet substrate
 
-A direction plan, recorded from an investigation into whether Rós Madair's
-read engine earns its keep. Short version: the coarse-prune-then-fine-scan
-**read mechanism** does not — it is a reimplementation of what Parquet
-zone-maps + DuckDB give natively — so it is being replaced. What is genuinely
-RM-specific is kept and rehomed on top of that substrate.
+Recorded from the investigation into whether Rós Madair's read engine earned
+its keep. Short version: the coarse-prune-then-fine-scan **read mechanism** did
+not — it was a reimplementation of what Parquet zone-maps + DuckDB give natively
+— so it has been **replaced**. What is genuinely RM-specific (layered overlay,
+reverse traversal, tile-graph hydration, snapshot signing) is kept and rehomed on
+the substrate. This section keeps the rationale and the layout; the roadmap at the
+end tracks what has landed.
 
-### Why: the read engine is a reimplementation, verified
+### Why: the read engine was a reimplementation, verified
 
 Both RM and DuckDB-over-Parquet serve static files off a CDN, fetch only what
-is needed via HTTP Range, and prune coarse-then-fine. The original differential
-harness (`duckdb_equiv.rs`) established this empirically; now that the substrate
-read path exists, that equivalence is carried by `ros-madair-duck`'s own
-`tests/parity.rs` (same emitter, same rows, both backends). It established:
+is needed via HTTP Range, and prune coarse-then-fine. A differential harness
+(`duckdb_equiv.rs`, later `duck`'s `parity.rs`) established this empirically by
+running the old head backend and the duck backend over the same emitter rows;
+with the head backend now deleted, `duck`'s `tests/{behavioral,descendant}.rs`
+exercise the substrate directly. The investigation established:
 
 - **Ranges / equality match exactly.** RM's `qvalue BETWEEN` on day-quantised
   dates == DuckDB `BETWEEN`. RM here is a hand-built SQLite index matching what
@@ -202,24 +217,23 @@ the emit-time **tier** (`exclude_nodegroups`) that never ships the bytes at all.
 
 - **Done — prune.** v1 island removed (~11.5k LOC: `quantize`/`summary_quads`/
   `page_file`/`hilbert`/`resource_map` and their bindings). v2 stack still green.
-- **Done — slice 1 (additive Parquet emit).** `emit::parquet` writes tile-row
-  Parquet alongside the head/chunk writer: per-graph cluster config, promoted
-  columns, nodegroup partitioning, DFS hierarchical ordering + interval sidecar
+- **Done — slice 1 (tile-row Parquet emit).** `emit::parquet` is the emit
+  back-half: per-graph cluster config, promoted columns, nodegroup partitioning,
+  DFS hierarchical ordering + interval sidecar
   (`crates/ros-madair-emit/tests/parquet_emit.rs`). Verified against DuckDB —
   exact spatial fine step, partition pruning, subtree ranges.
-- **Done — slice 2 (DuckDB query path).** `ros-madair-duck` compiles the SAME
+- **Done — slice 2 (DuckDB query path).** `ros-madair-duck` compiles the
   `Query` IR to DuckDB SQL over Parquet: all `Expr` variants (`All`/`Any`/`Not` →
   `INTERSECT`/`UNION`/`EXCEPT`), `Concept` `Is` + `DescendantOrSelfOf` (catalog
   DFS-interval join), `Range`, exact per-node `HasLink`, and `Bbox` with an
-  **exact `ST_Intersects` fine step** (the head never implemented it), degrading
-  to the coarse superset where the spatial extension is unavailable. Bundled
-  libduckdb (json+parquet static, offline). Verified by `tests/parity.rs`
-  (parity with the emitter's rows) and `tests/behavioral.rs` (every `Expr`
-  variant + `count_records`).
+  **exact `ST_Intersects` fine step**, degrading to the coarse superset where the
+  spatial extension is unavailable. Bundled libduckdb (json+parquet static,
+  offline). Verified by `tests/behavioral.rs` (every `Expr` variant +
+  `count_records`) and `tests/descendant.rs`.
 - **Done — slice 3 (hydration/overlay/`cited_by` on Parquet).** `duck`'s
   `hydrate_layers` composes base+overlay tiles read from the Parquet `data`
-  column (reusing `read`'s tile→tree hydration), and `cited_by`/`geo_points` do
-  reverse link lookups over the promoted `link_targets`.
+  column via the `hydrate` module (folded in from the retired `read` crate), and
+  `cited_by`/`geo_points` do reverse link lookups over the `edges` table.
 - **Done — path / multi-hop queries.** An additive edge table
   (`edges_<slug>.parquet`, one row per link target) plus the `OnLink` path
   predicate: a cross-resource hop compiles to a leaf-first edge semijoin, nests
@@ -235,11 +249,17 @@ the emit-time **tier** (`exclude_nodegroups`) that never ships the bytes at all.
   cross-model, dotted paths, layered precedence) + the emit edge test.
   _Deferred:_ cardinality-n layer merge, and edge-side pruning (`src_node`
   partition / Bloom / dense ordinals).
-- **Next — slice 4.** Delete the old engine (`format` chunks, `query` head SQL,
-  the emit head/chunk writer, `read::resolve`) once callers move to `duck`;
-  rewire the Python binding; browser runtime → DuckDB-WASM (the SQL `duck`
-  already compiles); update CI and the `js/` glue (which still reference the
-  removed WASM client).
+- **Done — delete the old engine.** Removed `format`'s chunk framing, the emit
+  head/chunk writer, the entire `ros-madair-read` crate (hydration folded into
+  `duck`), and the `query` head-SQL compiler (the IR + `ModelCatalog` + `explain`
+  stay). `ros-madair-python` ported onto `duck`. The snapshot-id derivation and
+  reader-side **verify** now live in `format` (one copy, shared by writer and
+  reader); `duck`'s `open_layers` verifies each layer and refuses a tampered one —
+  closing the sign→verify loop (`duck/tests/verify.rs`).
+- **Next — browser runtime → DuckDB-WASM.** Run the same SQL `duck` compiles in
+  the browser (the `ros-madair-docs` demos already do this by hand pending a
+  WASM/JS path for the compiler); update CI and the `js/` glue (which still
+  reference the removed v1 WASM client).
 
 ## Dependencies
 

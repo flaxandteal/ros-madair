@@ -59,17 +59,17 @@ local `python -m http.server`. No database, no backend process, no API server.
 
 ### Surgical Data Fetching
 
-A query consults a small indexed "head", then fetches only the tile fragments it
-needs via HTTP Range requests — not the whole dataset.
+A query prunes Parquet row groups on their zone-map, then fetches only those via
+HTTP Range requests (with column projection) — not the whole dataset.
 
 </div>
 
 <div class="rm-feature" markdown>
 
-### Coarse Index + Tile Detail
+### Zone-Map + Tile Detail
 
-An indexed head (spine / concept / value / geo / link) routes a query to the
-resources and chunks that can match; the chunks carry the tile detail that
+Promoted, typed columns (concept / date / geo) carry per-row-group min/max stats
+that *are* the index; a `data` JSON blob per row carries the tile detail that
 hydration turns into a schema-shaped tree.
 
 </div>
@@ -112,23 +112,27 @@ archaeological surveys — that is overkill.
 ### The Approach
 
 The `ros-madair-emit` CLI compiles a data directory of graphs, resources, and
-vocabularies into three artifacts:
+vocabularies into a **DuckDB + Parquet substrate**:
 
-1. **`head.sqlite`** — an indexed head (spine, concept, ordered-value, geo-bbox,
-   and link tables): the coarse index a query plans against.
-2. **`chunks/*.msgpack`** — content-hashed tile detail: the payload hydration
-   turns back into a schema-shaped tree.
-3. **`manifest.json`** — the layout and format-version contract every reader
-   checks.
+1. **`tiles_<slug>.parquet`** — one row per tile, with promoted typed columns
+   (concept / date / geo) whose row-group stats are the zone-map, and a `data`
+   JSON blob for hydration.
+2. **`edges_<slug>.parquet`** — one row per link target (the columnar edge table
+   links and reverse traversal semijoin), plus a **`concept_catalog.parquet`**
+   for concept-hierarchy range joins.
+3. **`manifest.json`** — the layout + format-version contract, carrying a signed
+   `snapshot_id`.
 
-A reader queries the head to select the resources and chunks that can match,
-fetches only those (over HTTP Range), and hydrates the tiles — overlay- and
-reverse-traversal-aware.
+A reader (`ros-madair-duck` natively; DuckDB-WASM in the browser) compiles the
+typed query IR to SQL, prunes row groups on the zone-map, fetches only those
+(over HTTP Range), filters exactly, and hydrates the matches — overlay- and
+reverse-traversal-aware — verifying the manifest signature first.
 
 !!! note "Direction: DuckDB + Parquet"
-    The coarse/fine read engine above is being replaced by a DuckDB + Parquet
-    substrate; the layered overlay model, reverse traversal (`cited_by`), and
-    Arches tile-graph hydration are kept. See the
+    This substrate **replaced** the v1 coarse/fine head+chunk read engine; the
+    layered overlay model, reverse traversal (`cited_by`), tile-graph hydration,
+    and snapshot signing are kept. The remaining slice is the DuckDB-WASM browser
+    runtime. See the
     [README's Direction section](https://github.com/flaxandteal/ros-madair#direction-duckdb--parquet-substrate)
     for the rationale and roadmap.
 
@@ -156,8 +160,8 @@ Emit static artifacts from Arches data with the `ros-madair-emit` CLI.
 
 ### [How It Works](how-it-works/overview.md)
 
-The head + chunks + manifest model, and where the DuckDB + Parquet direction
-takes it.
+The tile-row Parquet substrate, the zone-map read path, and what stays
+RM-specific on top of it.
 
 </div>
 
