@@ -93,11 +93,17 @@ examples take an existing snapshot directory:
 
 ## Documentation
 
-Full documentation is available in the `docs/` directory, covering
-[installation](docs/getting-started/installation.md),
-[quick start](docs/getting-started/quickstart.md), and an
-[architecture overview](docs/how-it-works/overview.md). The forward plan lives
-in [Direction](#direction-duckdb--parquet-substrate) above.
+Full documentation — installation, quick start, how-it-works, and **live,
+in-browser demos** (query, layers, roundtrip, and signature verification running
+on duckdb-wasm) — lives in the separate
+[`ros-madair-docs`](https://github.com/flaxandteal/ros-madair-docs) site
+(Fumadocs on Next.js):
+
+```bash
+cd ../ros-madair-docs && npm install && npm run dev   # http://localhost:3000
+```
+
+The forward plan lives in [Direction](#direction-duckdb--parquet-substrate) above.
 
 ## Direction: DuckDB + Parquet substrate
 
@@ -265,8 +271,8 @@ the emit-time **tier** (`exclude_nodegroups`) that never ships the bytes at all.
 
 Rós Madair depends on [alizarin-core](https://github.com/flaxandteal/alizarin)
 for Arches graph and tile data structures. The alizarin repository must be
-checked out as a sibling directory (see
-[installation docs](docs/getting-started/installation.md) for details).
+checked out as a sibling directory (see the
+[installation docs](https://github.com/flaxandteal/ros-madair-docs) for details).
 
 ## License
 

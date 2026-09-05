@@ -45,10 +45,11 @@ maturin develop -m crates/ros-madair-python/Cargo.toml   # compile_query, hydrat
 
 ### Documentation site
 
+Docs (prose + live in-browser duckdb-wasm demos) live in the sibling
+`ros-madair-docs` repo (Fumadocs on Next.js), not in this repo:
+
 ```bash
-pip install -r requirements-docs.txt   # zensical (MkDocs successor)
-zensical serve                         # local preview
-zensical build --clean                 # output in site/
+cd ../ros-madair-docs && npm install && npm run dev   # http://localhost:3000
 ```
 
 ## Architecture
