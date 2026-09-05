@@ -631,7 +631,9 @@ fn on_link_crosses_layers() {
     ))
     .unwrap();
     con.execute_batch(&format!(
-        "COPY t TO '{}/tiles_test.parquet' (FORMAT PARQUET)",
+        "COPY (SELECT * EXCLUDE (concept_id), \
+         CASE WHEN concept_id IS NULL THEN NULL ELSE '[\"' || concept_id || '\"]' END AS concept_ids \
+         FROM t) TO '{}/tiles_test.parquet' (FORMAT PARQUET)",
         base.display()
     ))
     .unwrap();
@@ -726,7 +728,9 @@ fn on_link_crosses_models() {
     ))
     .unwrap();
     con.execute_batch(&format!(
-        "COPY t TO '{}/tiles_test.parquet' (FORMAT PARQUET)",
+        "COPY (SELECT * EXCLUDE (concept_id), \
+         CASE WHEN concept_id IS NULL THEN NULL ELSE '[\"' || concept_id || '\"]' END AS concept_ids \
+         FROM t) TO '{}/tiles_test.parquet' (FORMAT PARQUET)",
         dir.display()
     ))
     .unwrap();
@@ -795,7 +799,9 @@ fn on_link_chain_two_hops() {
     ))
     .unwrap();
     con.execute_batch(&format!(
-        "COPY t TO '{}/tiles_test.parquet' (FORMAT PARQUET)",
+        "COPY (SELECT * EXCLUDE (concept_id), \
+         CASE WHEN concept_id IS NULL THEN NULL ELSE '[\"' || concept_id || '\"]' END AS concept_ids \
+         FROM t) TO '{}/tiles_test.parquet' (FORMAT PARQUET)",
         dir.display()
     ))
     .unwrap();
@@ -875,7 +881,9 @@ fn dot_qualified_path_walks_the_schema_tree() {
     ))
     .unwrap();
     con.execute_batch(&format!(
-        "COPY t TO '{}/tiles_test.parquet' (FORMAT PARQUET)",
+        "COPY (SELECT * EXCLUDE (concept_id), \
+         CASE WHEN concept_id IS NULL THEN NULL ELSE '[\"' || concept_id || '\"]' END AS concept_ids \
+         FROM t) TO '{}/tiles_test.parquet' (FORMAT PARQUET)",
         dir.display()
     ))
     .unwrap();
