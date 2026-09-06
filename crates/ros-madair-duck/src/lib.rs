@@ -119,14 +119,6 @@ pub struct DuckReader {
     spatial: bool,
 }
 
-/// A resource's search display (from [`DuckReader::search_display`]): headword plus
-/// POS and dialect concept labels.
-#[derive(Debug, Default, Clone)]
-pub struct SearchRow {
-    pub headword: Option<String>,
-    pub pos: Option<String>,
-    pub dialects: Vec<String>,
-}
 
 /// Where DuckDB's spatial extension comes from. `json` is statically bundled
 /// (cargo feature) so it needs no source; `parquet` reading is core. Spatial is
@@ -364,69 +356,6 @@ impl DuckReader {
         Ok(out)
     }
 
-    /// Canonical search display per resource: headword (`descriptor_name`), plus
-    /// the POS + dialect concept labels. POS and each dialect are top-level
-    /// single-concept nodegroups, so each is its own tile: match tiles by
-    /// `nodegroup_id` (= the node id) and join `concept_id` to the catalog label.
-    /// POS/dialects need the concept catalog (`with_catalog`); without it only
-    /// headwords come back.
-    pub fn search_display(
-        &self,
-        uris: &[String],
-        pos_node: &str,
-        dialect_node: &str,
-    ) -> Result<HashMap<String, SearchRow>, DuckError> {
-        let mut out: HashMap<String, SearchRow> = HashMap::new();
-        if uris.is_empty() {
-            return Ok(out);
-        }
-        let ph = std::iter::repeat("?").take(uris.len()).collect::<Vec<_>>().join(",");
-
-        // Headword (descriptor_name), one per resource.
-        let sql = format!(
-            "SELECT resource_id, descriptor_name FROM tiles \
-             WHERE descriptor_name IS NOT NULL AND descriptor_name <> '' \
-             AND resource_id IN ({ph})"
-        );
-        let mut stmt = self.conn.prepare(&sql)?;
-        let rows = stmt.query_map(duckdb::params_from_iter(uris.iter()), |r| {
-            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
-        })?;
-        for row in rows {
-            let (id, name) = row?;
-            out.entry(id).or_default().headword.get_or_insert(name);
-        }
-
-        if !self.has_catalog {
-            return Ok(out);
-        }
-
-        // POS + dialect concept labels: tiles of the given nodegroup ⨝ catalog.
-        // params = [node, uris...]; dialects are cardinality-n so collect a Vec.
-        let node_query = |node: &str| -> Result<Vec<(String, String)>, DuckError> {
-            let sql = format!(
-                "SELECT t.resource_id, c.label FROM tiles t \
-                 JOIN concepts c ON json_contains(t.concept_ids, concat('\"', c.concept_id, '\"')) \
-                 WHERE t.nodegroup_id = ? AND c.label IS NOT NULL \
-                 AND t.resource_id IN ({ph})"
-            );
-            let mut stmt = self.conn.prepare(&sql)?;
-            let params = std::iter::once(node.to_string()).chain(uris.iter().cloned());
-            let rows = stmt.query_map(duckdb::params_from_iter(params), |r| {
-                Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
-            })?;
-            rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
-        };
-
-        for (id, label) in node_query(pos_node)? {
-            out.entry(id).or_default().pos.get_or_insert(label);
-        }
-        for (id, label) in node_query(dialect_node)? {
-            out.entry(id).or_default().dialects.push(label);
-        }
-        Ok(out)
-    }
-
     /// All `(concept_id, label)` from the catalog - the bulk concept→label dump
     /// (Gréasán `v2_closure`, for on-device reference rendering). Empty without a
     /// catalog attached.
@@ -445,6 +374,7 @@ impl DuckReader {
         }
         Ok(out)
     }
+
 
     /// Reverse-link geo lookup (Gréasán `v2_geo_points`, MapView): every resource
     /// that links to `target` through node `node_id`, with its descriptor + point
@@ -764,6 +694,34 @@ pub fn cited_by(dirs: &[&Path], node_id: &str, target: &str) -> Result<Vec<Strin
     ids.sort();
     ids.dedup();
     Ok(ids)
+}
+
+/// `descriptors` across a layer set (pooled reader reuse), first-wins per uri to
+/// match the app's `v2_descriptors` composition (base-first order, earliest layer
+/// keeps the name). The pooled counterpart of iterating `DuckReader::open_with`
+/// per dir + calling the `descriptors` method - so the enrichment path (cognate /
+/// example / placename display names) reuses the warm pool instead of cold-opening
+/// every layer on every entry.
+pub fn descriptors(
+    dirs: &[&Path],
+    uris: &[String],
+) -> Result<HashMap<String, String>, DuckError> {
+    let mut out: HashMap<String, String> = HashMap::new();
+    for dir in dirs {
+        for (uri, name) in with_layer(dir, |r| r.descriptors(uris))? {
+            out.entry(uri).or_insert(name);
+        }
+    }
+    Ok(out)
+}
+
+/// The merged concept-label map for a layer set (pooled + cached) - the public
+/// entry point for the app's `v2_closure`. It hits the SAME reader pool and label
+/// cache the hydrate path warms, so after `prewarm` it is a cache hit rather than a
+/// fresh per-layer `concept_catalog.parquet` read (which was ~2s cold across the
+/// full stack). Base-first fold, topmost label wins - as the sqlite insert did.
+pub fn concept_labels(dirs: &[&Path]) -> Result<HashMap<String, String>, DuckError> {
+    Ok((*cached_concept_labels(dirs)?).clone())
 }
 
 /// Multi-layer composed hydration from Parquet - the retired SQLite
