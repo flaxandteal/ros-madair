@@ -27,8 +27,11 @@ on:
         type: string
 
 env:
-  SCCACHE_GHA_ENABLED: "true"
+  # sccache in LOCAL-DISK mode (see ci.yml for why: the GHA cache backend hits the
+  # legacy Actions cache API that now 400s and fails sccache startup). The python-wheel
+  # job builds in a manylinux container without sccache, so it unsets RUSTC_WRAPPER.
   RUSTC_WRAPPER: "sccache"
+  SCCACHE_DIR: "/home/runner/.cache/sccache"
 
 jobs:
   # ── Rust crates → crates.io (dependency order) ───────────────────────────────
@@ -43,8 +46,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@1.91.1
-      - name: sccache
+      - name: Install sccache
         uses: mozilla-actions/sccache-action@v0.0.6
+      - name: sccache disk cache (local; see ci.yml)
+        uses: actions/cache@v4
+        with:
+          path: /home/runner/.cache/sccache
+          key: sccache-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            sccache-${{ runner.os }}-
       - uses: Swatinem/rust-cache@v2
         with:
           cache-on-failure: true   # keep the DuckDB build across runs even on failure
@@ -71,6 +81,8 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       id-token: write   # required: lets the job mint the OIDC token PyPI exchanges
+    env:
+      RUSTC_WRAPPER: ""   # sccache isn't installed in the manylinux container; don't wrap
     steps:
       - uses: actions/checkout@v4
       # manylinux container: alizarin now resolves from crates.io INSIDE the container
@@ -104,8 +116,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@1.91.1
-      - name: sccache
+      - name: Install sccache
         uses: mozilla-actions/sccache-action@v0.0.6
+      - name: sccache disk cache (local; see ci.yml)
+        uses: actions/cache@v4
+        with:
+          path: /home/runner/.cache/sccache
+          key: sccache-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            sccache-${{ runner.os }}-
       - uses: Swatinem/rust-cache@v2
         with:
           cache-on-failure: true   # keep the DuckDB build across runs even on failure

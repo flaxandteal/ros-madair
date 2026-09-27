@@ -17,8 +17,14 @@ on:
   workflow_dispatch:
 
 env:
-  SCCACHE_GHA_ENABLED: "true"
+  # sccache in LOCAL-DISK mode, persisted with actions/cache (see each job). We do NOT
+  # set SCCACHE_GHA_ENABLED: that backend talks to the legacy Actions cache API
+  # (artifactcache.actions.githubusercontent.com), which now returns hard 400s and fails
+  # sccache *startup* — killing every compile before it runs. Local disk can't fail to
+  # start, and an actions/cache outage is non-fatal (warn + continue). restore-keys keep
+  # the C++ object cache across Cargo.lock changes, so DuckDB isn't recompiled.
   RUSTC_WRAPPER: "sccache"
+  SCCACHE_DIR: "/home/runner/.cache/sccache"
 
 jobs:
   # ── Rust: fmt + clippy + the full test suite (incl. the duck/parquet path) ──
@@ -36,8 +42,15 @@ jobs:
       - uses: dtolnay/rust-toolchain@1.91.1
         with:
           components: rustfmt, clippy
-      - name: sccache
+      - name: Install sccache
         uses: mozilla-actions/sccache-action@v0.0.6
+      - name: sccache disk cache (local; C++ objects survive Cargo.lock changes)
+        uses: actions/cache@v4
+        with:
+          path: /home/runner/.cache/sccache
+          key: sccache-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            sccache-${{ runner.os }}-
       - name: Rust cache (restores compiled libduckdb-sys on Cargo.lock hit)
         uses: Swatinem/rust-cache@v2
         with:
@@ -72,8 +85,15 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-      - name: sccache
+      - name: Install sccache
         uses: mozilla-actions/sccache-action@v0.0.6
+      - name: sccache disk cache (local; see rust job)
+        uses: actions/cache@v4
+        with:
+          path: /home/runner/.cache/sccache
+          key: sccache-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            sccache-${{ runner.os }}-
       - uses: Swatinem/rust-cache@v2
         with:
           cache-on-failure: true   # keep the DuckDB build on a failed run (see rust job)
