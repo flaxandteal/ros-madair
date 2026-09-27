@@ -15,7 +15,7 @@ description = "The Rós Madair static-artifact FORMAT: manifest contract types +
 # HARD CONSTRAINT: this crate must build for wasm32-unknown-unknown — a
 # browser/native READER parses the manifest and verifies its attestation but
 # never emits. No rusqlite, no filesystem: contract + trust types only.
-ros-madair-handlers = { path = "../ros-madair-handlers" }
+ros-madair-handlers = { path = "../ros-madair-handlers", version = "0.1.0-alpha.16" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # The snapshot-id digest (a hash over artifact hashes + the id-excluded manifest)

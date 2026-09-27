@@ -34,6 +34,14 @@ if [ -f "$ROOT_DIR/Cargo.toml" ]; then
     echo "  ✓ Cargo.toml (workspace)"
 fi
 
+# Update the inter-crate path-dep versions (path is used for local builds; the version
+# is required for `cargo publish` to crates.io — keep it in lockstep with the workspace).
+for f in "$ROOT_DIR"/crates/ros-madair-*/Cargo.toml; do
+    [ -f "$f" ] || continue
+    sed -i -E "s#(ros-madair-[a-z]+ = \{ path = \"[^\"]+\", version = \")[^\"]+\"#\1$CARGO_VERSION\"#g" "$f"
+done
+echo "  ✓ inter-crate dep versions"
+
 # Update package.json
 if [ -f "$ROOT_DIR/package.json" ]; then
     node -e "

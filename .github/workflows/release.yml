@@ -1,18 +1,15 @@
 name: Release Package
 
 # Tag-triggered release for the DuckDB + Parquet substrate. Publishes:
-#   - the ros-madair-python wheel to PyPI (the depend-able registry — the Rust
-#     crates path-depend on alizarin, so they cannot go to crates.io);
+#   - the Rust crates (handlers, query, format, emit, duck) to crates.io;
+#   - the ros-madair-python wheel to PyPI (manylinux);
 #   - a GitHub Release carrying the emit CLI binary.
-# Rust downstreams depend via a git dependency on the tag.
+# alizarin is a published crates.io dependency now, so there is NO sibling vendoring and
+# the crates are publishable (all deps are registry versions).
 #
-# The v1 WASM/npm/NAPI client this workflow used to build was deleted; the browser
-# runtime is slated to become DuckDB-WASM (substrate slice 4).
-#
-# PREREQUISITES (same path-dep vendoring as ci.yml — alizarin is a RELATIVE SIBLING):
-#   - Repo variables: ALIZARIN_REPO (default flaxandteal/alizarin-sandbox), ALIZARIN_REF.
-#   - Repo secret:    DEPS_PAT (read on ALIZARIN_REPO; drop if public).
-#   - Repo secret:    PYPI_TOKEN (a PyPI API token) — the PyPI upload is SKIPPED if absent.
+# REQUIRED repo secrets (a publish step is SKIPPED if its token is absent):
+#   - CARGO_REGISTRY_TOKEN : a crates.io API token (crate names must be owned by the org).
+#   - PYPI_TOKEN           : a PyPI API token.
 
 on:
   push:
@@ -26,13 +23,65 @@ on:
         type: string
 
 env:
-  ALIZARIN_REPO: ${{ vars.ALIZARIN_REPO || 'flaxandteal/alizarin-sandbox' }}
-  ALIZARIN_REF: ${{ vars.ALIZARIN_REF || 'main' }}
   SCCACHE_GHA_ENABLED: "true"
   RUSTC_WRAPPER: "sccache"
 
 jobs:
-  # ── emit CLI binary + the GitHub Release ─────────────────────────────────────
+  # ── Rust crates → crates.io (dependency order) ───────────────────────────────
+  crates-io:
+    name: Publish crates → crates.io
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    env:
+      CC: "sccache gcc"
+      CXX: "sccache g++"
+      CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: sccache
+        uses: mozilla-actions/sccache-action@v0.0.6
+      - uses: Swatinem/rust-cache@v2
+      - name: Publish in dependency order
+        if: env.CARGO_REGISTRY_TOKEN != ''
+        run: |
+          for crate in ros-madair-handlers ros-madair-query ros-madair-format ros-madair-emit ros-madair-duck; do
+            echo "::group::cargo publish $crate"
+            cargo publish -p "$crate" \
+              || echo "::warning::publish $crate failed (already at this version, or crate name not yet owned) — continuing"
+            echo "::endgroup::"
+            sleep 25   # let the crates.io index propagate before the dependent crate builds
+          done
+
+  # ── PyO3 wheel → PyPI ────────────────────────────────────────────────────────
+  python-wheel:
+    name: Python wheel → PyPI
+    runs-on: ubuntu-latest
+    env:
+      MATURIN_PYPI_TOKEN: ${{ secrets.PYPI_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      # manylinux container: alizarin now resolves from crates.io INSIDE the container
+      # (no local sibling path to mount), so a portable manylinux wheel builds cleanly.
+      - name: Build manylinux wheel
+        uses: PyO3/maturin-action@v1
+        with:
+          command: build
+          args: --release -m crates/ros-madair-python/Cargo.toml --out dist
+          manylinux: auto
+      - name: Upload wheel artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: python-wheel
+          path: dist/*.whl
+      - name: Publish to PyPI
+        if: env.MATURIN_PYPI_TOKEN != '' && startsWith(github.ref, 'refs/tags/')
+        uses: PyO3/maturin-action@v1
+        with:
+          command: upload
+          args: --skip-existing dist/*
+
+  # ── emit CLI binary + GitHub Release ─────────────────────────────────────────
   release:
     name: CLI binary + GitHub Release
     runs-on: ubuntu-latest
@@ -43,28 +92,16 @@ jobs:
       CXX: "sccache g++"
     steps:
       - uses: actions/checkout@v4
-      - name: Vendor alizarin sibling (path dependency)
-        uses: actions/checkout@v4
-        with:
-          repository: ${{ env.ALIZARIN_REPO }}
-          ref: ${{ env.ALIZARIN_REF }}
-          path: .deps/alizarin-sandbox
-          token: ${{ secrets.DEPS_PAT }}
-      - name: Link sibling to ../alizarin-sandbox
-        run: ln -sfn "$GITHUB_WORKSPACE/.deps/alizarin-sandbox" "$(dirname "$GITHUB_WORKSPACE")/alizarin-sandbox"
-
       - uses: dtolnay/rust-toolchain@stable
       - name: sccache
         uses: mozilla-actions/sccache-action@v0.0.6
       - uses: Swatinem/rust-cache@v2
-
       - name: Build emit CLI (release)
         run: cargo build --release -p ros-madair-emit
       - name: Package binary
         run: |
           cp target/release/ros-madair-emit ros-madair-emit-linux-amd64
           chmod +x ros-madair-emit-linux-amd64
-
       - name: Resolve version
         id: v
         run: |
@@ -73,7 +110,6 @@ jobs:
           else
             echo "version=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
           fi
-
       - name: GitHub Release
         uses: softprops/action-gh-release@v2
         with:
@@ -85,66 +121,9 @@ jobs:
           body: |
             Rós Madair ${{ steps.v.outputs.version }} — DuckDB + Parquet static-file query substrate.
 
-            **Python** — the `ros-madair-python` wheel is published to PyPI by the `python-wheel` job.
-            **Rust** — the crates path-depend on alizarin, so they are NOT on crates.io; depend via git + this tag, e.g.
-            `ros-madair-duck = { git = "https://github.com/${{ github.repository }}", tag = "${{ steps.v.outputs.version }}" }`
-            **CLI** — `ros-madair-emit-linux-amd64` compiles a data_dir into the substrate (`tiles/edges/concepts/ordered` Parquet + manifest).
+            - **Rust** — `ros-madair-{handlers,query,format,emit,duck}` on crates.io.
+            - **Python** — the `ros-madair-python` wheel on PyPI.
+            - **CLI** — `ros-madair-emit-linux-amd64` compiles a data_dir into the substrate
+              (`tiles/edges/concepts/ordered` Parquet + manifest).
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-  # ── PyO3 wheel → PyPI ────────────────────────────────────────────────────────
-  python-wheel:
-    name: Python wheel → PyPI
-    runs-on: ubuntu-latest
-    env:
-      CC: "sccache gcc"
-      CXX: "sccache g++"
-      # Mapped so the publish step can gate on presence (secrets are not usable in `if`).
-      PYPI_TOKEN: ${{ secrets.PYPI_TOKEN }}
-    steps:
-      - uses: actions/checkout@v4
-      - name: Vendor alizarin sibling (path dependency)
-        uses: actions/checkout@v4
-        with:
-          repository: ${{ env.ALIZARIN_REPO }}
-          ref: ${{ env.ALIZARIN_REF }}
-          path: .deps/alizarin-sandbox
-          token: ${{ secrets.DEPS_PAT }}
-      - name: Link sibling to ../alizarin-sandbox
-        run: ln -sfn "$GITHUB_WORKSPACE/.deps/alizarin-sandbox" "$(dirname "$GITHUB_WORKSPACE")/alizarin-sandbox"
-
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-      - name: sccache
-        uses: mozilla-actions/sccache-action@v0.0.6
-      - uses: Swatinem/rust-cache@v2
-
-      - name: Install maturin + auditwheel
-        run: pip install maturin auditwheel twine
-
-      # Build NATIVELY (not in a manylinux container) so the ../alizarin-sandbox path
-      # dependency resolves — the container would not mount the sibling. Then auditwheel
-      # repairs to a PyPI-acceptable manylinux wheel (bundling static duckdb + libstdc++).
-      - name: Build wheel (abi3)
-        run: maturin build --release -m crates/ros-madair-python/Cargo.toml --out target/wheels
-      - name: Repair to manylinux
-        run: |
-          mkdir -p dist
-          auditwheel repair target/wheels/*.whl -w dist/ \
-            || { echo "auditwheel repair skipped (already compliant?) — passing wheel through"; cp target/wheels/*.whl dist/; }
-          ls -lh dist/
-
-      - name: Upload wheel artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: python-wheel
-          path: dist/*.whl
-
-      - name: Publish to PyPI
-        if: env.PYPI_TOKEN != '' && startsWith(github.ref, 'refs/tags/')
-        run: twine upload --skip-existing dist/*.whl
-        env:
-          TWINE_USERNAME: __token__
-          TWINE_PASSWORD: ${{ secrets.PYPI_TOKEN }}
