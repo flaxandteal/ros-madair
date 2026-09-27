@@ -18,8 +18,9 @@ description = "The single source of the Rós Madair extension-type registry: han
 # dependency set to the governance core + the handler providers.
 alizarin-core.workspace = true
 # CLM lives at ext/clm/core in alizarin (consolidated alpha.128; ext dirs later
-# dropped the "alizarin-" prefix). Crate name is still `alizarin-clm-core`.
-alizarin-clm-core = { path = "../../../alizarin/ext/clm/core" }
+# dropped the "alizarin-" prefix). Crate name is still `alizarin-clm-core`. The same
+# published upstream version as alizarin-core, from crates.io.
+alizarin-clm-core = "2.0.0-beta.9"
 serde = { version = "1", features = ["derive"] }
 
 # WASM: alizarin-core pulls uuid v4 → getrandom 0.2, which refuses to build for

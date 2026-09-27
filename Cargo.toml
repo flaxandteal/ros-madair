@@ -42,15 +42,9 @@ debug = true
 
 
 [workspace.dependencies]
-# Single source of truth for the governance core: the local alizarin
-# checkout. The v2 static-assets stack builds directly against it.
-alizarin-core = { path = "../alizarin/crates/alizarin-core" }
-
-# alizarin-wasm is a git dep that brings its own alizarin-core from the
-# same git repo. This patch forces it to use the same single copy of
-# alizarin-core as everything else in the graph.
-[patch.'https://github.com/flaxandteal/alizarin']
-alizarin-core = { path = "../alizarin/crates/alizarin-core" }
-
-[patch.crates-io]
-alizarin-core = { path = "../alizarin/crates/alizarin-core" }
+# The governance core: the PUBLISHED upstream alizarin release from crates.io. A pinned
+# registry version — reproducible, no local checkout, no CI sibling-vendoring, and it
+# keeps RM's own crates crates.io-publishable (all deps are registry versions). Bump the
+# version to move alizarin. alizarin-clm-core (handlers) is the same version from crates.io.
+# (No [patch] blocks: one registry source already unifies every alizarin-core in the graph.)
+alizarin-core = "2.0.0-beta.9"
