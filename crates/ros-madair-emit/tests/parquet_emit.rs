@@ -210,26 +210,41 @@ fn tile_row_parquet_carries_promoted_columns_and_chunks() {
     let (batches, rows) = read_all(&path);
     assert_eq!(rows, 8, "row per tile");
 
-    // Gather promoted values across all rows, keyed by (resource, nodegroup).
-    let mut q_by_res: HashMap<String, i64> = HashMap::new();
+    // geo bbox stays on the tile row (the 1:1 axis); q_ordered moved to the melted
+    // ordered store (its own node/value-sorted axis).
     let mut geo_present: HashMap<String, bool> = HashMap::new();
     for b in &batches {
         let rid = col(b, "resource_id").as_any().downcast_ref::<StringArray>().unwrap();
         let ng = col(b, "nodegroup_id").as_any().downcast_ref::<StringArray>().unwrap();
-        let q = col(b, "q_ordered").as_any().downcast_ref::<Int64Array>().unwrap();
         let gmnx = col(b, "geo_min_lng").as_any().downcast_ref::<Float64Array>().unwrap();
         for i in 0..b.num_rows() {
-            let res = rid.value(i).to_string();
-            if ng.value(i) == FOUNDED_NG && q.is_valid(i) {
-                q_by_res.insert(res.clone(), q.value(i));
-            }
             if ng.value(i) == GEO_NG {
-                geo_present.insert(res.clone(), gmnx.is_valid(i));
+                geo_present.insert(rid.value(i).to_string(), gmnx.is_valid(i));
+            }
+        }
+    }
+    assert!(
+        !batches.iter().any(|b| b.schema().column_with_name("q_ordered").is_some()),
+        "q_ordered is no longer a tile-row column — it melts into the ordered store"
+    );
+
+    // q_ordered now lives in the melted ordered store (sorted node_id, q_ordered).
+    let ordered_path = path.with_file_name("ordered_talk.parquet");
+    assert!(ordered_path.exists(), "ordered store exists at {}", ordered_path.display());
+    let (obatches, _) = read_all(&ordered_path);
+    let mut q_by_res: HashMap<String, i64> = HashMap::new();
+    for b in &obatches {
+        let rid = col(b, "resource_id").as_any().downcast_ref::<StringArray>().unwrap();
+        let ng = col(b, "nodegroup_id").as_any().downcast_ref::<StringArray>().unwrap();
+        let q = col(b, "q_ordered").as_any().downcast_ref::<Int64Array>().unwrap();
+        for i in 0..b.num_rows() {
+            if ng.value(i) == FOUNDED_NG && q.is_valid(i) {
+                q_by_res.insert(rid.value(i).to_string(), q.value(i));
             }
         }
     }
 
-    // The date tile's q_ordered is exactly the head's day-quantization.
+    // The date node's q_ordered is exactly the head's day-quantization.
     assert_eq!(q_by_res.get(R_POINT).copied(), quantize_date("2005-06-01"));
     assert_eq!(q_by_res.get(R_LSHAPE).copied(), quantize_date("2018-03-15"));
     assert_eq!(q_by_res.get(R_FAR).copied(), quantize_date("1850-01-01"));
@@ -240,11 +255,10 @@ fn tile_row_parquet_carries_promoted_columns_and_chunks() {
         assert_eq!(geo_present.get(r).copied(), Some(true), "geo bbox promoted for {r}");
     }
 
-    // The footer really has row-group stats on the promoted columns (the zone-map).
-    let file = std::fs::File::open(&path).unwrap();
+    // The ordered store's footer carries row-group zone-map stats on q_ordered.
+    let file = std::fs::File::open(&ordered_path).unwrap();
     let meta = SerializedFileReader::new(file).unwrap().metadata().clone();
     assert!(meta.num_row_groups() >= 1);
-    // q_ordered column has min/max statistics in at least one row group.
     let has_qstats = (0..meta.num_row_groups()).any(|g| {
         let rg = meta.row_group(g);
         (0..rg.num_columns()).any(|c| {
@@ -252,7 +266,7 @@ fn tile_row_parquet_carries_promoted_columns_and_chunks() {
             cc.column_path().string() == "q_ordered" && cc.statistics().is_some()
         })
     });
-    assert!(has_qstats, "the promoted q_ordered column must carry row-group zone-map stats");
+    assert!(has_qstats, "the melted ordered store's q_ordered must carry row-group zone-map stats");
 
     // Optional: drop the emitted file where a DuckDB smoke-check can read it.
     if let Ok(dst) = std::env::var("RM_PARQUET_OUT") {
@@ -369,7 +383,7 @@ fn emit_writes_a_signable_manifest_that_verifies() {
             .unwrap();
     let snapshot_id = manifest["snapshot_id"].as_str().expect("snapshot_id present");
     assert!(!snapshot_id.is_empty(), "snapshot_id is non-empty");
-    assert_eq!(manifest["format_version"].as_u64(), Some(1), "format_version stamped");
+    assert_eq!(manifest["format_version"].as_u64(), Some(2), "format_version stamped (melt)");
     assert_eq!(manifest["base_uri"].as_str(), Some("https://example.org/"));
     assert!(
         manifest["artifacts"].as_array().is_some_and(|a| !a.is_empty()),

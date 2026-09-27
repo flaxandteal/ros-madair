@@ -53,21 +53,28 @@ fn descendant_of(v: &str) -> Query {
 #[test]
 fn descendant_or_self_is_a_subtree_range() {
     let dir = scratch();
-    let tiles = dir.join("tiles.parquet");
+    // `tiles_` prefix so open_with resolves the sibling concepts_ store by glob-replace.
+    let tiles = dir.join("tiles_g.parquet");
     let cat = dir.join("concept_catalog.parquet");
 
-    // Hand-write the two Parquets with DuckDB.
+    // Hand-write the tiles + melted concept store + DFS catalog. The concept values
+    // (r1→a1, r2→b, r3→root, r4→a) now live in the melted concept_index, node-scoped on
+    // the `topic` node (nodeid == NG here); the DescendantOrSelfOf range-joins the catalog.
     let con = duckdb::Connection::open_in_memory().unwrap();
     con.execute_batch(&format!(
         "COPY (SELECT * FROM (VALUES \
-            ('r1','{NG}','[\"a1\"]'),('r2','{NG}','[\"b\"]'),\
-            ('r3','{NG}','[\"root\"]'),('r4','{NG}','[\"a\"]') \
-         ) t(resource_id, nodegroup_id, concept_ids)) TO '{}' (FORMAT PARQUET); \
+            ('r1','{NG}'),('r2','{NG}'),('r3','{NG}'),('r4','{NG}') \
+         ) t(resource_id, nodegroup_id)) TO '{tiles}' (FORMAT PARQUET); \
+         COPY (SELECT * FROM (VALUES \
+            ('r1','r1','{NG}','{NG}','a1'),('r2','r2','{NG}','{NG}','b'),\
+            ('r3','r3','{NG}','{NG}','root'),('r4','r4','{NG}','{NG}','a') \
+         ) ci(resource_id, tile_id, nodegroup_id, node_id, concept_id)) TO '{concepts}' (FORMAT PARQUET); \
          COPY (SELECT * FROM (VALUES \
             ('root',0,3,'Root'),('a',1,2,'A'),('a1',2,2,'A1'),('b',3,3,'B') \
-         ) c(concept_id, dfs_enter, dfs_leave, label)) TO '{}' (FORMAT PARQUET);",
-        tiles.display(),
-        cat.display(),
+         ) c(concept_id, dfs_enter, dfs_leave, label)) TO '{cat}' (FORMAT PARQUET);",
+        tiles = tiles.display(),
+        concepts = dir.join("concepts_g.parquet").display(),
+        cat = cat.display(),
     ))
     .unwrap();
 

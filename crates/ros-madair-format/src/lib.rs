@@ -55,7 +55,13 @@ pub mod verify;
 /// finds a version it does not implement REFUSES the snapshot, so an
 /// emitter/reader skew is a loud, actionable error (re-emit) instead of a wrong
 /// answer. `1` is the first frozen version — the format as it stands now.
-pub const FORMAT_VERSION: u32 = 1;
+///
+/// `2` (alpha.16): the melt. The per-tile `concept_ids` JSON array and single
+/// `q_ordered` column are gone from the tile row; concepts and dates now live in
+/// melted `concepts_<slug>.parquet` / `ordered_<slug>.parquet` axis stores. A v1
+/// reader would find no `concept_ids`/`q_ordered` columns and mis-answer every
+/// facet/range query — exactly the silent-misread hazard this gates.
+pub const FORMAT_VERSION: u32 = 2;
 
 // ---------------------------------------------------------------------------
 // Snapshot id derivation (the ONE copy — writer and reader both call it)

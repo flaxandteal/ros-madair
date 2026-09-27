@@ -112,6 +112,14 @@ pub struct DuckReader {
     /// the tiles glob) — drives `Expr::OnLink` path predicates. Absent for a
     /// tiles-only snapshot; an OnLink then errors rather than mis-compiling.
     has_edges: bool,
+    /// Whether a `concept_index` view is registered (sibling `concepts_*.parquet`) —
+    /// drives `Expr::Concept` (node-scoped membership semijoin + DFS-catalog range join).
+    /// Absent for a legacy tiles-only / pre-melt snapshot; a Concept then errors rather
+    /// than mis-compiling against a dropped `concept_ids` column.
+    has_concept_index: bool,
+    /// Whether an `ordered_index` view is registered (sibling `ordered_*.parquet`) —
+    /// drives `Expr::Range`. Absent for a pre-melt snapshot; a Range then errors.
+    has_ordered: bool,
     /// Whether the `spatial` extension actually loaded (ST_Intersects available).
     /// Drives the `Expr::Bbox` fine step: present -> exact ST_Intersects; absent
     /// (mobile - no android spatial binary) -> coarse-only bbox-overlap. See the
@@ -188,7 +196,28 @@ impl DuckReader {
                     sql_lit(&edge_glob)
                 ))
                 .is_ok();
-        Ok(Self { conn, has_catalog: false, has_edges, spatial })
+        // Melted concept / ordered axis stores (the siblings concepts_*.parquet /
+        // ordered_*.parquet next to the tiles glob), same best-effort registration as
+        // edges: a pre-melt snapshot still OPENS; only a Concept/Range query then errors
+        // typed. concept_index is the node/value-sorted membership store (distinct from
+        // the DFS-interval `concepts` catalog view registered by with_catalog).
+        let concept_glob = parquet_glob.replace("tiles_", "concepts_");
+        let has_concept_index = concept_glob != parquet_glob
+            && conn
+                .execute_batch(&format!(
+                    "CREATE VIEW concept_index AS SELECT * FROM read_parquet('{}');",
+                    sql_lit(&concept_glob)
+                ))
+                .is_ok();
+        let ordered_glob = parquet_glob.replace("tiles_", "ordered_");
+        let has_ordered = ordered_glob != parquet_glob
+            && conn
+                .execute_batch(&format!(
+                    "CREATE VIEW ordered_index AS SELECT * FROM read_parquet('{}');",
+                    sql_lit(&ordered_glob)
+                ))
+                .is_ok();
+        Ok(Self { conn, has_catalog: false, has_edges, has_concept_index, has_ordered, spatial })
     }
 
     /// Attach a concept catalog (the `concept_catalog.parquet` projected from
@@ -290,7 +319,9 @@ impl DuckReader {
             ))?;
         }
 
-        // Concepts (optional): union the catalogs, topmost wins per concept_id.
+        // Concept catalog (optional): union the DFS-interval catalogs, topmost wins per
+        // concept_id. (The `concepts` view is the interval catalog — distinct from the
+        // melted `concept_index` store composed below.)
         let cat_layers = layers_with(&conn, dirs, "concept_catalog.parquet");
         let has_catalog = !cat_layers.is_empty();
         if has_catalog {
@@ -302,10 +333,40 @@ impl DuckReader {
             ))?;
         }
 
+        // Melted concept / ordered stores (optional): same winning-layer rule as edges —
+        // the topmost layer that carries a (resource, nodegroup) replaces its whole melt
+        // set, so a re-emitted tile in an overlay supersedes the base's node rows.
+        let concept_layers = layers_with(&conn, dirs, "concepts_*.parquet");
+        let has_concept_index = !concept_layers.is_empty();
+        if has_concept_index {
+            conn.execute_batch(&format!(
+                "CREATE VIEW concept_index AS \
+                 SELECT resource_id, tile_id, nodegroup_id, node_id, concept_id FROM (\
+                   SELECT *, max(_layer) OVER \
+                     (PARTITION BY resource_id, nodegroup_id) AS _win FROM ({})\
+                 ) WHERE _layer = _win;",
+                ranked_union(&concept_layers)
+            ))?;
+        }
+        let ordered_layers = layers_with(&conn, dirs, "ordered_*.parquet");
+        let has_ordered = !ordered_layers.is_empty();
+        if has_ordered {
+            conn.execute_batch(&format!(
+                "CREATE VIEW ordered_index AS \
+                 SELECT resource_id, tile_id, nodegroup_id, node_id, q_ordered FROM (\
+                   SELECT *, max(_layer) OVER \
+                     (PARTITION BY resource_id, nodegroup_id) AS _win FROM ({})\
+                 ) WHERE _layer = _win;",
+                ranked_union(&ordered_layers)
+            ))?;
+        }
+
         Ok(Self {
             conn,
             has_catalog,
             has_edges,
+            has_concept_index,
+            has_ordered,
             spatial,
         })
     }
@@ -571,6 +632,8 @@ impl DuckReader {
                 registry,
                 self.has_catalog,
                 self.has_edges,
+                self.has_concept_index,
+                self.has_ordered,
                 self.spatial,
             ),
             None => Ok("SELECT DISTINCT resource_id FROM tiles".to_string()),
@@ -881,6 +944,8 @@ fn compile_expr(
     registry: &ExtensionTypeRegistry,
     has_catalog: bool,
     has_edges: bool,
+    has_concept_index: bool,
+    has_ordered: bool,
     spatial: bool,
 ) -> Result<String, DuckError> {
     match expr {
@@ -890,7 +955,7 @@ fn compile_expr(
             }
             let parts: Result<Vec<_>, _> = children
                 .iter()
-                .map(|c| compile_expr(c, graph, graphs, registry, has_catalog, has_edges, spatial))
+                .map(|c| compile_expr(c, graph, graphs, registry, has_catalog, has_edges, has_concept_index, has_ordered, spatial))
                 .collect();
             Ok(parts?.join("\nINTERSECT\n"))
         }
@@ -900,7 +965,7 @@ fn compile_expr(
             }
             let parts: Result<Vec<_>, _> = children
                 .iter()
-                .map(|c| compile_expr(c, graph, graphs, registry, has_catalog, has_edges, spatial))
+                .map(|c| compile_expr(c, graph, graphs, registry, has_catalog, has_edges, has_concept_index, has_ordered, spatial))
                 .collect();
             Ok(parts?.join("\nUNION\n"))
         }
@@ -921,28 +986,36 @@ fn compile_expr(
                      ST_Intersects) to negate a spatial predicate"
                 )));
             }
-            let inner_sql = compile_expr(inner, graph, graphs, registry, has_catalog, has_edges, spatial)?;
+            let inner_sql = compile_expr(inner, graph, graphs, registry, has_catalog, has_edges, has_concept_index, has_ordered, spatial)?;
             Ok(format!(
                 "SELECT DISTINCT resource_id FROM tiles EXCEPT {inner_sql}"
             ))
         }
         Expr::Concept { path, op, value } => {
-            let (node, ng) = resolve(graph, path)?;
+            if !has_concept_index {
+                return Err(DuckError::Compile(format!(
+                    "concept filter on '{path}' needs the melted concept store — this \
+                     reader has no concepts_*.parquet (a pre-melt tiles-only snapshot is \
+                     unsupported; re-emit with the melt)"
+                )));
+            }
+            let (node, _) = resolve(graph, path)?;
             expect_class(&node, registry, |c| matches!(c, IndexClass::ConceptHierarchical { .. }), path, "concept")?;
             match op {
-                // Multi-valued: the tile promotes a JSON array of its concept ids, so
-                // a match is membership, not equality — a concept-list or multi-concept
-                // tile carries several, and a filter on any of them matches.
+                // Node-scoped EXACT membership over the melted concept store, keyed on
+                // the node (globally unique) — so two concept nodes in one nodegroup, or
+                // a concept-list node's several values, stay distinct. No cross-node
+                // conflation, and the (node_id, concept_id) sort zone-map-prunes.
                 ConceptOp::Is => Ok(format!(
-                    "SELECT DISTINCT resource_id FROM tiles \
-                     WHERE nodegroup_id = '{}' AND json_contains(concept_ids, '\"{}\"')",
-                    sql_lit(&ng),
+                    "SELECT DISTINCT resource_id FROM concept_index \
+                     WHERE node_id = '{}' AND concept_id = '{}'",
+                    sql_lit(&node.nodeid),
                     sql_lit(value)
                 )),
-                // Descendant-or-self: ANY of the tile's concepts must fall in the
-                // queried concept's DFS interval. Unnest the tile's concept array and
-                // range-join the DFS-ordered catalog (works for `concept` AND
-                // `reference` — shared class).
+                // Descendant-or-self: the node's concept must fall in the queried
+                // concept's DFS interval — range-join the DFS-ordered `concepts` catalog
+                // over the melted store (works for `concept` AND `reference` — shared
+                // class). concept_index = the melt; concepts = the interval catalog.
                 ConceptOp::DescendantOrSelfOf => {
                     if !has_catalog {
                         return Err(DuckError::Compile(format!(
@@ -951,14 +1024,13 @@ fn compile_expr(
                         )));
                     }
                     Ok(format!(
-                        "SELECT DISTINCT t.resource_id FROM tiles t, \
-                         unnest(from_json(t.concept_ids, '[\"VARCHAR\"]')) AS u(cid), \
-                         concepts c \
-                         WHERE t.nodegroup_id = '{}' AND c.concept_id = u.cid \
+                        "SELECT DISTINCT ci.resource_id FROM concept_index ci \
+                         JOIN concepts c ON c.concept_id = ci.concept_id \
+                         WHERE ci.node_id = '{}' \
                            AND c.dfs_enter BETWEEN \
                              (SELECT dfs_enter FROM concepts WHERE concept_id = '{}') AND \
                              (SELECT dfs_leave FROM concepts WHERE concept_id = '{}')",
-                        sql_lit(&ng),
+                        sql_lit(&node.nodeid),
                         sql_lit(value),
                         sql_lit(value)
                     ))
@@ -966,12 +1038,20 @@ fn compile_expr(
             }
         }
         Expr::Range { path, lo, hi } => {
-            let (node, ng) = resolve(graph, path)?;
+            if !has_ordered {
+                return Err(DuckError::Compile(format!(
+                    "range filter on '{path}' needs the melted ordered store — this \
+                     reader has no ordered_*.parquet (re-emit with the melt)"
+                )));
+            }
+            let (node, _) = resolve(graph, path)?;
             expect_class(&node, registry, |c| matches!(c, IndexClass::Ordered), path, "range")?;
+            // Node-scoped range over the (node_id, q_ordered)-sorted ordered store, so
+            // the predicate zone-map-prunes instead of scanning the geo-clustered tile row.
             Ok(format!(
-                "SELECT DISTINCT resource_id FROM tiles \
-                 WHERE nodegroup_id = '{}' AND q_ordered BETWEEN {lo} AND {hi}",
-                sql_lit(&ng)
+                "SELECT DISTINCT resource_id FROM ordered_index \
+                 WHERE node_id = '{}' AND q_ordered BETWEEN {lo} AND {hi}",
+                sql_lit(&node.nodeid)
             ))
         }
         Expr::Bbox { path, min_lng, min_lat, max_lng, max_lat } => {
@@ -1053,6 +1133,8 @@ fn compile_expr(
                 registry,
                 has_catalog,
                 has_edges,
+                has_concept_index,
+                has_ordered,
                 spatial,
             )?;
             Ok(format!(
@@ -1090,6 +1172,8 @@ fn compile_expr(
                 registry,
                 has_catalog,
                 has_edges,
+                has_concept_index,
+                has_ordered,
                 spatial,
             )?;
             Ok(format!(
@@ -1156,6 +1240,8 @@ fn compile_tile_cond(
     registry: &ExtensionTypeRegistry,
     has_catalog: bool,
     has_edges: bool,
+    has_concept_index: bool,
+    has_ordered: bool,
     spatial: bool,
 ) -> Result<String, DuckError> {
     match expr {
@@ -1166,7 +1252,7 @@ fn compile_tile_cond(
             let parts: Result<Vec<_>, _> = children
                 .iter()
                 .map(|c| {
-                    compile_tile_cond(c, ng, graph, graphs, registry, has_catalog, has_edges, spatial)
+                    compile_tile_cond(c, ng, graph, graphs, registry, has_catalog, has_edges, has_concept_index, has_ordered, spatial)
                 })
                 .collect();
             Ok(format!("({})", parts?.join(" AND ")))
@@ -1178,7 +1264,7 @@ fn compile_tile_cond(
             let parts: Result<Vec<_>, _> = children
                 .iter()
                 .map(|c| {
-                    compile_tile_cond(c, ng, graph, graphs, registry, has_catalog, has_edges, spatial)
+                    compile_tile_cond(c, ng, graph, graphs, registry, has_catalog, has_edges, has_concept_index, has_ordered, spatial)
                 })
                 .collect();
             Ok(format!("({})", parts?.join(" OR ")))
@@ -1195,10 +1281,16 @@ fn compile_tile_cond(
             }
             Ok(format!(
                 "NOT ({})",
-                compile_tile_cond(inner, ng, graph, graphs, registry, has_catalog, has_edges, spatial)?
+                compile_tile_cond(inner, ng, graph, graphs, registry, has_catalog, has_edges, has_concept_index, has_ordered, spatial)?
             ))
         }
         Expr::Concept { path, op, value } => {
+            if !has_concept_index {
+                return Err(DuckError::Compile(format!(
+                    "concept filter on '{path}' inside on_tile needs the melted concept \
+                     store (concepts_*.parquet)"
+                )));
+            }
             let (node, _) = resolve(graph, path)?;
             expect_class(
                 &node,
@@ -1208,10 +1300,14 @@ fn compile_tile_cond(
                 "concept",
             )?;
             match op {
-                // Membership over the tile's concept array (see the top-level Concept).
-                ConceptOp::Is => {
-                    Ok(format!("json_contains(t.concept_ids, '\"{}\"')", sql_lit(value)))
-                }
+                // Same-tile, node-scoped membership: THIS tile carries the (node, value)
+                // in the melted store (tile_id correlates back to t, like edges.src_tile).
+                ConceptOp::Is => Ok(format!(
+                    "t.tileid IN (SELECT tile_id FROM concept_index \
+                     WHERE node_id = '{}' AND concept_id = '{}')",
+                    sql_lit(&node.nodeid),
+                    sql_lit(value)
+                )),
                 ConceptOp::DescendantOrSelfOf => {
                     if !has_catalog {
                         return Err(DuckError::Compile(format!(
@@ -1219,23 +1315,33 @@ fn compile_tile_cond(
                              open with `open_with_catalog`"
                         )));
                     }
-                    // ANY of the tile's concepts falls in the DFS interval.
+                    // This tile's node-scoped concept falls in the DFS interval.
                     Ok(format!(
-                        "EXISTS (SELECT 1 FROM \
-                           unnest(from_json(t.concept_ids, '[\"VARCHAR\"]')) AS u(cid) \
-                           JOIN concepts c ON c.concept_id = u.cid \
-                         WHERE c.dfs_enter BETWEEN \
-                           (SELECT dfs_enter FROM concepts WHERE concept_id = '{v}') AND \
-                           (SELECT dfs_leave FROM concepts WHERE concept_id = '{v}'))",
+                        "EXISTS (SELECT 1 FROM concept_index ci \
+                           JOIN concepts c ON c.concept_id = ci.concept_id \
+                         WHERE ci.tile_id = t.tileid AND ci.node_id = '{n}' \
+                           AND c.dfs_enter BETWEEN \
+                             (SELECT dfs_enter FROM concepts WHERE concept_id = '{v}') AND \
+                             (SELECT dfs_leave FROM concepts WHERE concept_id = '{v}'))",
+                        n = sql_lit(&node.nodeid),
                         v = sql_lit(value)
                     ))
                 }
             }
         }
         Expr::Range { path, lo, hi } => {
+            if !has_ordered {
+                return Err(DuckError::Compile(format!(
+                    "range filter on '{path}' inside on_tile needs the melted ordered store"
+                )));
+            }
             let (node, _) = resolve(graph, path)?;
             expect_class(&node, registry, |c| matches!(c, IndexClass::Ordered), path, "range")?;
-            Ok(format!("t.q_ordered BETWEEN {lo} AND {hi}"))
+            Ok(format!(
+                "t.tileid IN (SELECT tile_id FROM ordered_index \
+                 WHERE node_id = '{}' AND q_ordered BETWEEN {lo} AND {hi})",
+                sql_lit(&node.nodeid)
+            ))
         }
         Expr::Bbox { path, min_lng, min_lat, max_lng, max_lat } => {
             let (node, _) = resolve(graph, path)?;
@@ -1279,7 +1385,7 @@ fn compile_tile_cond(
                     ))
                 })?;
             let inner =
-                compile_expr(r#where, target, graphs, registry, has_catalog, has_edges, spatial)?;
+                compile_expr(r#where, target, graphs, registry, has_catalog, has_edges, has_concept_index, has_ordered, spatial)?;
             Ok(format!(
                 "t.tileid IN (SELECT src_tile FROM edges \
                  WHERE src_node = '{}' AND src_nodegroup = '{}' \

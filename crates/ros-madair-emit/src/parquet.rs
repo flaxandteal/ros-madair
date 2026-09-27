@@ -115,6 +115,10 @@ pub struct ParquetModelSummary {
     pub partitions: usize,
     /// Edge rows written to `edges_<slug>.parquet` (one per link target).
     pub edges: usize,
+    /// Melted concept rows written to `concepts_<slug>.parquet` (one per node value).
+    pub concepts: usize,
+    /// Melted ordered (date/edtf) rows written to `ordered_<slug>.parquet`.
+    pub ordered: usize,
 }
 
 // ---------------------------------------------------------------------------
@@ -489,9 +493,17 @@ fn append_resource(
     // `link_targets`, unpivoted into the columnar edge table the path/multi-hop
     // compiler and reverse lookups query.
     let mut edge_rows: Vec<(String, String, String, Option<String>, String)> = Vec::new();
+    // Melted per-node axis rows, collected across this resource's tiles and appended
+    // after the tile appender flushes (exactly like edge_rows). Concepts and dates are
+    // no longer crammed into a per-tile concept_ids/q_ordered blob on the tile row —
+    // each node's value melts into its own store (concepts_<slug>/ordered_<slug>), so a
+    // Concept/Range filter is node-scoped (no cross-node conflation) and range/zone-map
+    // prunes instead of scanning the geo-clustered tile row.
+    // (resource, tile, nodegroup, node, concept_id)
+    let mut concept_rows: Vec<(String, Option<String>, String, String, String)> = Vec::new();
+    // (resource, tile, nodegroup, node, q_ordered)
+    let mut ordered_rows: Vec<(String, Option<String>, String, String, i64)> = Vec::new();
     for tile in tiles {
-        let mut q_ordered = None;
-        let mut concept_ids: Vec<String> = Vec::new();
         let mut geo = None;
         // Per-NODE link targets `{node_id: [target,...]}` (not just the first Link
         // node's array): a tile's nodegroup can hold >1 link node (e.g. the place
@@ -523,13 +535,25 @@ fn append_resource(
                 Some(registry),
             );
             match spec.class {
-                IndexClass::Ordered if q_ordered.is_none() => {
-                    // date/edtf → days-from-civil, the same quantizer the head used.
+                IndexClass::Ordered => {
+                    // EVERY ordered node melts (not just the first): date/edtf → the
+                    // days-from-civil quantizer, one row per node in the ordered store,
+                    // sorted (node_id, q_ordered) so a range predicate zone-map-prunes
+                    // instead of scanning q_ordered across the geo-clustered tile row.
                     if matches!(node.datatype.as_str(), "date" | "edtf") {
-                        q_ordered = spec
+                        if let Some(q) = spec
                             .keys
                             .first()
-                            .and_then(|k| alizarin_core::quantize::quantize_date(k));
+                            .and_then(|k| alizarin_core::quantize::quantize_date(k))
+                        {
+                            ordered_rows.push((
+                                tile.resourceinstance_id.clone(),
+                                tile.tileid.clone(),
+                                tile.nodegroup_id.clone(),
+                                node_id.clone(),
+                                q,
+                            ));
+                        }
                     }
                 }
                 IndexClass::SpatialBbox if geo.is_none() => {
@@ -538,16 +562,23 @@ fn append_resource(
                     }
                 }
                 IndexClass::ConceptHierarchical { .. } => {
-                    // Collect EVERY concept id in this tile (each ConceptHierarchical
-                    // node, each value): a concept-list node with several values, or
-                    // two concept nodes in one nodegroup, both contribute — so a
-                    // `Concept` filter on ANY of them matches, not just the first
-                    // (which silently under-matched). Resolve value-id → concept-id
-                    // (canonical), falling back to the raw key when it is not a
-                    // controlled-list value.
+                    // Melt EVERY concept id (each ConceptHierarchical node, each value)
+                    // into a node-scoped row (resource, tile, nodegroup, node, concept).
+                    // A concept-list node with several values, or two concept nodes in one
+                    // nodegroup, each contribute their own rows — so a `Concept` filter is
+                    // exact per node, never conflating across nodes the way the old
+                    // per-tile concept_ids array did. Resolve value-id → canonical
+                    // concept-id, falling back to the raw key for non-controlled values.
                     for k in &spec.keys {
-                        concept_ids
-                            .push(value_to_concept.get(k).cloned().unwrap_or_else(|| k.clone()));
+                        let cid =
+                            value_to_concept.get(k).cloned().unwrap_or_else(|| k.clone());
+                        concept_rows.push((
+                            tile.resourceinstance_id.clone(),
+                            tile.tileid.clone(),
+                            tile.nodegroup_id.clone(),
+                            node_id.clone(),
+                            cid,
+                        ));
                     }
                 }
                 // Links are EXACT here (unlike the head's coarse
@@ -593,17 +624,10 @@ fn append_resource(
                 .collect::<std::collections::BTreeMap<&String, &serde_json::Value>>(),
         )?;
 
-        // Multi-valued concept promotion: a JSON array of every concept id in the
-        // tile (NULL when none), so a `Concept` filter matches ANY of them. Sorted +
-        // deduped so the content-hashed parquet is byte-identical across emits.
-        concept_ids.sort();
-        concept_ids.dedup();
-        let concept_ids_json = if concept_ids.is_empty() {
-            None
-        } else {
-            Some(serde_json::to_string(&concept_ids)?)
-        };
-
+        // Concepts and dates are melted into concepts_<slug>/ordered_<slug> (below),
+        // not promoted onto the tile row — so the tile row is the 1:1 axis only
+        // (geo bbox, cluster_key, hydration `data`), and facet/range filters hit their
+        // own node/value-sorted store instead of scanning this geo-clustered row.
         app.append_row(params![
             model_slug,
             tile.resourceinstance_id,
@@ -614,8 +638,6 @@ fn append_resource(
             tile.sortorder,
             key,
             ng_order,
-            q_ordered,
-            concept_ids_json,
             geo.map(|g| g.0),
             geo.map(|g| g.1),
             geo.map(|g| g.2),
@@ -638,6 +660,20 @@ fn append_resource(
             ])?;
         }
         eapp.flush()?;
+    }
+    if !concept_rows.is_empty() {
+        let mut capp = stage.conn.appender("concepts_stage")?;
+        for (resource, tile, ng, node, concept) in &concept_rows {
+            capp.append_row(params![model_slug, resource, tile, ng, node, concept])?;
+        }
+        capp.flush()?;
+    }
+    if !ordered_rows.is_empty() {
+        let mut oapp = stage.conn.appender("ordered_stage")?;
+        for (resource, tile, ng, node, q) in &ordered_rows {
+            oapp.append_row(params![model_slug, resource, tile, ng, node, q])?;
+        }
+        oapp.flush()?;
     }
     Ok(())
 }
@@ -664,12 +700,17 @@ impl TileStage {
                model_slug VARCHAR, resource_id VARCHAR, descriptor_name VARCHAR,
                nodegroup_id VARCHAR, tileid VARCHAR, parenttile_id VARCHAR,
                sortorder INTEGER, cluster_key UBIGINT, ng_order BIGINT,
-               q_ordered BIGINT, concept_ids VARCHAR,
                geo_min_lng DOUBLE, geo_min_lat DOUBLE, geo_max_lng DOUBLE, geo_max_lat DOUBLE,
                data VARCHAR);
              CREATE TABLE edges (
                model_slug VARCHAR, src_resource VARCHAR, src_node VARCHAR,
-               src_nodegroup VARCHAR, src_tile VARCHAR, target_resource VARCHAR);",
+               src_nodegroup VARCHAR, src_tile VARCHAR, target_resource VARCHAR);
+             CREATE TABLE concepts_stage (
+               model_slug VARCHAR, resource_id VARCHAR, tile_id VARCHAR,
+               nodegroup_id VARCHAR, node_id VARCHAR, concept_id VARCHAR);
+             CREATE TABLE ordered_stage (
+               model_slug VARCHAR, resource_id VARCHAR, tile_id VARCHAR,
+               nodegroup_id VARCHAR, node_id VARCHAR, q_ordered BIGINT);",
             sql_lit(&scratch.display().to_string())
         ))
         .map_err(|e| format!("duckdb stage schema: {e}"))?;
@@ -693,7 +734,7 @@ impl TileStage {
         // NB: model_slug is excluded from the output — it is a stage-only routing
         // column, not part of the frozen tile-row schema.
         let cols = "resource_id, descriptor_name, nodegroup_id, tileid, parenttile_id, \
-                    sortorder, cluster_key, ng_order, q_ordered, concept_ids, \
+                    sortorder, cluster_key, ng_order, \
                     geo_min_lng, geo_min_lat, geo_max_lng, geo_max_lat, data";
         let slug_lit = sql_lit(slug);
         let rgs = cfg.row_group_size.max(1);
@@ -756,6 +797,37 @@ impl TileStage {
             .map_err(|e| format!("duckdb COPY (edges): {e}"))?;
         let edges = count("SELECT count(*) FROM edges WHERE model_slug = ?")? as usize;
 
+        // Melted concept store: one row per (tile, concept-node, concept value), sorted
+        // (node_id, concept_id) so a node-scoped Concept semijoin zone-map-prunes and the
+        // DFS-interval catalog range-joins it for ⊑. Its own axis, joined by resource/tile.
+        let concept_path =
+            path.with_file_name(format!("concepts_{}.parquet", slug.replace('-', "_")));
+        self.conn
+            .execute_batch(&format!(
+                "COPY (SELECT resource_id, tile_id, nodegroup_id, node_id, concept_id \
+                 FROM concepts_stage WHERE model_slug = '{slug_lit}' ORDER BY node_id, concept_id) \
+                 TO '{}' (FORMAT PARQUET, ROW_GROUP_SIZE {rgs});",
+                concept_path.display()
+            ))
+            .map_err(|e| format!("duckdb COPY (concepts): {e}"))?;
+        let concepts =
+            count("SELECT count(*) FROM concepts_stage WHERE model_slug = ?")? as usize;
+
+        // Melted ordered store: one row per (tile, date/edtf node, quantized value), sorted
+        // (node_id, q_ordered) so a Range predicate prunes instead of scanning the tile row.
+        let ordered_path =
+            path.with_file_name(format!("ordered_{}.parquet", slug.replace('-', "_")));
+        self.conn
+            .execute_batch(&format!(
+                "COPY (SELECT resource_id, tile_id, nodegroup_id, node_id, q_ordered \
+                 FROM ordered_stage WHERE model_slug = '{slug_lit}' ORDER BY node_id, q_ordered) \
+                 TO '{}' (FORMAT PARQUET, ROW_GROUP_SIZE {rgs});",
+                ordered_path.display()
+            ))
+            .map_err(|e| format!("duckdb COPY (ordered): {e}"))?;
+        let ordered =
+            count("SELECT count(*) FROM ordered_stage WHERE model_slug = ?")? as usize;
+
         let row_groups: i64 = self
             .conn
             .query_row(
@@ -777,6 +849,8 @@ impl TileStage {
             row_groups: row_groups as usize,
             partitions,
             edges,
+            concepts,
+            ordered,
         })
     }
 }

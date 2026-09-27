@@ -182,13 +182,30 @@ fn fixture() -> (PathBuf, StaticGraph) {
     ins(&format!("INSERT INTO t VALUES('{R3}','{NG_REF}','t10',NULL,0,'{r3_ref}','Gamma','{CAT_B}',NULL,NULL,NULL,NULL,NULL,NULL)"));
     ins(&format!("INSERT INTO t VALUES('{R3}','{NG_GEO}','t11',NULL,0,'{r3_geo}','Gamma',NULL,NULL,100.0,100.0,100.0,100.0,NULL)"));
 
+    // Tile row: no concept_ids/q_ordered (melted below); the 1:1 axis + data only.
     con.execute_batch(&format!(
         "COPY (SELECT resource_id, nodegroup_id, tileid, parenttile_id, sortorder, data, \
-         descriptor_name, \
-         CASE WHEN concept_id IS NULL THEN NULL ELSE '[\"' || concept_id || '\"]' END AS concept_ids, \
-         q_ordered, geo_min_lng, geo_max_lng, geo_min_lat, geo_max_lat, link_targets FROM t) \
+         descriptor_name, geo_min_lng, geo_max_lng, geo_min_lat, geo_max_lat, link_targets FROM t) \
          TO '{}' (FORMAT PARQUET)",
         tiles.display()
+    ))
+    .unwrap();
+    // Melted concept store: one row per concept node value (node_id == nodegroup_id in
+    // this fixture, since each nodegroup's collector node shares the id). Drives the
+    // node-scoped Concept semijoin + DFS-catalog range join.
+    con.execute_batch(&format!(
+        "COPY (SELECT resource_id, tileid AS tile_id, nodegroup_id, nodegroup_id AS node_id, \
+         concept_id FROM t WHERE concept_id IS NOT NULL ORDER BY node_id, concept_id) \
+         TO '{}' (FORMAT PARQUET)",
+        dir.join("concepts_test.parquet").display()
+    ))
+    .unwrap();
+    // Melted ordered store: one row per date node value. Drives the Range semijoin.
+    con.execute_batch(&format!(
+        "COPY (SELECT resource_id, tileid AS tile_id, nodegroup_id, nodegroup_id AS node_id, \
+         q_ordered FROM t WHERE q_ordered IS NOT NULL ORDER BY node_id, q_ordered) \
+         TO '{}' (FORMAT PARQUET)",
+        dir.join("ordered_test.parquet").display()
     ))
     .unwrap();
 
@@ -573,9 +590,14 @@ fn open_layers_composes_tiles_with_overlay_precedence() {
         con.execute_batch(&format!(
             "COPY (SELECT resource_id, nodegroup_id, tileid, parenttile_id, sortorder, data, \
              descriptor_name, \
-             CASE WHEN concept_id IS NULL THEN NULL ELSE '[\"' || concept_id || '\"]' END AS concept_ids, \
-             q_ordered, geo_min_lng, geo_max_lng, geo_min_lat, geo_max_lat, link_targets FROM t) \
+             geo_min_lng, geo_max_lng, geo_min_lat, geo_max_lat, link_targets FROM t) \
              TO '{}/tiles_test.parquet' (FORMAT PARQUET)",
+            dir.display()
+        ))
+        .unwrap();
+        con.execute_batch(&format!(
+            "COPY (SELECT resource_id, tileid AS tile_id, nodegroup_id, nodegroup_id AS node_id, \
+             concept_id FROM t WHERE concept_id IS NOT NULL) TO '{}/concepts_test.parquet' (FORMAT PARQUET)",
             dir.display()
         ))
         .unwrap();
@@ -633,7 +655,9 @@ fn on_link_crosses_layers() {
     con.execute_batch(&format!(
         "COPY (SELECT * EXCLUDE (concept_id), \
          CASE WHEN concept_id IS NULL THEN NULL ELSE '[\"' || concept_id || '\"]' END AS concept_ids \
-         FROM t) TO '{}/tiles_test.parquet' (FORMAT PARQUET)",
+         FROM t) TO '{0}/tiles_test.parquet' (FORMAT PARQUET); \
+         COPY (SELECT resource_id, tileid AS tile_id, nodegroup_id, nodegroup_id AS node_id, \
+         concept_id FROM t WHERE concept_id IS NOT NULL) TO '{0}/concepts_test.parquet' (FORMAT PARQUET)",
         base.display()
     ))
     .unwrap();
@@ -730,7 +754,9 @@ fn on_link_crosses_models() {
     con.execute_batch(&format!(
         "COPY (SELECT * EXCLUDE (concept_id), \
          CASE WHEN concept_id IS NULL THEN NULL ELSE '[\"' || concept_id || '\"]' END AS concept_ids \
-         FROM t) TO '{}/tiles_test.parquet' (FORMAT PARQUET)",
+         FROM t) TO '{0}/tiles_test.parquet' (FORMAT PARQUET); \
+         COPY (SELECT resource_id, tileid AS tile_id, nodegroup_id, nodegroup_id AS node_id, \
+         concept_id FROM t WHERE concept_id IS NOT NULL) TO '{0}/concepts_test.parquet' (FORMAT PARQUET)",
         dir.display()
     ))
     .unwrap();
@@ -801,7 +827,9 @@ fn on_link_chain_two_hops() {
     con.execute_batch(&format!(
         "COPY (SELECT * EXCLUDE (concept_id), \
          CASE WHEN concept_id IS NULL THEN NULL ELSE '[\"' || concept_id || '\"]' END AS concept_ids \
-         FROM t) TO '{}/tiles_test.parquet' (FORMAT PARQUET)",
+         FROM t) TO '{0}/tiles_test.parquet' (FORMAT PARQUET); \
+         COPY (SELECT resource_id, tileid AS tile_id, nodegroup_id, nodegroup_id AS node_id, \
+         concept_id FROM t WHERE concept_id IS NOT NULL) TO '{0}/concepts_test.parquet' (FORMAT PARQUET)",
         dir.display()
     ))
     .unwrap();
@@ -883,7 +911,9 @@ fn dot_qualified_path_walks_the_schema_tree() {
     con.execute_batch(&format!(
         "COPY (SELECT * EXCLUDE (concept_id), \
          CASE WHEN concept_id IS NULL THEN NULL ELSE '[\"' || concept_id || '\"]' END AS concept_ids \
-         FROM t) TO '{}/tiles_test.parquet' (FORMAT PARQUET)",
+         FROM t) TO '{0}/tiles_test.parquet' (FORMAT PARQUET); \
+         COPY (SELECT resource_id, tileid AS tile_id, nodegroup_id, nodegroup_id AS node_id, \
+         concept_id FROM t WHERE concept_id IS NOT NULL) TO '{0}/concepts_test.parquet' (FORMAT PARQUET)",
         dir.display()
     ))
     .unwrap();
