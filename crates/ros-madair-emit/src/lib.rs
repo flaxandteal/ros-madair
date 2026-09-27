@@ -32,20 +32,18 @@ mod parquet;
 
 #[cfg(feature = "attest")]
 pub use attest::{seal_and_sign, sign_head, verify_head, SigningIdentity};
+pub use closure::{build_closure, Closure, ClosureEntry};
 #[cfg(feature = "attest")]
 pub use ros_madair_format::attest::{
     attributions, ed25519_to_multibase, multibase_to_ed25519, verify_bundle, AttestationBundle,
     Attribution, HeadTrust, Role, Verdict,
 };
-pub use closure::{build_closure, Closure, ClosureEntry};
 /// The artifact FORMAT types (manifest contract + chunk-tile wire shape) live
 /// in `ros-madair-format` — WASM-buildable, so a browser/Tauri READER can parse
 /// what this crate writes without linking the emitter (and without a
 /// hand-mirrored copy of the wire format, which is how they drift). Re-exported
 /// here so existing callers keep working.
-pub use ros_madair_format::{
-    ArtifactEntry, Budgets, Manifest, ModelManifest, TierManifest,
-};
+pub use ros_madair_format::{ArtifactEntry, Budgets, Manifest, ModelManifest, TierManifest};
 
 pub type EmitError = Box<dyn std::error::Error>;
 
@@ -80,4 +78,3 @@ pub use crate::parquet::{
     emit_parquet, emit_parquet_with_progress, write_model_parquet, ClusterConfig, ClusterDim,
     ParquetModelSummary,
 };
-

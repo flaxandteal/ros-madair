@@ -5,8 +5,10 @@
 //! construction event carried both facts, not "a date in range somewhere AND a
 //! Lanyon link somewhere in the resource." This test builds the exact case that
 //! separates them: a resource with two construction events —
+//!
 //!   - 1870, built by someone else
 //!   - 1855, built by Lanyon
+//!
 //! Neither event is both in-range AND by Lanyon, so `OnTile` must EXCLUDE it,
 //! while `All` (each condition met somewhere) wrongly INCLUDES it. A control
 //! resource whose single event is 1880-by-Lanyon must match both.
@@ -121,14 +123,29 @@ fn corpus() -> (PathBuf, StaticGraph) {
         resource(
             R_TWO,
             vec![
-                event("1a110000-0000-4000-8000-000000000010", R_TWO, "1870-01-01", ELSE),
-                event("1b110000-0000-4000-8000-000000000010", R_TWO, "1855-01-01", LANYON),
+                event(
+                    "1a110000-0000-4000-8000-000000000010",
+                    R_TWO,
+                    "1870-01-01",
+                    ELSE,
+                ),
+                event(
+                    "1b110000-0000-4000-8000-000000000010",
+                    R_TWO,
+                    "1855-01-01",
+                    LANYON,
+                ),
             ],
         ),
         // R_ONE: one event, 1880 by Lanyon — in-range AND by Lanyon on ONE tile.
         resource(
             R_ONE,
-            vec![event("2a220000-0000-4000-8000-000000000010", R_ONE, "1880-01-01", LANYON)],
+            vec![event(
+                "2a220000-0000-4000-8000-000000000010",
+                R_ONE,
+                "1880-01-01",
+                LANYON,
+            )],
         ),
     ];
     std::fs::write(
@@ -161,10 +178,18 @@ fn date_in_range() -> Expr {
     }
 }
 fn by_lanyon() -> Expr {
-    Expr::HasLink { path: "builder".into(), target: Some(LANYON.into()) }
+    Expr::HasLink {
+        path: "builder".into(),
+        target: Some(LANYON.into()),
+    }
 }
 fn q(w: Expr) -> Query {
-    Query { model: GRAPH.into(), r#where: Some(w), measures: vec![Measure::SelectIds], limit: None }
+    Query {
+        model: GRAPH.into(),
+        r#where: Some(w),
+        measures: vec![Measure::SelectIds],
+        limit: None,
+    }
 }
 
 #[test]
@@ -206,7 +231,11 @@ fn on_tile_correlates_within_one_event_where_all_does_not() {
     // instance) — refused with a typed, repairable error, not a silent empty.
     let cross = Expr::OnTile(vec![
         date_in_range(),
-        Expr::Range { path: "amended".into(), lo: 0, hi: i64::MAX },
+        Expr::Range {
+            path: "amended".into(),
+            lo: 0,
+            hi: i64::MAX,
+        },
     ]);
     match duck.resolve_ids(&q(cross), &graph, &registry) {
         Err(DuckError::Compile(m)) => {

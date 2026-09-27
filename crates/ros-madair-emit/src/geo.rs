@@ -102,7 +102,8 @@ mod tests {
     fn polygon_bbox_spans_all_vertices() {
         // An L-shaped-ish ring whose centroid sits OUTSIDE the tight corner —
         // the bbox must still be the full extent, [0,10]×[0,10].
-        let poly = r#"{"type":"Polygon","coordinates":[[[0,0],[10,0],[10,2],[2,2],[2,10],[0,10],[0,0]]]}"#;
+        let poly =
+            r#"{"type":"Polygon","coordinates":[[[0,0],[10,0],[10,2],[2,2],[2,10],[0,10],[0,0]]]}"#;
         assert_eq!(extract_bbox(poly).unwrap(), (0.0, 0.0, 10.0, 10.0));
     }
 

@@ -96,12 +96,18 @@ fn verify_command(args: &[String]) -> ExitCode {
         return ExitCode::from(2);
     };
     match ros_madair_emit::verify_head(Path::new(dir)) {
-        Ok(ros_madair_emit::HeadTrust::Verified { authored, attributions }) => {
+        Ok(ros_madair_emit::HeadTrust::Verified {
+            authored,
+            attributions,
+        }) => {
             if attributions.is_empty() {
                 println!("verified ({authored} attestation(s); anonymous)");
             } else {
                 for a in &attributions {
-                    println!("verified: {:?} by {} <{}>", a.role, a.actor_name, a.actor_id);
+                    println!(
+                        "verified: {:?} by {} <{}>",
+                        a.role, a.actor_name, a.actor_id
+                    );
                 }
             }
             ExitCode::SUCCESS

@@ -30,13 +30,23 @@ jobs:
       CXX: "sccache g++"
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      # Pinned (not @stable) so rustfmt's style + clippy's lint set are frozen —
+      # matches rust-toolchain.toml so CI and local agree. A stable bump used to
+      # silently redden `cargo fmt --all -- --check` with no source change.
+      - uses: dtolnay/rust-toolchain@1.91.1
         with:
           components: rustfmt, clippy
       - name: sccache
         uses: mozilla-actions/sccache-action@v0.0.6
       - name: Rust cache (restores compiled libduckdb-sys on Cargo.lock hit)
         uses: Swatinem/rust-cache@v2
+        with:
+          # Persist target/ even when a LATER step fails. Default is false, which
+          # would throw away the (successful, expensive ~12-min) libduckdb-sys build
+          # whenever clippy/tests fail — forcing the next push to recompile DuckDB.
+          # With this, a red run still banks the C++ build for the next push. (sccache
+          # separately banks the C++ objects at compile time, independent of Cargo.lock.)
+          cache-on-failure: true
 
       - name: Format
         run: cargo fmt --all -- --check
@@ -58,12 +68,14 @@ jobs:
       CXX: "sccache g++"
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.91.1
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
       - name: sccache
         uses: mozilla-actions/sccache-action@v0.0.6
       - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true   # keep the DuckDB build on a failed run (see rust job)
       - name: Check pyo3 bindings compile
         run: cargo check -p ros-madair-python

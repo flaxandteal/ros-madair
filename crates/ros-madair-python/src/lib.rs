@@ -1,4 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+// pyo3's `#[pymethods]` expands each fallible method into module-level wrapper
+// functions that add an `Into<PyErr>` on the return; when the body already yields
+// `PyErr` those `.into()`s are useless, and clippy flags them (mis-spanned onto our
+// return types). The wrappers live outside the `impl`, so an item-level allow does
+// not reach them under `--all-targets` (the `lib test` build) — hence crate-level.
+#![allow(clippy::useless_conversion)]
 //! Python binding for the Rós Madair DuckDB + Parquet substrate.
 //!
 //! A [`Graph`] is the schema handle — parse the Arches resource-model export once
@@ -114,9 +120,7 @@ pub struct Reader {
 }
 
 impl Reader {
-    fn resolve_registry(
-        manifest_json: &Option<String>,
-    ) -> PyResult<Option<ExtensionTypeRegistry>> {
+    fn resolve_registry(manifest_json: &Option<String>) -> PyResult<Option<ExtensionTypeRegistry>> {
         match manifest_json {
             Some(text) => Ok(Some(registry_from_manifest(text)?)),
             None => Ok(None),

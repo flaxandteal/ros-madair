@@ -201,9 +201,10 @@ fn nodegroup_dfs_intervals(ngs: &[StaticNodegroup]) -> HashMap<String, (i64, i64
     let mut roots: Vec<&str> = Vec::new();
     for ng in ngs {
         match &ng.parentnodegroup_id {
-            Some(p) if ids.contains(p.as_str()) => {
-                children.entry(p.as_str()).or_default().push(&ng.nodegroupid)
-            }
+            Some(p) if ids.contains(p.as_str()) => children
+                .entry(p.as_str())
+                .or_default()
+                .push(&ng.nodegroupid),
             // No parent, or a parent outside this graph → a root.
             _ => roots.push(&ng.nodegroupid),
         }
@@ -304,7 +305,11 @@ fn build_concept_catalog(cache: &RdmCache) -> (Vec<ConceptCatalogRow>, HashMap<S
                 value_to_concept.insert(vid.clone(), concept.to_string());
             }
         }
-        let mut tops: Vec<String> = coll.get_top_concepts().iter().map(|c| c.id.clone()).collect();
+        let mut tops: Vec<String> = coll
+            .get_top_concepts()
+            .iter()
+            .map(|c| c.id.clone())
+            .collect();
         tops.sort_unstable();
         let mut seen = std::collections::HashSet::new();
         for t in &tops {
@@ -316,7 +321,10 @@ fn build_concept_catalog(cache: &RdmCache) -> (Vec<ConceptCatalogRow>, HashMap<S
 
 /// Write the concept catalog to `<out>/concept_catalog.parquet`, DFS-ordered so a
 /// subtree is a contiguous row range (zone-map-prunable). Skipped when empty.
-fn write_concept_catalog(mut rows: Vec<ConceptCatalogRow>, path: &Path) -> Result<usize, EmitError> {
+fn write_concept_catalog(
+    mut rows: Vec<ConceptCatalogRow>,
+    path: &Path,
+) -> Result<usize, EmitError> {
     rows.sort_by_key(|r| r.dfs_enter);
     let schema = Arc::new(Schema::new(vec![
         Field::new("concept_id", DataType::Utf8, false),
@@ -327,10 +335,18 @@ fn write_concept_catalog(mut rows: Vec<ConceptCatalogRow>, path: &Path) -> Resul
     let batch = RecordBatch::try_new(
         schema.clone(),
         vec![
-            Arc::new(StringArray::from_iter(rows.iter().map(|r| Some(r.concept_id.as_str())))),
-            Arc::new(Int64Array::from_iter(rows.iter().map(|r| Some(r.dfs_enter)))),
-            Arc::new(Int64Array::from_iter(rows.iter().map(|r| Some(r.dfs_leave)))),
-            Arc::new(StringArray::from_iter(rows.iter().map(|r| Some(r.label.as_str())))),
+            Arc::new(StringArray::from_iter(
+                rows.iter().map(|r| Some(r.concept_id.as_str())),
+            )),
+            Arc::new(Int64Array::from_iter(
+                rows.iter().map(|r| Some(r.dfs_enter)),
+            )),
+            Arc::new(Int64Array::from_iter(
+                rows.iter().map(|r| Some(r.dfs_leave)),
+            )),
+            Arc::new(StringArray::from_iter(
+                rows.iter().map(|r| Some(r.label.as_str())),
+            )),
         ],
     )?;
     let file = fs::File::create(path)?;
@@ -417,7 +433,16 @@ pub fn write_model_parquet(
     let scratch = stage_scratch(path, slug);
     let stage = TileStage::new(&scratch)?;
     for r in resources {
-        append_resource(&stage, slug, r, graph, cfg, registry, value_to_concept, &ng_intervals)?;
+        append_resource(
+            &stage,
+            slug,
+            r,
+            graph,
+            cfg,
+            registry,
+            value_to_concept,
+            &ng_intervals,
+        )?;
     }
     write_ng_sidecar(&ng_intervals, cfg, path)?;
     let summary = stage.write_model(slug, &graph.graphid, cfg, path)?;
@@ -461,7 +486,10 @@ fn write_ng_sidecar(
     if let Some(parent) = sidecar.parent() {
         fs::create_dir_all(parent)?;
     }
-    fs::write(&sidecar, serde_json::to_vec_pretty(&serde_json::Value::Object(obj))?)?;
+    fs::write(
+        &sidecar,
+        serde_json::to_vec_pretty(&serde_json::Value::Object(obj))?,
+    )?;
     Ok(())
 }
 
@@ -570,8 +598,10 @@ fn append_resource(
                     // per-tile concept_ids array did. Resolve value-id → canonical
                     // concept-id, falling back to the raw key for non-controlled values.
                     for k in &spec.keys {
-                        let cid =
-                            value_to_concept.get(k).cloned().unwrap_or_else(|| k.clone());
+                        let cid = value_to_concept
+                            .get(k)
+                            .cloned()
+                            .unwrap_or_else(|| k.clone());
                         concept_rows.push((
                             tile.resourceinstance_id.clone(),
                             tile.tileid.clone(),
@@ -762,7 +792,11 @@ impl TileStage {
             let parts =
                 count("SELECT count(DISTINCT nodegroup_id) FROM stage WHERE model_slug = ?")?
                     as usize;
-            (dir.display().to_string(), format!("{}/**/*.parquet", dir.display()), parts)
+            (
+                dir.display().to_string(),
+                format!("{}/**/*.parquet", dir.display()),
+                parts,
+            )
         } else {
             if let Some(p) = path.parent() {
                 fs::create_dir_all(p)?;
@@ -782,8 +816,7 @@ impl TileStage {
         // forward hop (filter src_node, semijoin target) and a reverse hop (cited_by
         // on target) both zone-map prune. Always a single file — nodegroup
         // partitioning is the TILES layout axis; edges partition by src_node later.
-        let edge_path =
-            path.with_file_name(format!("edges_{}.parquet", slug.replace('-', "_")));
+        let edge_path = path.with_file_name(format!("edges_{}.parquet", slug.replace('-', "_")));
         if let Some(p) = edge_path.parent() {
             fs::create_dir_all(p)?;
         }
@@ -810,8 +843,7 @@ impl TileStage {
                 concept_path.display()
             ))
             .map_err(|e| format!("duckdb COPY (concepts): {e}"))?;
-        let concepts =
-            count("SELECT count(*) FROM concepts_stage WHERE model_slug = ?")? as usize;
+        let concepts = count("SELECT count(*) FROM concepts_stage WHERE model_slug = ?")? as usize;
 
         // Melted ordered store: one row per (tile, date/edtf node, quantized value), sorted
         // (node_id, q_ordered) so a Range predicate prunes instead of scanning the tile row.
@@ -825,8 +857,7 @@ impl TileStage {
                 ordered_path.display()
             ))
             .map_err(|e| format!("duckdb COPY (ordered): {e}"))?;
-        let ordered =
-            count("SELECT count(*) FROM ordered_stage WHERE model_slug = ?")? as usize;
+        let ordered = count("SELECT count(*) FROM ordered_stage WHERE model_slug = ?")? as usize;
 
         let row_groups: i64 = self
             .conn
@@ -920,7 +951,12 @@ pub fn emit_parquet_with_progress(
     // Per-model config + nodegroup DFS intervals, computed once.
     let cfgs: Vec<ClusterConfig> = models
         .iter()
-        .map(|m| config_by_graph.get(&m.graph.graphid).cloned().unwrap_or_default())
+        .map(|m| {
+            config_by_graph
+                .get(&m.graph.graphid)
+                .cloned()
+                .unwrap_or_default()
+        })
         .collect();
     let ng_intervals: Vec<HashMap<String, (i64, i64)>> = models
         .iter()
@@ -969,11 +1005,13 @@ pub fn emit_parquet_with_progress(
                     &ng_intervals[gi],
                 ) {
                     append_err = Some(e);
-                    return Err(alizarin_core::loader::LoaderError::Other("append failed".into()));
+                    return Err(alizarin_core::loader::LoaderError::Other(
+                        "append failed".into(),
+                    ));
                 }
                 nonempty[gi] = true;
                 done += 1;
-                if done % PROGRESS_STEP == 0
+                if done.is_multiple_of(PROGRESS_STEP)
                     && on_progress(crate::EmitProgress::Streaming { done, total: 0 }).is_break()
                 {
                     cancelled = true;
@@ -1093,7 +1131,10 @@ mod tests {
             p >= pre_a && p <= submax_a
         };
         for n in ["A", "B", "C", "D", "E"] {
-            assert!(in_a(n), "{n} must fall in A's interval [{pre_a},{submax_a}]");
+            assert!(
+                in_a(n),
+                "{n} must fall in A's interval [{pre_a},{submax_a}]"
+            );
         }
         assert!(!in_a("F"), "F is a separate root, not in A's subtree");
 
@@ -1154,7 +1195,10 @@ mod tests {
             assert!(inside("root", d), "{d} in root's subtree");
         }
         assert!(inside("a", "a1"), "a1 under a");
-        assert!(!inside("a", "b") && !inside("a", "root"), "b/root not under a");
+        assert!(
+            !inside("a", "b") && !inside("a", "root"),
+            "b/root not under a"
+        );
         assert_eq!(iv["a1"].0, iv["a1"].1, "leaf is a point interval");
     }
 }

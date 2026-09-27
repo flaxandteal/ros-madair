@@ -63,10 +63,9 @@ fn licence_tile() -> StaticTile {
 #[test]
 fn a_reference_field_hydrates_to_its_label() {
     // The label map the concept catalog would supply: list-item UUID → label.
-    let labels: HashMap<String, String> =
-        [(LICENCE_UUID.to_string(), "CC BY-SA 4.0".to_string())]
-            .into_iter()
-            .collect();
+    let labels: HashMap<String, String> = [(LICENCE_UUID.to_string(), "CC BY-SA 4.0".to_string())]
+        .into_iter()
+        .collect();
 
     let graph = reference_graph();
     let tree = hydrate_tiles_with_labels(&[licence_tile()], RID, &graph, &labels, &["en"])

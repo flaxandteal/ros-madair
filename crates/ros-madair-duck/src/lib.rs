@@ -127,7 +127,6 @@ pub struct DuckReader {
     spatial: bool,
 }
 
-
 /// Where DuckDB's spatial extension comes from. `json` is statically bundled
 /// (cargo feature) so it needs no source; `parquet` reading is core. Spatial is
 /// the one extension that cannot be cargo-bundled.
@@ -217,7 +216,14 @@ impl DuckReader {
                     sql_lit(&ordered_glob)
                 ))
                 .is_ok();
-        Ok(Self { conn, has_catalog: false, has_edges, has_concept_index, has_ordered, spatial })
+        Ok(Self {
+            conn,
+            has_catalog: false,
+            has_edges,
+            has_concept_index,
+            has_ordered,
+            spatial,
+        })
     }
 
     /// Attach a concept catalog (the `concept_catalog.parquet` projected from
@@ -284,7 +290,12 @@ impl DuckReader {
         let ranked_union = |layers: &[(usize, String)]| -> String {
             layers
                 .iter()
-                .map(|(i, g)| format!("SELECT *, {i} AS _layer FROM read_parquet('{}')", sql_lit(g)))
+                .map(|(i, g)| {
+                    format!(
+                        "SELECT *, {i} AS _layer FROM read_parquet('{}')",
+                        sql_lit(g)
+                    )
+                })
                 .collect::<Vec<_>>()
                 .join("\nUNION ALL BY NAME\n")
         };
@@ -397,8 +408,7 @@ impl DuckReader {
         if uris.is_empty() {
             return Ok(out);
         }
-        let placeholders = std::iter::repeat("?")
-            .take(uris.len())
+        let placeholders = std::iter::repeat_n("?", uris.len())
             .collect::<Vec<_>>()
             .join(",");
         let sql = format!(
@@ -425,9 +435,9 @@ impl DuckReader {
         if !self.has_catalog {
             return Ok(out);
         }
-        let mut stmt = self
-            .conn
-            .prepare("SELECT concept_id, label FROM concepts WHERE label IS NOT NULL AND label <> ''")?;
+        let mut stmt = self.conn.prepare(
+            "SELECT concept_id, label FROM concepts WHERE label IS NOT NULL AND label <> ''",
+        )?;
         let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
         for row in rows {
             let (id, label) = row?;
@@ -435,7 +445,6 @@ impl DuckReader {
         }
         Ok(out)
     }
-
 
     /// Reverse-link geo lookup (Gréasán `v2_geo_points`, MapView): every resource
     /// that links to `target` through node `node_id`, with its descriptor + point
@@ -677,7 +686,7 @@ fn open_layer(dir: &Path) -> Result<DuckReader, DuckError> {
 /// each, and every layer is opened on every entry open); a resource's tiles are a
 /// query, not a reason to re-open. `resource_tiles`/`concept_labels` take `&self`,
 /// so one pooled reader serves every query. The pool lock is held during the query
-/// - fine for a dictionary app opening entries sequentially; concurrent hydrations
+/// — fine for a dictionary app opening entries sequentially; concurrent hydrations
 /// (e.g. parallel cognate loads) serialize briefly on the (fast, post-open) query.
 fn with_layer<T>(
     dir: &Path,
@@ -706,7 +715,9 @@ fn cached_concept_labels(
     dirs: &[&Path],
 ) -> Result<std::sync::Arc<HashMap<String, String>>, DuckError> {
     use std::sync::{Arc, Mutex, OnceLock};
-    static CACHE: OnceLock<Mutex<HashMap<String, Arc<HashMap<String, String>>>>> = OnceLock::new();
+    // Dir-set key → the merged, shared concept-label map for that layer set.
+    type ConceptLabelCache = HashMap<String, Arc<HashMap<String, String>>>;
+    static CACHE: OnceLock<Mutex<ConceptLabelCache>> = OnceLock::new();
     let key = dirs
         .iter()
         .map(|d| d.to_string_lossy().into_owned())
@@ -765,10 +776,7 @@ pub fn cited_by(dirs: &[&Path], node_id: &str, target: &str) -> Result<Vec<Strin
 /// per dir + calling the `descriptors` method - so the enrichment path (cognate /
 /// example / placename display names) reuses the warm pool instead of cold-opening
 /// every layer on every entry.
-pub fn descriptors(
-    dirs: &[&Path],
-    uris: &[String],
-) -> Result<HashMap<String, String>, DuckError> {
+pub fn descriptors(dirs: &[&Path], uris: &[String]) -> Result<HashMap<String, String>, DuckError> {
     let mut out: HashMap<String, String> = HashMap::new();
     for dir in dirs {
         for (uri, name) in with_layer(dir, |r| r.descriptors(uris))? {
@@ -802,10 +810,7 @@ pub fn hydrate_layers(
     layer_ids: Option<&[String]>,
     registry: &alizarin_core::FunctionsRegistry,
 ) -> Result<serde_json::Value, DuckError> {
-    use alizarin_core::graph::{
-        merge_resources, unify_cardinality_one_tiles, TileMergeMode,
-    };
-
+    use alizarin_core::graph::{merge_resources, unify_cardinality_one_tiles, TileMergeMode};
 
     // Perf instrumentation: RM_HYDRATE_PERF=1 logs per-phase timings to stderr
     // (RustStdoutStderr in logcat). Zero cost when unset.
@@ -814,7 +819,11 @@ pub fn hydrate_layers(
     macro_rules! mark {
         ($label:expr) => {
             if perf {
-                eprintln!("[perf] hydrate {:<8} {:>5}ms", $label, t0.elapsed().as_millis());
+                eprintln!(
+                    "[perf] hydrate {:<8} {:>5}ms",
+                    $label,
+                    t0.elapsed().as_millis()
+                );
             }
         };
     }
@@ -857,9 +866,7 @@ pub fn hydrate_layers(
     // Compute-tiles hook: run any compute-tiles functions declared on the graph.
     // Membership (`present_ids`) came free from the gather above.
     if layer_ids.is_some() {
-        let is_member = |layer_id: &str| -> bool {
-            present_ids.iter().any(|&id| id == layer_id)
-        };
+        let is_member = |layer_id: &str| -> bool { present_ids.contains(&layer_id) };
         // Resolve each graph-declared Derive function's provider from `registry`
         // by UUID and merge its JIT tiles in (attested wins; see
         // alizarin_core::apply_derive_functions). An empty registry is a no-op.
@@ -955,7 +962,19 @@ fn compile_expr(
             }
             let parts: Result<Vec<_>, _> = children
                 .iter()
-                .map(|c| compile_expr(c, graph, graphs, registry, has_catalog, has_edges, has_concept_index, has_ordered, spatial))
+                .map(|c| {
+                    compile_expr(
+                        c,
+                        graph,
+                        graphs,
+                        registry,
+                        has_catalog,
+                        has_edges,
+                        has_concept_index,
+                        has_ordered,
+                        spatial,
+                    )
+                })
                 .collect();
             Ok(parts?.join("\nINTERSECT\n"))
         }
@@ -965,7 +984,19 @@ fn compile_expr(
             }
             let parts: Result<Vec<_>, _> = children
                 .iter()
-                .map(|c| compile_expr(c, graph, graphs, registry, has_catalog, has_edges, has_concept_index, has_ordered, spatial))
+                .map(|c| {
+                    compile_expr(
+                        c,
+                        graph,
+                        graphs,
+                        registry,
+                        has_catalog,
+                        has_edges,
+                        has_concept_index,
+                        has_ordered,
+                        spatial,
+                    )
+                })
                 .collect();
             Ok(parts?.join("\nUNION\n"))
         }
@@ -986,7 +1017,17 @@ fn compile_expr(
                      ST_Intersects) to negate a spatial predicate"
                 )));
             }
-            let inner_sql = compile_expr(inner, graph, graphs, registry, has_catalog, has_edges, has_concept_index, has_ordered, spatial)?;
+            let inner_sql = compile_expr(
+                inner,
+                graph,
+                graphs,
+                registry,
+                has_catalog,
+                has_edges,
+                has_concept_index,
+                has_ordered,
+                spatial,
+            )?;
             Ok(format!(
                 "SELECT DISTINCT resource_id FROM tiles EXCEPT {inner_sql}"
             ))
@@ -1000,7 +1041,13 @@ fn compile_expr(
                 )));
             }
             let (node, _) = resolve(graph, path)?;
-            expect_class(&node, registry, |c| matches!(c, IndexClass::ConceptHierarchical { .. }), path, "concept")?;
+            expect_class(
+                node,
+                registry,
+                |c| matches!(c, IndexClass::ConceptHierarchical { .. }),
+                path,
+                "concept",
+            )?;
             match op {
                 // Node-scoped EXACT membership over the melted concept store, keyed on
                 // the node (globally unique) — so two concept nodes in one nodegroup, or
@@ -1045,7 +1092,13 @@ fn compile_expr(
                 )));
             }
             let (node, _) = resolve(graph, path)?;
-            expect_class(&node, registry, |c| matches!(c, IndexClass::Ordered), path, "range")?;
+            expect_class(
+                node,
+                registry,
+                |c| matches!(c, IndexClass::Ordered),
+                path,
+                "range",
+            )?;
             // Node-scoped range over the (node_id, q_ordered)-sorted ordered store, so
             // the predicate zone-map-prunes instead of scanning the geo-clustered tile row.
             Ok(format!(
@@ -1054,13 +1107,33 @@ fn compile_expr(
                 sql_lit(&node.nodeid)
             ))
         }
-        Expr::Bbox { path, min_lng, min_lat, max_lng, max_lat } => {
+        Expr::Bbox {
+            path,
+            min_lng,
+            min_lat,
+            max_lng,
+            max_lat,
+        } => {
             let (node, ng) = resolve(graph, path)?;
-            expect_class(&node, registry, |c| matches!(c, IndexClass::SpatialBbox), path, "bbox")?;
+            expect_class(
+                node,
+                registry,
+                |c| matches!(c, IndexClass::SpatialBbox),
+                path,
+                "bbox",
+            )?;
             // Coarse zone-map overlap (a sound SUPERSET) AND, when spatial is loaded,
             // an exact ST_Intersects against EVERY feature of the tile (see
             // `bbox_predicate`). No spatial → coarse-only superset (the mobile path).
-            let pred = bbox_predicate("", &node.nodeid, *min_lng, *min_lat, *max_lng, *max_lat, spatial);
+            let pred = bbox_predicate(
+                "",
+                &node.nodeid,
+                *min_lng,
+                *min_lat,
+                *max_lng,
+                *max_lat,
+                spatial,
+            );
             Ok(format!(
                 "SELECT DISTINCT resource_id FROM tiles WHERE nodegroup_id = '{}' AND {pred}",
                 sql_lit(&ng)
@@ -1074,7 +1147,13 @@ fn compile_expr(
                 )));
             }
             let (node, _) = resolve(graph, path)?;
-            expect_class(&node, registry, |c| matches!(c, IndexClass::Link), path, "link")?;
+            expect_class(
+                node,
+                registry,
+                |c| matches!(c, IndexClass::Link),
+                path,
+                "link",
+            )?;
             // EXACT membership over the columnar edge table — per node via src_node
             // (globally unique), so a multi-link nodegroup stays precise. `None`
             // target = "has any link on this node".
@@ -1107,7 +1186,7 @@ fn compile_expr(
             }
             let (link_node, src_ng) = resolve(graph, path)?;
             expect_class(
-                &link_node,
+                link_node,
                 registry,
                 |c| matches!(c, IndexClass::Link),
                 path,
@@ -1252,7 +1331,18 @@ fn compile_tile_cond(
             let parts: Result<Vec<_>, _> = children
                 .iter()
                 .map(|c| {
-                    compile_tile_cond(c, ng, graph, graphs, registry, has_catalog, has_edges, has_concept_index, has_ordered, spatial)
+                    compile_tile_cond(
+                        c,
+                        ng,
+                        graph,
+                        graphs,
+                        registry,
+                        has_catalog,
+                        has_edges,
+                        has_concept_index,
+                        has_ordered,
+                        spatial,
+                    )
                 })
                 .collect();
             Ok(format!("({})", parts?.join(" AND ")))
@@ -1264,7 +1354,18 @@ fn compile_tile_cond(
             let parts: Result<Vec<_>, _> = children
                 .iter()
                 .map(|c| {
-                    compile_tile_cond(c, ng, graph, graphs, registry, has_catalog, has_edges, has_concept_index, has_ordered, spatial)
+                    compile_tile_cond(
+                        c,
+                        ng,
+                        graph,
+                        graphs,
+                        registry,
+                        has_catalog,
+                        has_edges,
+                        has_concept_index,
+                        has_ordered,
+                        spatial,
+                    )
                 })
                 .collect();
             Ok(format!("({})", parts?.join(" OR ")))
@@ -1281,7 +1382,18 @@ fn compile_tile_cond(
             }
             Ok(format!(
                 "NOT ({})",
-                compile_tile_cond(inner, ng, graph, graphs, registry, has_catalog, has_edges, has_concept_index, has_ordered, spatial)?
+                compile_tile_cond(
+                    inner,
+                    ng,
+                    graph,
+                    graphs,
+                    registry,
+                    has_catalog,
+                    has_edges,
+                    has_concept_index,
+                    has_ordered,
+                    spatial
+                )?
             ))
         }
         Expr::Concept { path, op, value } => {
@@ -1293,7 +1405,7 @@ fn compile_tile_cond(
             }
             let (node, _) = resolve(graph, path)?;
             expect_class(
-                &node,
+                node,
                 registry,
                 |c| matches!(c, IndexClass::ConceptHierarchical { .. }),
                 path,
@@ -1336,17 +1448,43 @@ fn compile_tile_cond(
                 )));
             }
             let (node, _) = resolve(graph, path)?;
-            expect_class(&node, registry, |c| matches!(c, IndexClass::Ordered), path, "range")?;
+            expect_class(
+                node,
+                registry,
+                |c| matches!(c, IndexClass::Ordered),
+                path,
+                "range",
+            )?;
             Ok(format!(
                 "t.tileid IN (SELECT tile_id FROM ordered_index \
                  WHERE node_id = '{}' AND q_ordered BETWEEN {lo} AND {hi})",
                 sql_lit(&node.nodeid)
             ))
         }
-        Expr::Bbox { path, min_lng, min_lat, max_lng, max_lat } => {
+        Expr::Bbox {
+            path,
+            min_lng,
+            min_lat,
+            max_lng,
+            max_lat,
+        } => {
             let (node, _) = resolve(graph, path)?;
-            expect_class(&node, registry, |c| matches!(c, IndexClass::SpatialBbox), path, "bbox")?;
-            Ok(bbox_predicate("t.", &node.nodeid, *min_lng, *min_lat, *max_lng, *max_lat, spatial))
+            expect_class(
+                node,
+                registry,
+                |c| matches!(c, IndexClass::SpatialBbox),
+                path,
+                "bbox",
+            )?;
+            Ok(bbox_predicate(
+                "t.",
+                &node.nodeid,
+                *min_lng,
+                *min_lat,
+                *max_lng,
+                *max_lat,
+                spatial,
+            ))
         }
         Expr::HasLink { path, target } => {
             if !has_edges {
@@ -1355,7 +1493,13 @@ fn compile_tile_cond(
                 )));
             }
             let (node, _) = resolve(graph, path)?;
-            expect_class(&node, registry, |c| matches!(c, IndexClass::Link), path, "link")?;
+            expect_class(
+                node,
+                registry,
+                |c| matches!(c, IndexClass::Link),
+                path,
+                "link",
+            )?;
             let cond = match target {
                 Some(t) => format!(" AND target_resource = '{}'", sql_lit(t)),
                 None => String::new(),
@@ -1367,14 +1511,24 @@ fn compile_tile_cond(
                 sql_lit(ng)
             ))
         }
-        Expr::OnLink { path, model, r#where } => {
+        Expr::OnLink {
+            path,
+            model,
+            r#where,
+        } => {
             if !has_edges {
                 return Err(DuckError::Compile(format!(
                     "on-link path '{path}' needs the edge table"
                 )));
             }
             let (link_node, _) = resolve(graph, path)?;
-            expect_class(&link_node, registry, |c| matches!(c, IndexClass::Link), path, "link")?;
+            expect_class(
+                link_node,
+                registry,
+                |c| matches!(c, IndexClass::Link),
+                path,
+                "link",
+            )?;
             let target = graphs
                 .iter()
                 .copied()
@@ -1384,8 +1538,17 @@ fn compile_tile_cond(
                         "on-link target model '{model}' not available to the compiler"
                     ))
                 })?;
-            let inner =
-                compile_expr(r#where, target, graphs, registry, has_catalog, has_edges, has_concept_index, has_ordered, spatial)?;
+            let inner = compile_expr(
+                r#where,
+                target,
+                graphs,
+                registry,
+                has_catalog,
+                has_edges,
+                has_concept_index,
+                has_ordered,
+                spatial,
+            )?;
             Ok(format!(
                 "t.tileid IN (SELECT src_tile FROM edges \
                  WHERE src_node = '{}' AND src_nodegroup = '{}' \
@@ -1395,8 +1558,7 @@ fn compile_tile_cond(
             ))
         }
         Expr::OnTile(_) => Err(DuckError::Compile(
-            "nested on_tile is not supported; flatten the conditions into one on_tile"
-                .to_string(),
+            "nested on_tile is not supported; flatten the conditions into one on_tile".to_string(),
         )),
     }
 }
@@ -1536,7 +1698,10 @@ fn node_config_value(node: &StaticNode) -> Option<serde_json::Value> {
         return None;
     }
     Some(serde_json::Value::Object(
-        node.config.iter().map(|(k, v)| (k.clone(), v.clone())).collect(),
+        node.config
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect(),
     ))
 }
 
@@ -1590,8 +1755,10 @@ mod tests {
     #[test]
     fn json_is_bundled_no_network() {
         let conn = Connection::open_in_memory().unwrap();
-        conn.execute_batch("SET autoinstall_known_extensions=false; SET autoload_known_extensions=false;")
-            .unwrap();
+        conn.execute_batch(
+            "SET autoinstall_known_extensions=false; SET autoload_known_extensions=false;",
+        )
+        .unwrap();
         let v: i64 = conn
             .query_row(
                 "SELECT json_extract('{\"a\": 42}', '$.a')::BIGINT",

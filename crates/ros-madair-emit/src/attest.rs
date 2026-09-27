@@ -277,7 +277,9 @@ mod tests {
     #[test]
     fn sign_then_verify_roundtrips() {
         let id = SigningIdentity::load_or_create(&tmp_key()).unwrap();
-        let bundle = id.attest_snapshot("deadbeefdeadbeef", "https://example.org/", None).unwrap();
+        let bundle = id
+            .attest_snapshot("deadbeefdeadbeef", "https://example.org/", None)
+            .unwrap();
         assert_eq!(
             verify_bundle(&bundle, "deadbeefdeadbeef"),
             Verdict::Trusted { authored: 1 }
@@ -313,7 +315,11 @@ mod tests {
         use base64::{engine::general_purpose::STANDARD, Engine as _};
         let id = SigningIdentity::load_or_create(&tmp_key()).unwrap();
         let mut bundle = id
-            .attest_snapshot("deadbeefdeadbeef", "x", Some((Role::Endorsed, "urn:actor:x", "X")))
+            .attest_snapshot(
+                "deadbeefdeadbeef",
+                "x",
+                Some((Role::Endorsed, "urn:actor:x", "X")),
+            )
             .unwrap();
         let att = &mut bundle.attestations[0];
         let mut stmt: serde_json::Value =
@@ -330,7 +336,9 @@ mod tests {
     #[test]
     fn a_different_snapshot_is_untrusted() {
         let id = SigningIdentity::load_or_create(&tmp_key()).unwrap();
-        let bundle = id.attest_snapshot("deadbeefdeadbeef", "https://example.org/", None).unwrap();
+        let bundle = id
+            .attest_snapshot("deadbeefdeadbeef", "https://example.org/", None)
+            .unwrap();
         assert!(!verify_bundle(&bundle, "0000000000000000").is_trusted());
     }
 

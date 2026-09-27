@@ -36,10 +36,7 @@ fn scratch(tag: &str) -> PathBuf {
     use std::sync::atomic::{AtomicU64, Ordering};
     static N: AtomicU64 = AtomicU64::new(0);
     let n = N.fetch_add(1, Ordering::Relaxed);
-    let dir = std::env::temp_dir().join(format!(
-        "rm-behav-{tag}-{}-{n}",
-        std::process::id()
-    ));
+    let dir = std::env::temp_dir().join(format!("rm-behav-{tag}-{}-{n}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     dir
@@ -345,17 +342,26 @@ fn query_resolution_covers_all_expr_variants() {
 
     // HasLink
     assert_eq!(
-        ids(Expr::HasLink { path: "related".into(), target: Some(R3.into()) }),
+        ids(Expr::HasLink {
+            path: "related".into(),
+            target: Some(R3.into())
+        }),
         set(&[R1, R2]),
         "haslink(r3)"
     );
     assert_eq!(
-        ids(Expr::HasLink { path: "related".into(), target: None }),
+        ids(Expr::HasLink {
+            path: "related".into(),
+            target: None
+        }),
         set(&[R1, R2]),
         "haslink(any)"
     );
     assert_eq!(
-        ids(Expr::HasLink { path: "related".into(), target: Some(R1.into()) }),
+        ids(Expr::HasLink {
+            path: "related".into(),
+            target: Some(R1.into())
+        }),
         Vec::<String>::new(),
         "haslink(r1) = nobody"
     );
@@ -363,7 +369,11 @@ fn query_resolution_covers_all_expr_variants() {
     // Compound: All, Any, Not
     assert_eq!(
         ids(Expr::All(vec![
-            Expr::Concept { path: "category".into(), op: ConceptOp::Is, value: CAT_A.into() },
+            Expr::Concept {
+                path: "category".into(),
+                op: ConceptOp::Is,
+                value: CAT_A.into()
+            },
             Expr::Range {
                 path: "founded".into(),
                 lo: quantize_date("2015-01-01").unwrap(),
@@ -375,8 +385,16 @@ fn query_resolution_covers_all_expr_variants() {
     );
     assert_eq!(
         ids(Expr::Any(vec![
-            Expr::Concept { path: "category".into(), op: ConceptOp::Is, value: CAT_A.into() },
-            Expr::Concept { path: "category".into(), op: ConceptOp::Is, value: CAT_B.into() },
+            Expr::Concept {
+                path: "category".into(),
+                op: ConceptOp::Is,
+                value: CAT_A.into()
+            },
+            Expr::Concept {
+                path: "category".into(),
+                op: ConceptOp::Is,
+                value: CAT_B.into()
+            },
         ])),
         set(&[R1, R2, R3]),
         "any(cat-A OR cat-B) = all"
@@ -392,8 +410,16 @@ fn query_resolution_covers_all_expr_variants() {
     );
 
     // Vacuous: empty All = all, empty Any = none
-    assert_eq!(ids(Expr::All(vec![])), set(&[R1, R2, R3]), "empty All = all");
-    assert_eq!(ids(Expr::Any(vec![])), Vec::<String>::new(), "empty Any = none");
+    assert_eq!(
+        ids(Expr::All(vec![])),
+        set(&[R1, R2, R3]),
+        "empty All = all"
+    );
+    assert_eq!(
+        ids(Expr::Any(vec![])),
+        Vec::<String>::new(),
+        "empty Any = none"
+    );
 
     // count_records agrees with resolve_ids length
     let count = duck
@@ -413,8 +439,7 @@ fn query_resolution_covers_all_expr_variants() {
 #[test]
 fn resource_tiles_round_trip() {
     let (dir, _) = fixture();
-    let duck =
-        DuckReader::open(dir.join("tiles_test.parquet").to_str().unwrap()).unwrap();
+    let duck = DuckReader::open(dir.join("tiles_test.parquet").to_str().unwrap()).unwrap();
 
     let tiles = duck.resource_tiles(R1).unwrap();
     assert_eq!(tiles.len(), 4, "r1 has 4 tiles");
@@ -428,7 +453,11 @@ fn resource_tiles_round_trip() {
     });
 
     let date_tile = tiles.iter().find(|t| t.nodegroup_id == NG_DATE).unwrap();
-    assert_eq!(date_tile.data[NG_DATE], json!("2005-06-01"), "data round-trips");
+    assert_eq!(
+        date_tile.data[NG_DATE],
+        json!("2005-06-01"),
+        "data round-trips"
+    );
     assert_eq!(date_tile.tileid.as_deref(), Some("t01"), "tileid preserved");
     assert_eq!(date_tile.resourceinstance_id, R1, "resource id set");
 
@@ -452,21 +481,26 @@ fn descriptors_and_concept_labels() {
     assert_eq!(descs.get(R1).map(String::as_str), Some("Alpha"));
     assert_eq!(descs.get(R2).map(String::as_str), Some("Beta"));
     assert_eq!(descs.get(R3).map(String::as_str), Some("Gamma"));
-    assert!(duck.descriptors(&[]).unwrap().is_empty(), "empty in -> empty out");
+    assert!(
+        duck.descriptors(&[]).unwrap().is_empty(),
+        "empty in -> empty out"
+    );
 
     let labels = duck.concept_labels().unwrap();
     assert_eq!(labels.get(CAT_A).map(String::as_str), Some("Category A"));
     assert_eq!(labels.get(CAT_B).map(String::as_str), Some("Category B"));
 
-    assert_eq!(duck.concept_label(CAT_A).unwrap().as_deref(), Some("Category A"));
+    assert_eq!(
+        duck.concept_label(CAT_A).unwrap().as_deref(),
+        Some("Category A")
+    );
     assert_eq!(duck.concept_label("nonexistent").unwrap(), None);
 }
 
 #[test]
 fn geo_points_reverse_link_lookup() {
     let (dir, _) = fixture();
-    let duck =
-        DuckReader::open(dir.join("tiles_test.parquet").to_str().unwrap()).unwrap();
+    let duck = DuckReader::open(dir.join("tiles_test.parquet").to_str().unwrap()).unwrap();
 
     let mut pts = duck.geo_points(NG_LINK, R3).unwrap();
     pts.sort_by(|a, b| a.0.cmp(&b.0));
@@ -528,26 +562,28 @@ fn on_link_path_predicate_semijoins_the_edge_table() {
     )
     .unwrap();
 
-    let on_link_category = |value: &str| {
-        Expr::OnLink {
-            path: "related".into(),
-            model: "test-g".into(),
-            r#where: Box::new(Expr::Concept {
-                path: "category".into(),
-                op: ConceptOp::Is,
-                value: value.into(),
-            }),
-        }
+    let on_link_category = |value: &str| Expr::OnLink {
+        path: "related".into(),
+        model: "test-g".into(),
+        r#where: Box::new(Expr::Concept {
+            path: "category".into(),
+            op: ConceptOp::Is,
+            value: value.into(),
+        }),
     };
 
     // Resources whose `related` target is Category B (r3): r1 and r2 both link to r3.
-    let mut ids = duck.resolve_ids(&q(on_link_category(CAT_B)), &graph, &registry).unwrap();
+    let mut ids = duck
+        .resolve_ids(&q(on_link_category(CAT_B)), &graph, &registry)
+        .unwrap();
     ids.sort();
     assert_eq!(ids, set(&[R1, R2]), "r1,r2 link to r3, which is Category B");
 
     // Nobody links to a Category-A resource (r1,r2 ARE category A, but nothing
     // links to them), so the hop yields the empty set.
-    let none = duck.resolve_ids(&q(on_link_category(CAT_A)), &graph, &registry).unwrap();
+    let none = duck
+        .resolve_ids(&q(on_link_category(CAT_A)), &graph, &registry)
+        .unwrap();
     assert!(none.is_empty(), "nobody links to a Category-A resource");
 
     // Composes with a local predicate: link-to-B AND own category is A → r1,r2.
@@ -555,14 +591,22 @@ fn on_link_path_predicate_semijoins_the_edge_table() {
         .resolve_ids(
             &q(Expr::All(vec![
                 on_link_category(CAT_B),
-                Expr::Concept { path: "category".into(), op: ConceptOp::Is, value: CAT_A.into() },
+                Expr::Concept {
+                    path: "category".into(),
+                    op: ConceptOp::Is,
+                    value: CAT_A.into(),
+                },
             ])),
             &graph,
             &registry,
         )
         .unwrap();
     both.sort();
-    assert_eq!(both, set(&[R1, R2]), "OnLink INTERSECT local concept predicate");
+    assert_eq!(
+        both,
+        set(&[R1, R2]),
+        "OnLink INTERSECT local concept predicate"
+    );
 }
 
 #[test]
@@ -625,7 +669,10 @@ fn open_layers_composes_tiles_with_overlay_precedence() {
     // The overlay's Category-B tile overrides the base's Category-A tile for the
     // same (resource, nodegroup): the composed search sees B, not A.
     assert_eq!(hit(CAT_B), set(&[R1]), "overlay's tile wins");
-    assert!(hit(CAT_A).is_empty(), "base's tile is overridden, not unioned");
+    assert!(
+        hit(CAT_A).is_empty(),
+        "base's tile is overridden, not unioned"
+    );
 }
 
 #[test]
@@ -692,7 +739,11 @@ fn on_link_crosses_layers() {
         .unwrap();
     // Inner (Category B) matches r3 in the BASE layer; the edge r1→r3 is in the
     // OVERLAY layer; the composed views join them → r1. No shadow record needed.
-    assert_eq!(ids, set(&[R1]), "hop crosses layers: edge in overlay, target in base");
+    assert_eq!(
+        ids,
+        set(&[R1]),
+        "hop crosses layers: edge in overlay, target in base"
+    );
 }
 
 #[test]
@@ -791,11 +842,18 @@ fn on_link_crosses_models() {
     let ids = duck
         .resolve_ids_linked(&query, &org_graph, &[&place_graph], &registry)
         .unwrap();
-    assert_eq!(ids, set(&[r_org]), "Org → Place(designation=B): the linking org");
+    assert_eq!(
+        ids,
+        set(&[r_org]),
+        "Org → Place(designation=B): the linking org"
+    );
 
     // Without it, the target model 'place-g' is unknown to the compiler → error.
     let err = duck.resolve_ids(&query, &org_graph, &registry);
-    assert!(err.is_err(), "cross-model OnLink without the linked model errors");
+    assert!(
+        err.is_err(),
+        "cross-model OnLink without the linked model errors"
+    );
 }
 
 #[test]
@@ -859,7 +917,11 @@ fn on_link_chain_two_hops() {
     }));
 
     let ids = duck.resolve_ids(&q(chain), &graph(), &registry).unwrap();
-    assert_eq!(ids, set(&[a]), "two-hop chain a→b→c(CategoryB) resolves to a");
+    assert_eq!(
+        ids,
+        set(&[a]),
+        "two-hop chain a→b→c(CategoryB) resolves to a"
+    );
 }
 
 #[test]
@@ -932,12 +994,15 @@ fn dot_qualified_path_walks_the_schema_tree() {
     };
 
     // The dotted path resolves the nested reference node and matches.
-    let ids = duck.resolve_ids(&query("info.category"), &graph, &registry).unwrap();
+    let ids = duck
+        .resolve_ids(&query("info.category"), &graph, &registry)
+        .unwrap();
     assert_eq!(ids, set(&[r]), "info.category resolves through the tree");
 
     // An unknown component is a typed error, not a panic.
     assert!(
-        duck.resolve_ids(&query("info.nope"), &graph, &registry).is_err(),
+        duck.resolve_ids(&query("info.nope"), &graph, &registry)
+            .is_err(),
         "unknown dotted component errors"
     );
 }

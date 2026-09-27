@@ -73,14 +73,31 @@ fn main() {
     let registry = alizarin_core::default_functions_registry();
 
     // One warm run (builds the LayeredGraph merged index + duck warmup)...
-    let _ = ros_madair_duck::hydrate_layers(&dirs, &uuid, &composed, &langs, Some(&layer_ids), &registry)
-        .expect("warm hydrate");
+    let _ = ros_madair_duck::hydrate_layers(
+        &dirs,
+        &uuid,
+        &composed,
+        &langs,
+        Some(&layer_ids),
+        &registry,
+    )
+    .expect("warm hydrate");
     // ...then time N.
     let n = 5;
     let t = Instant::now();
     for _ in 0..n {
-        let _ = ros_madair_duck::hydrate_layers(&dirs, &uuid, &composed, &langs, Some(&layer_ids), &registry)
-            .expect("hydrate");
+        let _ = ros_madair_duck::hydrate_layers(
+            &dirs,
+            &uuid,
+            &composed,
+            &langs,
+            Some(&layer_ids),
+            &registry,
+        )
+        .expect("hydrate");
     }
-    eprintln!("[perf] {n} runs, {:.1}ms/run", t.elapsed().as_millis() as f64 / n as f64);
+    eprintln!(
+        "[perf] {n} runs, {:.1}ms/run",
+        t.elapsed().as_millis() as f64 / n as f64
+    );
 }

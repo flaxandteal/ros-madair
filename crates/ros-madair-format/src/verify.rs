@@ -116,9 +116,10 @@ pub fn verify_snapshot(dir: &Path) -> Result<HeadTrust, VerifyError> {
     let recomputed_id = snapshot_id(&recomputed, &manifest_digest_bytes(&idless)?);
     if recomputed_id != manifest.snapshot_id {
         return Ok(HeadTrust::Failed {
-            reason: "content does not match the manifest — this snapshot has been altered since it \
+            reason:
+                "content does not match the manifest — this snapshot has been altered since it \
                      was signed"
-                .to_string(),
+                    .to_string(),
         });
     }
 

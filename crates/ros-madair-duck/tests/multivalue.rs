@@ -77,7 +77,10 @@ fn corpus() -> (PathBuf, StaticGraph) {
     write_graph(&gp);
     let rdir = dir.join("resources").join("talk");
     std::fs::create_dir_all(&rdir).unwrap();
-    let resources = vec![resource(R_BOTH, &[BRICK, GOOD]), resource(R_STONE, &[STONE])];
+    let resources = vec![
+        resource(R_BOTH, &[BRICK, GOOD]),
+        resource(R_STONE, &[STONE]),
+    ];
     std::fs::write(
         rdir.join("talks.json"),
         serde_json::to_vec_pretty(&json!({ "business_data": { "resources": resources } })).unwrap(),
@@ -103,7 +106,11 @@ fn corpus() -> (PathBuf, StaticGraph) {
 fn is_concept(v: &str) -> Query {
     Query {
         model: GRAPH.into(),
-        r#where: Some(Expr::Concept { path: "fabric".into(), op: ConceptOp::Is, value: v.into() }),
+        r#where: Some(Expr::Concept {
+            path: "fabric".into(),
+            op: ConceptOp::Is,
+            value: v.into(),
+        }),
         measures: vec![Measure::SelectIds],
         limit: None,
     }

@@ -220,7 +220,9 @@ pub struct Subject {
 impl Subject {
     /// Does this subject's digest bind the given `snapshot_id`?
     pub fn covers(&self, snapshot_id: &str) -> bool {
-        self.digest.get(DIGEST_KEY).is_some_and(|d| d == snapshot_id)
+        self.digest
+            .get(DIGEST_KEY)
+            .is_some_and(|d| d == snapshot_id)
     }
 }
 
@@ -363,7 +365,7 @@ fn check_attestation(att: &Attestation, snapshot_id: &str) -> Result<Option<Attr
 }
 
 /// The NAMED, self-consistent attributions in a bundle over `snapshot_id` (actor
-/// + role for each valid attestation that named an actor). Anonymous valid
+/// and role for each valid attestation that named an actor). Anonymous valid
 /// attestations contribute nothing here. Deduped is the caller's concern.
 pub fn attributions(bundle: &AttestationBundle, snapshot_id: &str) -> Vec<Attribution> {
     bundle
@@ -408,7 +410,10 @@ mod tests {
     #[test]
     fn pae_matches_dsse_v1() {
         let got = pae("http://example.com/HelloWorld", b"hello world");
-        assert_eq!(got, b"DSSEv1 29 http://example.com/HelloWorld 11 hello world");
+        assert_eq!(
+            got,
+            b"DSSEv1 29 http://example.com/HelloWorld 11 hello world"
+        );
     }
 
     /// A malformed bundle (garbage base64) is Untrusted, never a panic.

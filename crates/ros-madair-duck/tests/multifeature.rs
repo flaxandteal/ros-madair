@@ -116,10 +116,21 @@ fn exact_spatial_tests_every_feature_not_just_the_first() {
     let registry = default_registry();
     let duck = DuckReader::open(pq.to_str().unwrap()).expect("open duck");
 
-    let bbox = Expr::Bbox { path: "location".into(), min_lng: -1.0, min_lat: -1.0, max_lng: 1.0, max_lat: 1.0 };
+    let bbox = Expr::Bbox {
+        path: "location".into(),
+        min_lng: -1.0,
+        min_lat: -1.0,
+        max_lng: 1.0,
+        max_lat: 1.0,
+    };
     let mut got = duck
         .resolve_ids(
-            &Query { model: GRAPH.into(), r#where: Some(bbox), measures: vec![Measure::SelectIds], limit: None },
+            &Query {
+                model: GRAPH.into(),
+                r#where: Some(bbox),
+                measures: vec![Measure::SelectIds],
+                limit: None,
+            },
             &graph,
             &registry,
         )
@@ -130,6 +141,9 @@ fn exact_spatial_tests_every_feature_not_just_the_first() {
 
     // R_MULTI matches via features[1] (the old features[0]-only step dropped it);
     // R_FAR is correctly excluded (exact, so this also asserts spatial is active).
-    assert_eq!(got, want, "exact step must find the origin feature at any index; R_FAR excluded");
+    assert_eq!(
+        got, want,
+        "exact step must find the origin feature at any index; R_FAR excluded"
+    );
     eprintln!("OK: exact spatial tests all features (R_MULTI matched via features[1])");
 }

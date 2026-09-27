@@ -13,7 +13,12 @@ fn main() {
     let target = &args[1];
     let dirs: Vec<&Path> = args[2..].iter().map(|s| Path::new(s.as_str())).collect();
     let ids = ros_madair_duck::cited_by(&dirs, node_id, target).expect("cited_by");
-    eprintln!("[cited-by] {} citers of {} via node {}", ids.len(), target, node_id);
+    eprintln!(
+        "[cited-by] {} citers of {} via node {}",
+        ids.len(),
+        target,
+        node_id
+    );
     for id in ids.iter().take(8) {
         eprintln!("  {id}");
     }

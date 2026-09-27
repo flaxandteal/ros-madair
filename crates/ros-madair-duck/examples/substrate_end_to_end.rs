@@ -105,7 +105,11 @@ fn write_data_dir(dir: &Path) {
     ] } });
     let rd = dir.join("resources").join("talk");
     std::fs::create_dir_all(&rd).unwrap();
-    std::fs::write(rd.join("talks.json"), serde_json::to_vec_pretty(&resources).unwrap()).unwrap();
+    std::fs::write(
+        rd.join("talks.json"),
+        serde_json::to_vec_pretty(&resources).unwrap(),
+    )
+    .unwrap();
 }
 
 fn load_graph(dir: &Path) -> StaticGraph {
@@ -137,7 +141,11 @@ fn main() {
     let s = &summaries[0];
     println!(
         "emitted '{}': {} resources, {} tiles, {} row groups → {}",
-        s.slug, s.resources, s.tiles, s.row_groups, out_dir.display()
+        s.slug,
+        s.resources,
+        s.tiles,
+        s.row_groups,
+        out_dir.display()
     );
 
     // 3. sign, 4. verify (the reader-side gate).
@@ -171,23 +179,39 @@ fn main() {
         lo: quantize_date("2000-01-01").unwrap(),
         hi: quantize_date("2025-12-31").unwrap(),
     };
-    let recent = reader.resolve_ids(&count(&founded_recent), &graph, &registry).unwrap();
-    println!("\nfounded in 2000..2025 → {} match(es): {recent:?}", recent.len());
+    let recent = reader
+        .resolve_ids(&count(&founded_recent), &graph, &registry)
+        .unwrap();
+    println!(
+        "\nfounded in 2000..2025 → {} match(es): {recent:?}",
+        recent.len()
+    );
 
     // Bbox: talks whose geometry meets the unit-ish box near the origin. Opened
     // without the spatial extension, so this prunes coarsely on the geo_* zone-map
     // (a superset a caller would verify exactly on the hydrated tile).
     let near_origin = Expr::Bbox {
         path: "location".into(),
-        min_lng: -1.0, min_lat: -1.0, max_lng: 12.0, max_lat: 12.0,
+        min_lng: -1.0,
+        min_lat: -1.0,
+        max_lng: 12.0,
+        max_lat: 12.0,
     };
-    let near = reader.resolve_ids(&count(&near_origin), &graph, &registry).unwrap();
-    println!("near the origin (coarse bbox) → {} match(es): {near:?}", near.len());
+    let near = reader
+        .resolve_ids(&count(&near_origin), &graph, &registry)
+        .unwrap();
+    println!(
+        "near the origin (coarse bbox) → {} match(es): {near:?}",
+        near.len()
+    );
 
     // 7. hydrate one match into a schema-shaped JSON tree.
     if let Some(uuid) = recent.first() {
         let tree = reader.hydrate(uuid, &graph, &["en"]).unwrap();
-        println!("\nhydrated {uuid}:\n{}", serde_json::to_string_pretty(&tree).unwrap());
+        println!(
+            "\nhydrated {uuid}:\n{}",
+            serde_json::to_string_pretty(&tree).unwrap()
+        );
     }
 
     let _ = std::fs::remove_dir_all(&base);

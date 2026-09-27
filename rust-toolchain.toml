@@ -1,0 +1,10 @@
+# Pin the toolchain so fmt/clippy are DETERMINISTIC across local + CI.
+#
+# CI previously used `dtolnay/rust-toolchain@stable`, a floating channel: rustfmt's
+# default style shifts between releases, so a stable bump silently turned the
+# `cargo fmt --all -- --check` gate red (142 diffs under 1.98.1) with no source
+# change. A fixed version freezes both the rustfmt style and the clippy lint set;
+# the workflows install this exact toolchain (rustup honours this file).
+[toolchain]
+channel = "1.91.1"
+components = ["rustfmt", "clippy"]

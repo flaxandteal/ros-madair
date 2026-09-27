@@ -256,7 +256,6 @@ impl fmt::Display for QueryError {
 
 impl std::error::Error for QueryError {}
 
-
 /// Slug derivation matching `ros-madair-emit` (lowercase, runs of
 /// non-alphanumerics collapsed to single hyphens, trimmed).
 fn emit_slug(name: &str) -> String {
@@ -412,7 +411,6 @@ fn node_config_value(node: &StaticNode) -> Option<serde_json::Value> {
             .collect(),
     ))
 }
-
 
 // ---------------------------------------------------------------------------
 // Model catalog (discovery surface for an LLM / MCP translation layer)
@@ -646,14 +644,24 @@ fn explain_expr(expr: &Expr, resolver: &PathResolver, graph: &StaticGraph) -> St
             ConceptOp::DescendantOrSelfOf => format!("{path} is {value} or a narrower concept"),
         },
         Expr::Range { path, lo, hi } => format!("{path} is between {lo} and {hi} (quantized)"),
-        Expr::Bbox { path, min_lng, min_lat, max_lng, max_lat } => {
+        Expr::Bbox {
+            path,
+            min_lng,
+            min_lat,
+            max_lng,
+            max_lat,
+        } => {
             format!("{path} lies within ({min_lng}, {min_lat})–({max_lng}, {max_lat})")
         }
         Expr::HasLink { path, target } => match target {
             Some(t) => format!("{path} links to {t}"),
             None => format!("{path} has any link"),
         },
-        Expr::OnLink { path, model, r#where } => format!(
+        Expr::OnLink {
+            path,
+            model,
+            r#where,
+        } => format!(
             "{path} points to a '{model}' record where {}",
             explain_expr(r#where, resolver, graph)
         ),
@@ -666,7 +674,12 @@ fn explain_expr(expr: &Expr, resolver: &PathResolver, graph: &StaticGraph) -> St
 }
 
 /// Join child clauses, parenthesizing each when there is more than one.
-fn explain_join(children: &[Expr], sep: &str, resolver: &PathResolver, graph: &StaticGraph) -> String {
+fn explain_join(
+    children: &[Expr],
+    sep: &str,
+    resolver: &PathResolver,
+    graph: &StaticGraph,
+) -> String {
     if children.len() == 1 {
         return explain_expr(&children[0], resolver, graph);
     }
@@ -698,7 +711,10 @@ fn explain_leaf_ng(expr: &Expr, resolver: &PathResolver) -> Option<String> {
         | Expr::Range { path, .. }
         | Expr::Bbox { path, .. }
         | Expr::HasLink { path, .. }
-        | Expr::OnLink { path, .. } => resolver.resolve(path).ok().and_then(|n| n.nodegroup_id.clone()),
+        | Expr::OnLink { path, .. } => resolver
+            .resolve(path)
+            .ok()
+            .and_then(|n| n.nodegroup_id.clone()),
         Expr::All(cs) | Expr::Any(cs) | Expr::OnTile(cs) => {
             cs.iter().find_map(|c| explain_leaf_ng(c, resolver))
         }
@@ -736,9 +752,7 @@ mod tests {
                 "graph_id": G, "istopnode": false, "is_collector": true, "config": cfg,
             })
         };
-        let edge = |from: &str, to: &str| {
-            serde_json::json!({ "edgeid": to, "domainnode_id": from, "rangenode_id": to, "graph_id": G })
-        };
+        let edge = |from: &str, to: &str| serde_json::json!({ "edgeid": to, "domainnode_id": from, "rangenode_id": to, "graph_id": G });
         let doc = serde_json::json!({ "graph": [{
             "graphid": G, "name": "Thing", "root": root.clone(),
             "nodes": [
@@ -763,7 +777,12 @@ mod tests {
     #[test]
     fn catalog_describes_predicates_and_target_models() {
         let cat = ModelCatalog::build(&catalog_graph(), None);
-        let by_alias = |a: &str| cat.paths.iter().find(|p| p.alias == a).expect("path present");
+        let by_alias = |a: &str| {
+            cat.paths
+                .iter()
+                .find(|p| p.alias == a)
+                .expect("path present")
+        };
 
         // Each node advertises which IR predicate to build against it.
         assert_eq!(by_alias("kind").predicate, NodePredicate::Concept);
@@ -784,14 +803,24 @@ mod tests {
 
         // Serializes as a compact snake_case surface for an MCP call.
         let json = serde_json::to_string(&cat).unwrap();
-        assert!(json.contains("\"predicate\":\"link\""), "predicate hint present: {json}");
+        assert!(
+            json.contains("\"predicate\":\"link\""),
+            "predicate hint present: {json}"
+        );
     }
 
     #[test]
     fn explain_surfaces_on_tile_vs_all_distinction() {
         let g = catalog_graph();
-        let founded = Expr::Range { path: "founded".into(), lo: 100, hi: 200 };
-        let maker = Expr::HasLink { path: "maker".into(), target: Some("x".into()) };
+        let founded = Expr::Range {
+            path: "founded".into(),
+            lo: 100,
+            hi: 200,
+        };
+        let maker = Expr::HasLink {
+            path: "maker".into(),
+            target: Some("x".into()),
+        };
         let q = |w: Expr| Query {
             model: "thing".into(),
             r#where: Some(w),
@@ -803,16 +832,26 @@ mod tests {
         let all = explain(&q(Expr::All(vec![founded.clone(), maker.clone()])), &g);
         assert!(all.contains("founded is between 100 and 200"), "{all}");
         assert!(all.contains("maker links to x"), "{all}");
-        assert!(!all.contains("a single"), "All must not read as one record: {all}");
+        assert!(
+            !all.contains("a single"),
+            "All must not read as one record: {all}"
+        );
 
         // `OnTile`: the same-record tell that catches the mistranslation.
         let on_tile = explain(&q(Expr::OnTile(vec![founded, maker])), &g);
-        assert!(on_tile.contains("a single"), "OnTile must read as one record: {on_tile}");
+        assert!(
+            on_tile.contains("a single"),
+            "OnTile must read as one record: {on_tile}"
+        );
         assert!(on_tile.contains("record where"), "{on_tile}");
 
         // Concept descendant renders the hierarchy hint.
         let c = explain(
-            &q(Expr::Concept { path: "kind".into(), op: ConceptOp::DescendantOrSelfOf, value: "z".into() }),
+            &q(Expr::Concept {
+                path: "kind".into(),
+                op: ConceptOp::DescendantOrSelfOf,
+                value: "z".into(),
+            }),
             &g,
         );
         assert!(c.contains("kind is z or a narrower concept"), "{c}");
@@ -840,7 +879,10 @@ mod tests {
         };
         let json = serde_json::to_string(&ir).unwrap();
         assert!(json.contains("\"on_link\""), "tagged snake_case: {json}");
-        assert!(json.contains("\"where\""), "inner serialized as `where`: {json}");
+        assert!(
+            json.contains("\"where\""),
+            "inner serialized as `where`: {json}"
+        );
         let back: Expr = serde_json::from_str(&json).unwrap();
         assert_eq!(back, ir, "round-trips");
     }

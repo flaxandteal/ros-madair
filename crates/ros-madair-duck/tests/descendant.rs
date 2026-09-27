@@ -44,7 +44,11 @@ fn graph() -> StaticGraph {
 fn descendant_of(v: &str) -> Query {
     Query {
         model: "g".into(),
-        r#where: Some(Expr::Concept { path: "topic".into(), op: ConceptOp::DescendantOrSelfOf, value: v.into() }),
+        r#where: Some(Expr::Concept {
+            path: "topic".into(),
+            op: ConceptOp::DescendantOrSelfOf,
+            value: v.into(),
+        }),
         measures: vec![Measure::SelectIds],
         limit: None,
     }
@@ -78,11 +82,14 @@ fn descendant_or_self_is_a_subtree_range() {
     ))
     .unwrap();
 
-    let reader = DuckReader::open_with_catalog(tiles.to_str().unwrap(), cat.to_str().unwrap()).unwrap();
+    let reader =
+        DuckReader::open_with_catalog(tiles.to_str().unwrap(), cat.to_str().unwrap()).unwrap();
     let registry = default_registry();
     let g = graph();
     let ids = |v: &str| {
-        let mut r = reader.resolve_ids(&descendant_of(v), &g, &registry).unwrap();
+        let mut r = reader
+            .resolve_ids(&descendant_of(v), &g, &registry)
+            .unwrap();
         r.sort();
         r
     };
@@ -92,8 +99,16 @@ fn descendant_or_self_is_a_subtree_range() {
         v
     };
 
-    assert_eq!(ids("root"), set(&["r1", "r2", "r3", "r4"]), "root's subtree = all");
-    assert_eq!(ids("a"), set(&["r1", "r4"]), "a's subtree = {{a, a1}} → r4, r1");
+    assert_eq!(
+        ids("root"),
+        set(&["r1", "r2", "r3", "r4"]),
+        "root's subtree = all"
+    );
+    assert_eq!(
+        ids("a"),
+        set(&["r1", "r4"]),
+        "a's subtree = {{a, a1}} → r4, r1"
+    );
     assert_eq!(ids("a1"), set(&["r1"]), "a1 is a leaf");
     assert_eq!(ids("b"), set(&["r2"]), "b is a leaf");
 
