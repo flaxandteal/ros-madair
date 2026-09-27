@@ -1,5 +1,19 @@
 name: Release Package
 
+# Tag-triggered release for the DuckDB + Parquet substrate. Publishes:
+#   - the ros-madair-python wheel to PyPI (the depend-able registry — the Rust
+#     crates path-depend on alizarin, so they cannot go to crates.io);
+#   - a GitHub Release carrying the emit CLI binary.
+# Rust downstreams depend via a git dependency on the tag.
+#
+# The v1 WASM/npm/NAPI client this workflow used to build was deleted; the browser
+# runtime is slated to become DuckDB-WASM (substrate slice 4).
+#
+# PREREQUISITES (same path-dep vendoring as ci.yml — alizarin is a RELATIVE SIBLING):
+#   - Repo variables: ALIZARIN_REPO (default flaxandteal/alizarin-sandbox), ALIZARIN_REF.
+#   - Repo secret:    DEPS_PAT (read on ALIZARIN_REPO; drop if public).
+#   - Repo secret:    PYPI_TOKEN (a PyPI API token) — the PyPI upload is SKIPPED if absent.
+
 on:
   push:
     tags:
@@ -7,129 +21,130 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Version to release (e.g., v0.1.0)'
+        description: 'Version to release (e.g., v0.1.0-alpha.16)'
         required: true
         type: string
 
+env:
+  ALIZARIN_REPO: ${{ vars.ALIZARIN_REPO || 'flaxandteal/alizarin-sandbox' }}
+  ALIZARIN_REF: ${{ vars.ALIZARIN_REF || 'main' }}
+  SCCACHE_GHA_ENABLED: "true"
+  RUSTC_WRAPPER: "sccache"
+
 jobs:
-  build-and-release:
+  # ── emit CLI binary + the GitHub Release ─────────────────────────────────────
+  release:
+    name: CLI binary + GitHub Release
     runs-on: ubuntu-latest
     permissions:
       contents: write
-
+    env:
+      CC: "sccache gcc"
+      CXX: "sccache g++"
     steps:
-      - name: Checkout
+      - uses: actions/checkout@v4
+      - name: Vendor alizarin sibling (path dependency)
         uses: actions/checkout@v4
-
-      - name: Set up Rust
-        uses: dtolnay/rust-toolchain@stable
         with:
-          targets: wasm32-unknown-unknown
+          repository: ${{ env.ALIZARIN_REPO }}
+          ref: ${{ env.ALIZARIN_REF }}
+          path: .deps/alizarin-sandbox
+          token: ${{ secrets.DEPS_PAT }}
+      - name: Link sibling to ../alizarin-sandbox
+        run: ln -sfn "$GITHUB_WORKSPACE/.deps/alizarin-sandbox" "$(dirname "$GITHUB_WORKSPACE")/alizarin-sandbox"
 
-      - name: Install wasm-pack
-        uses: jetli/wasm-pack-action@v0.4.0
-        with:
-          version: 'v0.13.1'
+      - uses: dtolnay/rust-toolchain@stable
+      - name: sccache
+        uses: mozilla-actions/sccache-action@v0.0.6
+      - uses: Swatinem/rust-cache@v2
 
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-
-      - name: Cache Rust dependencies
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/bin/
-            ~/.cargo/registry/index/
-            ~/.cargo/registry/cache/
-            ~/.cargo/git/db/
-            target/
-          key: ${{ runner.os }}-cargo-${{ hashFiles('Cargo.lock') }}
-
-      - name: Cache Node dependencies
-        uses: actions/cache@v4
-        with:
-          path: node_modules
-          key: ${{ runner.os }}-node-${{ hashFiles('package-lock.json') }}
-
-      - name: Install Node dependencies
-        run: npm install
-
-      - name: Build WASM + JS bundle
-        run: npm run build
-
-      - name: Verify build artifacts
+      - name: Build emit CLI (release)
+        run: cargo build --release -p ros-madair-emit
+      - name: Package binary
         run: |
-          echo "dist/:"
-          ls -lh dist/
-          echo ""
-          echo "pkg/:"
-          ls -lh pkg/
+          cp target/release/ros-madair-emit ros-madair-emit-linux-amd64
+          chmod +x ros-madair-emit-linux-amd64
 
-      - name: Build indexer binary (linux-amd64)
-        run: |
-          cargo build --release --bin ros-madair-build
-          cp target/release/ros-madair-build ros-madair-build-linux-amd64
-          chmod +x ros-madair-build-linux-amd64
-          echo "Binary size: $(du -h ros-madair-build-linux-amd64 | cut -f1)"
-
-      - name: Prepare package for npm
-        run: |
-          # Remove pkg/.gitignore created by wasm-pack so pkg/ contents are included in tarball
-          rm -f pkg/.gitignore
-          echo "Removed pkg/.gitignore to ensure WASM files are included in package"
-
-      - name: Create tarball
-        run: |
-          npm pack
-          echo ""
-          echo "Tarball contents:"
-          tar -tzf ros-madair-*.tgz | head -30
-
-      - name: Get version from tag or input
-        id: get_version
+      - name: Resolve version
+        id: v
         run: |
           if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
-            echo "version=${{ github.event.inputs.version }}" >> $GITHUB_OUTPUT
+            echo "version=${{ github.event.inputs.version }}" >> "$GITHUB_OUTPUT"
           else
-            echo "version=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+            echo "version=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Create Release
-        uses: softprops/action-gh-release@v1
+      - name: GitHub Release
+        uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ steps.get_version.outputs.version }}
-          name: Release ${{ steps.get_version.outputs.version }}
+          tag_name: ${{ steps.v.outputs.version }}
+          name: Rós Madair ${{ steps.v.outputs.version }}
           draft: false
-          prerelease: ${{ contains(steps.get_version.outputs.version, 'alpha') || contains(steps.get_version.outputs.version, 'beta') }}
-          files: |
-            *.tgz
-            ros-madair-build-linux-amd64
+          prerelease: ${{ contains(steps.v.outputs.version, 'alpha') || contains(steps.v.outputs.version, 'beta') || contains(steps.v.outputs.version, 'rc') }}
+          files: ros-madair-emit-linux-amd64
           body: |
-            ## Installation
+            Rós Madair ${{ steps.v.outputs.version }} — DuckDB + Parquet static-file query substrate.
 
-            Install from the tarball:
-
-            ```bash
-            npm install https://github.com/${{ github.repository }}/releases/download/${{ steps.get_version.outputs.version }}/ros-madair-${{ steps.get_version.outputs.version }}.tgz
-            ```
-
-            ## Usage
-
-            ```typescript
-            import { initWasm, SparqlStore } from 'ros-madair';
-
-            await initWasm();
-            const store = new SparqlStore('https://cdn.example.org/index/');
-            await store.loadSummary();
-            ```
-
-            ## What's Included
-
-            - Pre-built WASM binary (`pkg/`)
-            - Bundled JavaScript/TypeScript distribution (`dist/`)
-            - Type definitions
-            - Source maps
+            **Python** — the `ros-madair-python` wheel is published to PyPI by the `python-wheel` job.
+            **Rust** — the crates path-depend on alizarin, so they are NOT on crates.io; depend via git + this tag, e.g.
+            `ros-madair-duck = { git = "https://github.com/${{ github.repository }}", tag = "${{ steps.v.outputs.version }}" }`
+            **CLI** — `ros-madair-emit-linux-amd64` compiles a data_dir into the substrate (`tiles/edges/concepts/ordered` Parquet + manifest).
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # ── PyO3 wheel → PyPI ────────────────────────────────────────────────────────
+  python-wheel:
+    name: Python wheel → PyPI
+    runs-on: ubuntu-latest
+    env:
+      CC: "sccache gcc"
+      CXX: "sccache g++"
+      # Mapped so the publish step can gate on presence (secrets are not usable in `if`).
+      PYPI_TOKEN: ${{ secrets.PYPI_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Vendor alizarin sibling (path dependency)
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.ALIZARIN_REPO }}
+          ref: ${{ env.ALIZARIN_REF }}
+          path: .deps/alizarin-sandbox
+          token: ${{ secrets.DEPS_PAT }}
+      - name: Link sibling to ../alizarin-sandbox
+        run: ln -sfn "$GITHUB_WORKSPACE/.deps/alizarin-sandbox" "$(dirname "$GITHUB_WORKSPACE")/alizarin-sandbox"
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: sccache
+        uses: mozilla-actions/sccache-action@v0.0.6
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install maturin + auditwheel
+        run: pip install maturin auditwheel twine
+
+      # Build NATIVELY (not in a manylinux container) so the ../alizarin-sandbox path
+      # dependency resolves — the container would not mount the sibling. Then auditwheel
+      # repairs to a PyPI-acceptable manylinux wheel (bundling static duckdb + libstdc++).
+      - name: Build wheel (abi3)
+        run: maturin build --release -m crates/ros-madair-python/Cargo.toml --out target/wheels
+      - name: Repair to manylinux
+        run: |
+          mkdir -p dist
+          auditwheel repair target/wheels/*.whl -w dist/ \
+            || { echo "auditwheel repair skipped (already compliant?) — passing wheel through"; cp target/wheels/*.whl dist/; }
+          ls -lh dist/
+
+      - name: Upload wheel artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: python-wheel
+          path: dist/*.whl
+
+      - name: Publish to PyPI
+        if: env.PYPI_TOKEN != '' && startsWith(github.ref, 'refs/tags/')
+        run: twine upload --skip-existing dist/*.whl
+        env:
+          TWINE_USERNAME: __token__
+          TWINE_PASSWORD: ${{ secrets.PYPI_TOKEN }}

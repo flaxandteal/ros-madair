@@ -1,9 +1,9 @@
 name: Check code
 
-# Per-PR check tier for the DuckDB/Parquet substrate, mirroring alizarin's ci.yml
-# (fmt + clippy + test across rust/wasm/napi/python). Until this existed, RM had
-# only a release-binary build + a docs deploy: 122 #[test] fns and 16 integration
-# test files never ran, and the duck/parquet path was never tested.
+# Per-PR check tier for the DuckDB/Parquet substrate: fmt + clippy + the full test
+# suite (incl. the duck/parquet path), plus a pyo3 compile check. The v1 wasm/napi
+# client jobs were removed with the v1 client crates (browser runtime → DuckDB-WASM,
+# substrate slice 4).
 #
 # CACHING the bundled libduckdb build (~12 min cold): two layers, complementary.
 #   - Swatinem/rust-cache restores target/, so on an unchanged Cargo.lock the
@@ -72,73 +72,13 @@ jobs:
         run: cargo clippy --workspace --all-targets -- -D warnings
       - name: Test workspace (bundled duckdb+json+parquet compiled in ros-madair-duck)
         run: cargo test --workspace
-      - name: Build the offline parquet indexer binary
-        run: cargo build --release --bin ros-madair-build
+      - name: Build the emit CLI binary (release)
+        run: cargo build --release -p ros-madair-emit
       - name: sccache stats (confirm the C++ compiles are being cached)
         run: sccache --show-stats
 
-  # ── WASM (client + combined) + JS/TS. No duckdb here (native-only), so no CC wrap. ──
-  wasm-js:
-    name: WASM + TypeScript
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/checkout@v4
-        with:
-          repository: ${{ env.ALIZARIN_REPO }}
-          ref: ${{ env.ALIZARIN_REF }}
-          path: .deps/alizarin-sandbox
-          token: ${{ secrets.DEPS_PAT }}
-      - run: ln -sfn "$GITHUB_WORKSPACE/.deps/alizarin-sandbox" "$(dirname "$GITHUB_WORKSPACE")/alizarin-sandbox"
-
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: wasm32-unknown-unknown
-      - name: Install wasm-pack
-        uses: jetli/wasm-pack-action@v0.4.0
-        with:
-          version: 'v0.13.1'
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-      - name: sccache
-        uses: mozilla-actions/sccache-action@v0.0.6
-      - uses: Swatinem/rust-cache@v2
-
-      - run: npm ci
-      - name: Build client WASM
-        run: npm run build:wasm
-      - name: Build combined WASM (ros-madair-alizarin - the binary the app links)
-        run: npm run build:combined
-      - name: Build JS bundle
-        run: npm run build:js
-
-  # ── NAPI native addon (may pull duckdb -> CC wrap) ──
-  napi:
-    name: NAPI Build
-    runs-on: ubuntu-latest
-    env:
-      CC: "sccache gcc"
-      CXX: "sccache g++"
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/checkout@v4
-        with:
-          repository: ${{ env.ALIZARIN_REPO }}
-          ref: ${{ env.ALIZARIN_REF }}
-          path: .deps/alizarin-sandbox
-          token: ${{ secrets.DEPS_PAT }}
-      - run: ln -sfn "$GITHUB_WORKSPACE/.deps/alizarin-sandbox" "$(dirname "$GITHUB_WORKSPACE")/alizarin-sandbox"
-
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-      - name: sccache
-        uses: mozilla-actions/sccache-action@v0.0.6
-      - uses: Swatinem/rust-cache@v2
-      - name: Build NAPI addon
-        run: npm run build:napi
+  # (The v1 wasm-js + napi jobs were removed with the v1 client crates — the browser
+  # runtime is slated to become DuckDB-WASM, a substrate-slice-4 rework.)
 
   # ── Python (pyo3: ros-madair-python; may pull duckdb -> CC wrap) ──
   python:
