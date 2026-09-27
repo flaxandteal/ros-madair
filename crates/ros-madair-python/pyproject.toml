@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "ros-madair-v2"
-version = "0.1.0a15"
+version = "0.1.0a16"
 description = "Python binding for the Rós Madair v2 query compiler (head-schema IR to SQL), with the CLM reference handler registered"
 requires-python = ">=3.9"
 classifiers = [

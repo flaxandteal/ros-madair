@@ -45,10 +45,22 @@ if [ -f "$ROOT_DIR/package.json" ]; then
     echo "  ✓ package.json"
 fi
 
-# Update pyproject.toml (ros-madair-builder)
-if [ -f "$ROOT_DIR/crates/ros-madair-builder/pyproject.toml" ]; then
-    sed -i "s/^version = .*/version = \"$PEP440_VERSION\"/" "$ROOT_DIR/crates/ros-madair-builder/pyproject.toml"
-    echo "  ✓ crates/ros-madair-builder/pyproject.toml"
+# Update package-lock.json (root version + the root package entry)
+if [ -f "$ROOT_DIR/package-lock.json" ]; then
+    node -e "
+        const fs = require('fs');
+        const l = JSON.parse(fs.readFileSync('$ROOT_DIR/package-lock.json', 'utf8'));
+        l.version = '$VERSION';
+        if (l.packages && l.packages['']) l.packages[''].version = '$VERSION';
+        fs.writeFileSync('$ROOT_DIR/package-lock.json', JSON.stringify(l, null, 2) + '\n');
+    "
+    echo "  ✓ package-lock.json"
+fi
+
+# Update pyproject.toml (ros-madair-python — the PyO3 package)
+if [ -f "$ROOT_DIR/crates/ros-madair-python/pyproject.toml" ]; then
+    sed -i "s/^version = .*/version = \"$PEP440_VERSION\"/" "$ROOT_DIR/crates/ros-madair-python/pyproject.toml"
+    echo "  ✓ crates/ros-madair-python/pyproject.toml"
 fi
 
 echo ""
