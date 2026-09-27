@@ -62,7 +62,7 @@ jobs:
   # ── PyO3 wheel → PyPI (Trusted Publishing / OIDC — NO token) ──────────────────
   # PyPI mints the upload credential from a short-lived GitHub OIDC token instead of
   # a stored secret. Prereq (one-time, in the PyPI UI): register a Trusted Publisher
-  # for project `ros-madair-v2` → GitHub owner=flaxandteal, repo=<this repo>,
+  # for project `ros-madair` → GitHub owner=flaxandteal, repo=<this repo>,
   # workflow=`release.yml`. Register it as a *pending publisher* BEFORE the first
   # release so the very first OIDC upload creates AND claims the project name — no
   # token is ever needed, not even to bootstrap.

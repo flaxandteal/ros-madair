@@ -16,7 +16,7 @@ description = "Python binding for the Rós Madair v2 query compiler (head-schema
 # Python module (IndexBuilder/IndexReader) that Clódóir imports today. The v2
 # compiler lives under its own name so both can be installed side by side
 # during the transition.
-name = "ros_madair_v2"
+name = "ros_madair"
 crate-type = ["cdylib"]
 
 [dependencies]

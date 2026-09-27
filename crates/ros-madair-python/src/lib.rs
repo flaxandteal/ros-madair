@@ -13,8 +13,8 @@
 //! `ros-madair-duck`:
 //!
 //! ```python
-//! g = ros_madair_v2.Graph(open("Group.json").read())
-//! r = ros_madair_v2.Reader("/path/to/snapshot")   # its tiles_*/edges_*/concept_catalog
+//! g = ros_madair.Graph(open("Group.json").read())
+//! r = ros_madair.Reader("/path/to/snapshot")   # its tiles_*/edges_*/concept_catalog
 //! ids  = r.resolve(ir_json, g)                     # matching resource ids
 //! n    = r.count(ir_json, g)                       # COUNT(*)
 //! tree = r.hydrate(uuid, g)                        # schema-shaped JSON tree
@@ -216,7 +216,7 @@ impl Reader {
 }
 
 #[pymodule]
-fn ros_madair_v2(m: &Bound<'_, PyModule>) -> PyResult<()> {
+fn ros_madair(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<Graph>()?;
     m.add_class::<Reader>()?;
     Ok(())
