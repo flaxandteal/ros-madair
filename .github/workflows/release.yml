@@ -91,7 +91,10 @@ jobs:
         uses: PyO3/maturin-action@v1
         with:
           command: build
-          args: --release -m crates/ros-madair-python/Cargo.toml --out dist
+          # --strip: profile.release keeps debug=true (for native backtraces), which
+          # bloats the statically-bundled-DuckDB wheel past PyPI's 100 MB limit.
+          # Strip the extension module in the wheel only.
+          args: --release --strip -m crates/ros-madair-python/Cargo.toml --out dist
           # 2_28 (not auto=manylinux2014): the bundled DuckDB amalgamation rejects
           # the legacy devtoolset CXX ABI on 2014 ("DuckDB does not provide
           # extensions for this (legacy) CXX ABI"); 2_28 ships a modern GCC.
