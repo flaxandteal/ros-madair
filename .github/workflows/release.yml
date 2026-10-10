@@ -92,6 +92,11 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/')
     permissions:
       id-token: write   # required: lets the job mint the OIDC token npm exchanges
+    env:
+      # This job builds with wasm-pack but installs no sccache, so the workflow-level
+      # RUSTC_WRAPPER=sccache would make `cargo metadata`/rustc fail with "sccache …
+      # No such file or directory" (same leak as the python-wheel job). Unset it.
+      RUSTC_WRAPPER: ""
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@1.91.1
