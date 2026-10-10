@@ -69,6 +69,43 @@ jobs:
             sleep 25   # let the crates.io index propagate before the dependent crate builds
           done
 
+  # ── Browser compiler → npm (ros-madair) ──────────────────────────────────────
+  # ros-madair-wasm (wasm-bindgen over ros-madair-compile) ships as the npm package
+  # `ros-madair` — the browser's half of the ONE compiler, consumed by ros-madair-docs
+  # exactly as it consumes `alizarin`. wasm-pack names the package after the crate, so
+  # we rename it to `ros-madair` before publishing. Needs an NPM_TOKEN repo secret (an
+  # npm automation token with publish rights); the FIRST publish claims the name. The
+  # publish step is skipped if the secret is absent (the build still runs as a check).
+  npm-package:
+    name: Browser compiler → npm (ros-madair)
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    env:
+      NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.91.1
+        with:
+          targets: wasm32-unknown-unknown
+      - name: Install wasm-pack
+        uses: jetli/wasm-pack-action@v0.4.0
+      - name: Build the wasm package (target web; no libduckdb in its graph)
+        # --no-opt: skip wasm-opt so the release can't be broken by a flaky binaryen
+        # download. The ~1.7 MB module gzips to a few hundred KB; enable opt later once
+        # wasm-opt is cached if size matters.
+        run: wasm-pack build crates/ros-madair-wasm --target web --release --no-opt --out-dir pkg
+      - name: Rename the npm package to `ros-madair` (wasm-pack names it after the crate)
+        run: |
+          node -e "const fs=require('fs');const p='crates/ros-madair-wasm/pkg/package.json';const j=JSON.parse(fs.readFileSync(p));j.name='ros-madair';fs.writeFileSync(p,JSON.stringify(j,null,2)+'\n');"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          registry-url: 'https://registry.npmjs.org'
+      - name: Publish to npm (skipped without NPM_TOKEN)
+        if: env.NODE_AUTH_TOKEN != ''
+        working-directory: crates/ros-madair-wasm/pkg
+        run: npm publish --access public
+
   # ── PyO3 wheel → PyPI (Trusted Publishing / OIDC — NO token) ──────────────────
   # PyPI mints the upload credential from a short-lived GitHub OIDC token instead of
   # a stored secret. Prereq (one-time, in the PyPI UI): register a Trusted Publisher
