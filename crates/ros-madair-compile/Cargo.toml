@@ -1,0 +1,24 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+[package]
+name = "ros-madair-compile"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
+description = "The pure Query IR → DuckDB SQL lowering (no libduckdb): compile_expr over the tile-row + edge + melted-store schema. Builds for wasm32 so the browser and native share ONE compiler."
+
+[dependencies]
+alizarin-core.workspace = true
+ros-madair-query = { path = "../ros-madair-query" }
+serde_json = "1"
+
+# WASM: alizarin-core pulls uuid v4 → getrandom 0.2, which refuses to build for
+# wasm32-unknown-unknown unless told where randomness comes from. The `js` feature
+# (feature unification) makes the browser target build. Native targets unaffected.
+# This is the whole point of the crate: it must build for wasm32 (unlike duck).
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+getrandom = { version = "0.2", features = ["js"] }

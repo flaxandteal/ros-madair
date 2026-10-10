@@ -1628,11 +1628,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "ros-madair-compile"
+version = "0.1.0-alpha.18"
+dependencies = [
+ "alizarin-core",
+ "getrandom 0.2.17",
+ "ros-madair-query",
+ "serde_json",
+]
+
+[[package]]
 name = "ros-madair-duck"
 version = "0.1.0-alpha.18"
 dependencies = [
  "alizarin-core",
  "duckdb",
+ "ros-madair-compile",
  "ros-madair-emit",
  "ros-madair-format",
  "ros-madair-handlers",
