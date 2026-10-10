@@ -69,19 +69,29 @@ jobs:
             sleep 25   # let the crates.io index propagate before the dependent crate builds
           done
 
-  # ── Browser compiler → npm (ros-madair) ──────────────────────────────────────
+  # ── Browser compiler → npm (ros-madair, Trusted Publishing / OIDC — NO token) ─
   # ros-madair-wasm (wasm-bindgen over ros-madair-compile) ships as the npm package
   # `ros-madair` — the browser's half of the ONE compiler, consumed by ros-madair-docs
   # exactly as it consumes `alizarin`. wasm-pack names the package after the crate, so
-  # we rename it to `ros-madair` before publishing. Needs an NPM_TOKEN repo secret (an
-  # npm automation token with publish rights); the FIRST publish claims the name. The
-  # publish step is skipped if the secret is absent (the build still runs as a check).
+  # we rename it to `ros-madair` before publishing.
+  #
+  # Auth is OIDC Trusted Publishing: `npm publish` mints a short-lived credential from
+  # the GitHub OIDC token (needs `id-token: write` + npm >= 11.5.1), so there is NO
+  # stored NPM_TOKEN, and the publish carries provenance attestations automatically.
+  #
+  # Prereq (one-time): unlike PyPI, npm has NO pending-publisher — the trusted publisher
+  # is configured on an EXISTING package. So the brand-new name must be claimed once:
+  #   1. `wasm-pack build … --target web`, rename the pkg name to `ros-madair`, and
+  #      `npm publish` it ONCE from a logged-in machine (`npm login`; no CI secret).
+  #   2. On npmjs.com → the `ros-madair` package → Settings → Trusted Publisher, add
+  #      GitHub owner=flaxandteal, repo=<this repo>, workflow=`release.yml`.
+  # Every tagged release after that publishes through OIDC here with no token.
   npm-package:
-    name: Browser compiler → npm (ros-madair)
+    name: Browser compiler → npm (trusted publishing)
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/')
-    env:
-      NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+    permissions:
+      id-token: write   # required: lets the job mint the OIDC token npm exchanges
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@1.91.1
@@ -99,10 +109,11 @@ jobs:
           node -e "const fs=require('fs');const p='crates/ros-madair-wasm/pkg/package.json';const j=JSON.parse(fs.readFileSync(p));j.name='ros-madair';fs.writeFileSync(p,JSON.stringify(j,null,2)+'\n');"
       - uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '24'
           registry-url: 'https://registry.npmjs.org'
-      - name: Publish to npm (skipped without NPM_TOKEN)
-        if: env.NODE_AUTH_TOKEN != ''
+      - name: Ensure npm supports OIDC trusted publishing (>= 11.5.1)
+        run: npm install -g npm@latest
+      - name: Publish to npm (OIDC — no token)
         working-directory: crates/ros-madair-wasm/pkg
         run: npm publish --access public
 
