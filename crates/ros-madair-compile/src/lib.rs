@@ -34,6 +34,19 @@ impl std::fmt::Display for CompileError {
 }
 impl std::error::Error for CompileError {}
 
+/// Join set-operation operands, each PARENTHESIZED. DuckDB ranks `INTERSECT`
+/// above `UNION`/`EXCEPT`, so concatenating bare `SELECT`s lets a later term bind
+/// to an earlier `EXCEPT`'s right side (a sibling constraint silently narrowing the
+/// subtrahend instead of the result — an `All[…]` that grows when you add a `Not`).
+/// Wrapping every operand makes the grouping exactly what the IR says.
+fn set_join(parts: Vec<String>, op: &str) -> String {
+    parts
+        .iter()
+        .map(|p| format!("({p})"))
+        .collect::<Vec<_>>()
+        .join(&format!("\n{op}\n"))
+}
+
 /// Compile a whole [`Query`] to a `SELECT DISTINCT resource_id`. This is the
 /// top-level entry both consumers call: `ros-madair-duck` natively and the
 /// browser wasm wrapper. An absent `where` means "every resource" (the bare
@@ -106,7 +119,7 @@ pub fn compile_expr(
                     )
                 })
                 .collect();
-            Ok(parts?.join("\nINTERSECT\n"))
+            Ok(set_join(parts?, "INTERSECT"))
         }
         Expr::Any(children) => {
             if children.is_empty() {
@@ -128,7 +141,7 @@ pub fn compile_expr(
                     )
                 })
                 .collect();
-            Ok(parts?.join("\nUNION\n"))
+            Ok(set_join(parts?, "UNION"))
         }
         Expr::Not(inner) => {
             // Soundness: `EXCEPT inner` is set-complement over resource_id, so if
@@ -158,8 +171,12 @@ pub fn compile_expr(
                 has_ordered,
                 spatial,
             )?;
+            // Parenthesize the subtrahend: DuckDB gives INTERSECT higher precedence
+            // than EXCEPT, so a bare `… EXCEPT a INTERSECT b` would regroup as
+            // `(…) EXCEPT (a INTERSECT b)` and silently swallow a sibling term. The
+            // whole Not is itself wrapped by the enclosing All/Any (see `set_join`).
             Ok(format!(
-                "SELECT DISTINCT resource_id FROM tiles EXCEPT {inner_sql}"
+                "SELECT DISTINCT resource_id FROM tiles EXCEPT ({inner_sql})"
             ))
         }
         Expr::Concept { path, op, value } => {
@@ -868,4 +885,21 @@ fn expect_class(
 /// UUIDs and paths are trusted, but concept values / file paths get defended.
 pub fn sql_lit(s: &str) -> String {
     s.replace('\'', "''")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn set_join_parenthesizes_every_operand() {
+        // Without the parens, `a INTERSECT b EXCEPT c INTERSECT d` regroups under
+        // DuckDB precedence to `(a ∩ b) EXCEPT (c ∩ d)` — the bug that made an
+        // All[…] grow when a Not was added. Each operand must be wrapped.
+        let sql = set_join(
+            vec!["a".into(), "b EXCEPT x".into(), "c".into()],
+            "INTERSECT",
+        );
+        assert_eq!(sql, "(a)\nINTERSECT\n(b EXCEPT x)\nINTERSECT\n(c)");
+    }
 }

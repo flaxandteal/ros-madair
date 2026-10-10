@@ -408,6 +408,27 @@ fn query_resolution_covers_all_expr_variants() {
         set(&[R3]),
         "not(cat-A) = r3"
     );
+    // A Not SIBLING'd inside an All must narrow the RESULT, not the subtrahend.
+    // Without parenthesizing set-op operands this compiled to
+    //   (all tiles) EXCEPT (cat-A INTERSECT cat-B)
+    // = all EXCEPT ∅ = everyone — so adding a constraint GREW the match set.
+    // Correct is (not cat-A) ∩ cat-B = r3.
+    assert_eq!(
+        ids(Expr::All(vec![
+            Expr::Not(Box::new(Expr::Concept {
+                path: "category".into(),
+                op: ConceptOp::Is,
+                value: CAT_A.into(),
+            })),
+            Expr::Concept {
+                path: "category".into(),
+                op: ConceptOp::Is,
+                value: CAT_B.into(),
+            },
+        ])),
+        set(&[R3]),
+        "all(not(cat-A) AND cat-B) = r3 — a Not must not swallow its sibling"
+    );
 
     // Vacuous: empty All = all, empty Any = none
     assert_eq!(
