@@ -457,6 +457,31 @@ fn sql_lit(s: &str) -> String {
     s.replace('\'', "''")
 }
 
+/// Reduce an Arches `to_json()`-shaped reference value to the bare list-item
+/// UUID(s) the canonical reference index keys on. Arches' reference display
+/// representation is an array of `{ list_item_id, labels, list_id, uri }` objects
+/// with the concept id at the object level; Arches' own `transform_value_for_tile`
+/// discards that wrapper and keeps `list_item_id`. We do the same before indexing
+/// so references melt into the concept store. Anything already canonical — a bare
+/// UUID string, or a `{ uuid }` marker — passes through untouched.
+fn normalize_reference_value(value: &serde_json::Value) -> serde_json::Value {
+    fn reduce(v: &serde_json::Value) -> serde_json::Value {
+        match v {
+            serde_json::Value::Object(m) => match m.get("list_item_id").and_then(|x| x.as_str()) {
+                Some(id) => serde_json::Value::String(id.to_string()),
+                None => v.clone(),
+            },
+            other => other.clone(),
+        }
+    }
+    match value {
+        serde_json::Value::Array(items) => {
+            serde_json::Value::Array(items.iter().map(reduce).collect())
+        }
+        other => reduce(other),
+    }
+}
+
 /// A scratch dir for a stage keyed to the output path + slug (unique per model,
 /// cleaned up after write).
 fn stage_scratch(path: &Path, slug: &str) -> std::path::PathBuf {
@@ -555,6 +580,22 @@ fn append_resource(
             }
             let Some(node) = graph.get_node_by_id(node_id) else {
                 continue;
+            };
+            // Arches' reference `to_json()` representation — what business-data bundles
+            // carry — wraps each value as `{ list_item_id, labels, list_id, uri }`, with
+            // the concept id at the OBJECT level. The canonical stored shape (and hence
+            // alizarin's index extractor) keys on the bare list-item UUID. Mirror Arches'
+            // own `transform_value_for_tile` (arches_controlled_lists), which reduces that
+            // display wrapper to its `list_item_id` on ingest, so a reference indexes into
+            // the concept store instead of silently melting to nothing. No-op on an
+            // already-canonical value (bare uuid / marker); the stored `data` column keeps
+            // the original value, so hydration/display is unaffected.
+            let normalized_ref;
+            let value: &serde_json::Value = if node.datatype == "reference" {
+                normalized_ref = normalize_reference_value(value);
+                &normalized_ref
+            } else {
+                value
             };
             let spec = datatype_index_spec(
                 &node.datatype,
@@ -1097,6 +1138,47 @@ pub fn emit_parquet_with_progress(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // The Arches `to_json()` reference shape (what business-data bundles carry):
+    // the concept id is a top-level `list_item_id`, labels are plain prefLabels.
+    // Normalization must reduce it to the bare id so the canonical reference index
+    // keys on it (and melts the reference into the concept store). Then verify the
+    // registry path actually extracts that key — the end-to-end contract.
+    #[test]
+    fn reference_to_json_shape_normalizes_and_indexes() {
+        const ITEM: &str = "388293d0-bb7d-5468-91e5-9baa4088b7de";
+        let display = serde_json::json!([{
+            "list_id": "2730d609-3a8d-49dc-bf51-6ac34e80294a",
+            "list_item_id": ITEM,
+            "labels": [{ "value": "Listed Building Grade II", "language_id": "en", "valuetype_id": "prefLabel" }]
+        }]);
+        let normalized = normalize_reference_value(&display);
+        assert_eq!(normalized, serde_json::json!([ITEM]));
+
+        let registry = ros_madair_handlers::default_registry();
+        let config =
+            serde_json::json!({ "controlledList": "2730d609-3a8d-49dc-bf51-6ac34e80294a" });
+        let spec = datatype_index_spec("reference", &normalized, Some(&config), Some(&registry));
+        assert!(
+            matches!(spec.class, IndexClass::ConceptHierarchical { .. }),
+            "got {:?}",
+            spec.class
+        );
+        assert_eq!(
+            spec.keys,
+            vec![ITEM.to_string()],
+            "reference must melt on list_item_id"
+        );
+    }
+
+    // An already-canonical value (bare uuid / {uuid} marker) is untouched.
+    #[test]
+    fn normalize_reference_value_is_a_noop_on_canonical_shapes() {
+        let bare = serde_json::json!(["388293d0-bb7d-5468-91e5-9baa4088b7de"]);
+        assert_eq!(normalize_reference_value(&bare), bare);
+        let marker = serde_json::json!([{ "uuid": "388293d0-bb7d-5468-91e5-9baa4088b7de" }]);
+        assert_eq!(normalize_reference_value(&marker), marker);
+    }
 
     fn ng(id: &str, parent: Option<&str>) -> StaticNodegroup {
         StaticNodegroup {
