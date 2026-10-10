@@ -11,6 +11,7 @@ members = [
     "crates/ros-madair-format",
     "crates/ros-madair-query",
     "crates/ros-madair-compile",
+    "crates/ros-madair-wasm",
     "crates/ros-madair-emit",
     "crates/ros-madair-python",
     "crates/ros-madair-duck",

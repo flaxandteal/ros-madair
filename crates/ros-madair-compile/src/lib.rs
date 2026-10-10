@@ -18,7 +18,7 @@ use std::collections::HashMap;
 use alizarin_core::datatype_index::datatype_index_spec;
 use alizarin_core::extension_type_registry::{ExtensionTypeRegistry, IndexClass};
 use alizarin_core::graph::{StaticGraph, StaticNode};
-use ros_madair_query::{ConceptOp, Expr};
+use ros_madair_query::{ConceptOp, Expr, Query};
 
 /// The query could not be lowered to DuckDB SQL: a typed/schema error — an unknown
 /// path alias, a datatype not indexed for the predicate, a coarse predicate under a
@@ -33,6 +33,39 @@ impl std::fmt::Display for CompileError {
     }
 }
 impl std::error::Error for CompileError {}
+
+/// Compile a whole [`Query`] to a `SELECT DISTINCT resource_id`. This is the
+/// top-level entry both consumers call: `ros-madair-duck` natively and the
+/// browser wasm wrapper. An absent `where` means "every resource" (the bare
+/// all-tiles select); otherwise lower the predicate via [`compile_expr`]. The
+/// capability flags say which backend artifacts are present (see [`compile_expr`]).
+#[allow(clippy::too_many_arguments)]
+pub fn compile_query(
+    query: &Query,
+    graph: &StaticGraph,
+    graphs: &[&StaticGraph],
+    registry: &ExtensionTypeRegistry,
+    has_catalog: bool,
+    has_edges: bool,
+    has_concept_index: bool,
+    has_ordered: bool,
+    spatial: bool,
+) -> Result<String, CompileError> {
+    match &query.r#where {
+        Some(expr) => compile_expr(
+            expr,
+            graph,
+            graphs,
+            registry,
+            has_catalog,
+            has_edges,
+            has_concept_index,
+            has_ordered,
+            spatial,
+        ),
+        None => Ok("SELECT DISTINCT resource_id FROM tiles".to_string()),
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Expr → a SELECT of DISTINCT resource_id

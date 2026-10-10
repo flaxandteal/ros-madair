@@ -1,0 +1,29 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+[package]
+name = "ros-madair-wasm"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
+description = "wasm-bindgen surface over ros-madair-compile: lower a Query IR (JSON) + models (JSON) to DuckDB SQL in the browser, for duckdb-wasm to execute. The browser's half of 'one compiler, two consumers'."
+
+[lib]
+# cdylib: the wasm artifact wasm-pack emits. rlib: so `cargo test`/clippy can build
+# it natively in the workspace (the #[wasm_bindgen] glue compiles on native too).
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+wasm-bindgen = "0.2"
+alizarin-core.workspace = true
+ros-madair-compile = { path = "../ros-madair-compile" }
+ros-madair-query = { path = "../ros-madair-query" }
+ros-madair-handlers = { path = "../ros-madair-handlers" }
+serde_json = "1"
+
+# WASM randomness: alizarin-core's uuid → getrandom 0.2 (see ros-madair-compile).
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+getrandom = { version = "0.2", features = ["js"] }

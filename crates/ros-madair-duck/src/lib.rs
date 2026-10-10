@@ -40,8 +40,8 @@ use alizarin_core::extension_type_registry::ExtensionTypeRegistry;
 use alizarin_core::graph::StaticGraph;
 use alizarin_core::StaticTile;
 use duckdb::Connection;
-use ros_madair_compile::{compile_expr, sql_lit, CompileError};
-use ros_madair_query::{Expr, Query};
+use ros_madair_compile::{compile_query, sql_lit, CompileError};
+use ros_madair_query::Query;
 
 mod hydrate;
 pub use hydrate::hydrate_tiles_with_labels;
@@ -638,20 +638,17 @@ impl DuckReader {
         graphs: &[&StaticGraph],
         registry: &ExtensionTypeRegistry,
     ) -> Result<String, DuckError> {
-        match &query.r#where {
-            Some(expr) => Ok(compile_expr(
-                expr,
-                graph,
-                graphs,
-                registry,
-                self.has_catalog,
-                self.has_edges,
-                self.has_concept_index,
-                self.has_ordered,
-                self.spatial,
-            )?),
-            None => Ok("SELECT DISTINCT resource_id FROM tiles".to_string()),
-        }
+        Ok(compile_query(
+            query,
+            graph,
+            graphs,
+            registry,
+            self.has_catalog,
+            self.has_edges,
+            self.has_concept_index,
+            self.has_ordered,
+            self.spatial,
+        )?)
     }
 }
 
