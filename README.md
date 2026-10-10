@@ -262,10 +262,13 @@ the emit-time **tier** (`exclude_nodegroups`) that never ships the bytes at all.
   reader-side **verify** now live in `format` (one copy, shared by writer and
   reader); `duck`'s `open_layers` verifies each layer and refuses a tampered one —
   closing the sign→verify loop (`duck/tests/verify.rs`).
-- **Next — browser runtime → DuckDB-WASM.** Run the same SQL `duck` compiles in
-  the browser (the `ros-madair-docs` demos already do this by hand pending a
-  WASM/JS path for the compiler); update CI and the `js/` glue (which still
-  reference the removed v1 WASM client).
+- **Browser runtime → DuckDB-WASM.** The compiler now runs in the browser: the pure
+  IR→SQL lowering was extracted into `ros-madair-compile` (no libduckdb; builds for
+  `wasm32`), and `ros-madair-wasm` wraps it behind wasm-bindgen so a page compiles the
+  SAME SQL `duck` runs natively and hands it to duckdb-wasm. CI builds the wasm target.
+  The dead v1 `js/` glue (removed v1 WASM client) is deleted. Remaining: point the
+  `ros-madair-docs` demos at the compiler (they still build SQL by hand) — a JS wrapper
+  caching one compiler per model.
 
 ## Dependencies
 

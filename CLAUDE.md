@@ -206,10 +206,15 @@ models and business data.
 
 ## CI
 
-The `deploy-pages.yml` workflow and the `js/` glue still reference the removed
-v1 WASM client (`ros-madair-client`/`-alizarin`/`-napi`); the browser runtime is
-slated to become DuckDB-WASM (substrate slice 4), and CI/js are to be reworked
-then.
+The dead v1 browser stack is gone: the `deploy-pages.yml` workflow and the root
+`js/` glue (plus `package.json`/`vite.config.js`/tsconfigs) that referenced the
+removed v1 WASM client (`ros-madair-client`/`-alizarin`/`-napi`) have been deleted.
+The browser runtime is now DuckDB-WASM fed by `ros-madair-wasm` (substrate slice 4):
+that crate wraps `ros-madair-compile` behind wasm-bindgen so the browser runs the
+SAME `compile_query` the native `ros-madair-duck` runs, and hands the SQL to
+duckdb-wasm. CI builds it for `wasm32` (`cargo check -p ros-madair-wasm --target
+wasm32-unknown-unknown`). The JS wrapper + docs demos live in the sibling
+`ros-madair-docs` repo.
 
 ## License
 

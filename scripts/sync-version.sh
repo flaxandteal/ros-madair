@@ -42,28 +42,10 @@ for f in "$ROOT_DIR"/crates/ros-madair-*/Cargo.toml; do
 done
 echo "  ✓ inter-crate dep versions"
 
-# Update package.json
-if [ -f "$ROOT_DIR/package.json" ]; then
-    node -e "
-        const fs = require('fs');
-        const pkg = JSON.parse(fs.readFileSync('$ROOT_DIR/package.json', 'utf8'));
-        pkg.version = '$VERSION';
-        fs.writeFileSync('$ROOT_DIR/package.json', JSON.stringify(pkg, null, 2) + '\n');
-    "
-    echo "  ✓ package.json"
-fi
-
-# Update package-lock.json (root version + the root package entry)
-if [ -f "$ROOT_DIR/package-lock.json" ]; then
-    node -e "
-        const fs = require('fs');
-        const l = JSON.parse(fs.readFileSync('$ROOT_DIR/package-lock.json', 'utf8'));
-        l.version = '$VERSION';
-        if (l.packages && l.packages['']) l.packages[''].version = '$VERSION';
-        fs.writeFileSync('$ROOT_DIR/package-lock.json', JSON.stringify(l, null, 2) + '\n');
-    "
-    echo "  ✓ package-lock.json"
-fi
+# (No root npm package: the v1 client's package.json/package-lock/vite stack was
+# removed with the dead js/ glue. The browser runtime is now ros-madair-wasm, whose
+# npm package version comes from its Cargo.toml via wasm-pack — bumped by the Cargo
+# version above, so there is nothing extra to sync here.)
 
 # Update pyproject.toml (ros-madair-python — the PyO3 package)
 if [ -f "$ROOT_DIR/crates/ros-madair-python/pyproject.toml" ]; then
