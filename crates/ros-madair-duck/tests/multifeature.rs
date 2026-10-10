@@ -107,7 +107,7 @@ fn corpus() -> (PathBuf, StaticGraph) {
 
     let raw: serde_json::Value = serde_json::from_slice(&std::fs::read(&gp).unwrap()).unwrap();
     let graph: StaticGraph = serde_json::from_value(raw["graph"][0].clone()).unwrap();
-    (pq.join("tiles_talk.parquet"), graph)
+    (pq.join(format!("tiles_{GRAPH}.parquet")), graph) // emit names by graph id
 }
 
 #[test]
