@@ -416,7 +416,7 @@ fn first_geo_bbox(
 // dropped.
 // ---------------------------------------------------------------------------
 
-/// Write one model's tiles to `<out>/tiles_<slug>.parquet`.
+/// Write one model's tiles to `<out>/tiles_<graph_id>.parquet` (+ melted siblings).
 pub fn write_model_parquet(
     slug: &str,
     graph: &StaticGraph,
@@ -852,12 +852,23 @@ impl TileStage {
             (path.display().to_string(), path.display().to_string(), 0)
         };
 
+        // The melted sibling stores share the tiles file's stem so they always track
+        // its naming (`tiles_<X>.parquet` → `edges_`/`concepts_`/`ordered_<X>.parquet`),
+        // whatever `<X>` is — the caller names the tiles file by graph id, and these
+        // follow. Derived from the tiles path once, so there is one source of the stem.
+        let stem = path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .and_then(|s| s.strip_prefix("tiles"))
+            .unwrap_or("");
+        let sibling = |kind: &str| path.with_file_name(format!("{kind}{stem}.parquet"));
+
         // Edge table: one row per (linking tile, target), for the path/multi-hop
         // compiler and reverse lookups. Sorted by (src_node, target_resource) so a
         // forward hop (filter src_node, semijoin target) and a reverse hop (cited_by
         // on target) both zone-map prune. Always a single file — nodegroup
         // partitioning is the TILES layout axis; edges partition by src_node later.
-        let edge_path = path.with_file_name(format!("edges_{}.parquet", slug.replace('-', "_")));
+        let edge_path = sibling("edges");
         if let Some(p) = edge_path.parent() {
             fs::create_dir_all(p)?;
         }
@@ -874,8 +885,7 @@ impl TileStage {
         // Melted concept store: one row per (tile, concept-node, concept value), sorted
         // (node_id, concept_id) so a node-scoped Concept semijoin zone-map-prunes and the
         // DFS-interval catalog range-joins it for ⊑. Its own axis, joined by resource/tile.
-        let concept_path =
-            path.with_file_name(format!("concepts_{}.parquet", slug.replace('-', "_")));
+        let concept_path = sibling("concepts");
         self.conn
             .execute_batch(&format!(
                 "COPY (SELECT resource_id, tile_id, nodegroup_id, node_id, concept_id \
@@ -888,8 +898,7 @@ impl TileStage {
 
         // Melted ordered store: one row per (tile, date/edtf node, quantized value), sorted
         // (node_id, q_ordered) so a Range predicate prunes instead of scanning the tile row.
-        let ordered_path =
-            path.with_file_name(format!("ordered_{}.parquet", slug.replace('-', "_")));
+        let ordered_path = sibling("ordered");
         self.conn
             .execute_batch(&format!(
                 "COPY (SELECT resource_id, tile_id, nodegroup_id, node_id, q_ordered \
@@ -1086,7 +1095,12 @@ pub fn emit_parquet_with_progress(
         if !nonempty[i] {
             continue;
         }
-        let path = out.join(format!("tiles_{}.parquet", m.slug.replace('-', "_")));
+        // Name the tile file (and its melted siblings, which derive their stem from
+        // it) by GRAPH ID, not the slug: graph id is the stable key consumers index on
+        // (the manifest's `model_for_graph`, and the docs' `tiles_<graphid>.parquet`),
+        // and it cannot collide the way two same-named graphs' slugs would. Verbatim
+        // (hyphens kept) so it matches the graph id everywhere else.
+        let path = out.join(format!("tiles_{}.parquet", m.graph.graphid));
         write_ng_sidecar(&ng_intervals[i], &cfgs[i], &path)?;
         summaries.push(stage.write_model(&m.slug, &m.graph.graphid, &cfgs[i], &path)?);
     }

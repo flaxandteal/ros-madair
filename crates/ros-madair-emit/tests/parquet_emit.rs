@@ -281,7 +281,7 @@ fn tile_row_parquet_carries_promoted_columns_and_chunks() {
     );
 
     // q_ordered now lives in the melted ordered store (sorted node_id, q_ordered).
-    let ordered_path = path.with_file_name("ordered_talk.parquet");
+    let ordered_path = path.with_file_name(format!("ordered_{}.parquet", talk.graph_id));
     assert!(
         ordered_path.exists(),
         "ordered store exists at {}",
@@ -698,10 +698,9 @@ fn edge_table_unpivots_link_targets() {
         "R_POINT's two link targets → two edge rows (R_DIAG none)"
     );
 
-    // edges_<slug>.parquet sits beside tiles_<slug>.parquet.
+    // edges_<graphid>.parquet sits beside tiles_<graphid>.parquet (both named by graph id).
     let tiles_path = PathBuf::from(&talk.path);
-    let edge_path =
-        tiles_path.with_file_name(format!("edges_{}.parquet", talk.slug.replace('-', "_")));
+    let edge_path = tiles_path.with_file_name(format!("edges_{}.parquet", talk.graph_id));
     assert!(
         edge_path.exists(),
         "edge parquet at {}",
