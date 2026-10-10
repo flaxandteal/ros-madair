@@ -115,7 +115,14 @@ jobs:
         run: npm install -g npm@latest
       - name: Publish to npm (OIDC — no token)
         working-directory: crates/ros-madair-wasm/pkg
-        run: npm publish --access public
+        # npm refuses to publish a prerelease to the default `latest` dist-tag, so
+        # derive the tag from the version (alpha/beta/rc → that tag; stable → latest).
+        run: |
+          VER=$(node -p "require('./package.json').version")
+          TAG=latest
+          case "$VER" in *-alpha*) TAG=alpha ;; *-beta*) TAG=beta ;; *-rc*) TAG=rc ;; esac
+          echo "Publishing ros-madair@$VER under dist-tag '$TAG'"
+          npm publish --access public --tag "$TAG"
 
   # ── PyO3 wheel → PyPI (Trusted Publishing / OIDC — NO token) ──────────────────
   # PyPI mints the upload credential from a short-lived GitHub OIDC token instead of
