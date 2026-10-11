@@ -13,7 +13,7 @@ description = "The pure Query IR → DuckDB SQL lowering (no libduckdb): compile
 
 [dependencies]
 alizarin-core.workspace = true
-ros-madair-query = { path = "../ros-madair-query", version = "0.1.0-alpha.20" }
+ros-madair-query = { path = "../ros-madair-query", version = "0.1.0-alpha.21" }
 serde_json = "1"
 
 # WASM: alizarin-core pulls uuid v4 → getrandom 0.2, which refuses to build for
