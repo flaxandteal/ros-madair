@@ -200,6 +200,21 @@ impl DuckReader {
                     sql_lit(&edge_glob)
                 ))
                 .is_ok();
+        // Reverse edge index (the sibling redges_*.parquet, the SAME edge rows sorted
+        // target-first): registered as `edges_rev` so a TARGET-anchored probe — an
+        // untyped reverse lookup or a shared-neighbour self-join — can zone-map prune
+        // on target_resource instead of scanning the src-sorted `edges`. Best-effort,
+        // like the others: a pre-reverse-index snapshot still OPENS without it. Named
+        // `redges_` on disk so this glob cannot also match the forward `edges_*`.
+        let edge_rev_glob = parquet_glob.replace("tiles_", "redges_");
+        let has_edges_rev = edge_rev_glob != parquet_glob
+            && conn
+                .execute_batch(&format!(
+                    "CREATE VIEW edges_rev AS SELECT * FROM read_parquet('{}');",
+                    sql_lit(&edge_rev_glob)
+                ))
+                .is_ok();
+        let _ = has_edges_rev; // wired into the compiler's direction choice in a follow-on
         // Melted concept / ordered axis stores (the siblings concepts_*.parquet /
         // ordered_*.parquet next to the tiles glob), same best-effort registration as
         // edges: a pre-melt snapshot still OPENS; only a Concept/Range query then errors

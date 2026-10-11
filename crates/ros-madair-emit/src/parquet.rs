@@ -878,8 +878,9 @@ impl TileStage {
 
         // Edge table: one row per (linking tile, target), for the path/multi-hop
         // compiler and reverse lookups. Sorted by (src_node, target_resource) so a
-        // forward hop (filter src_node, semijoin target) and a reverse hop (cited_by
-        // on target) both zone-map prune. Always a single file — nodegroup
+        // forward hop (filter src_node, semijoin target) zone-map prunes, and a
+        // node-scoped reverse hop (cited_by, which fixes src_node) prunes on the
+        // target range WITHIN that node's band. Always a single file — nodegroup
         // partitioning is the TILES layout axis; edges partition by src_node later.
         let edge_path = sibling("edges");
         if let Some(p) = edge_path.parent() {
@@ -894,6 +895,28 @@ impl TileStage {
             ))
             .map_err(|e| format!("duckdb COPY (edges): {e}"))?;
         let edges = count("SELECT count(*) FROM edges WHERE model_slug = ?")? as usize;
+
+        // Reverse edge index: the SAME edge rows sorted (target_resource, src_node),
+        // so a TARGET-anchored access prunes on `target_resource`. The forward file
+        // is sorted src-first, so its per-row-group target ranges span the whole
+        // domain across the node bands — useless for a reverse probe that does NOT
+        // fix src_node (an untyped "who links to T?", or a shared-neighbour self-join
+        // "resources sharing a related resource", the v1 "same city" pattern). This
+        // sibling makes that one a range read. Named `redges_` (NOT `edges_rev_`) so
+        // the forward `edges_*` view glob can't swallow it and double-count.
+        //
+        // Sort is the ONLY prune lever here: the bundled DuckDB 1.1.x Parquet writer
+        // emits no Bloom filters (WRITE_BLOOM_FILTER parses but is a no-op, verified),
+        // so a scattered id-probe can't prune by hash — only by this target ordering.
+        let edge_rev_path = sibling("redges");
+        self.conn
+            .execute_batch(&format!(
+                "COPY (SELECT src_resource, src_node, src_nodegroup, src_tile, target_resource \
+                 FROM edges WHERE model_slug = '{slug_lit}' ORDER BY target_resource, src_node) \
+                 TO '{}' (FORMAT PARQUET, ROW_GROUP_SIZE {rgs});",
+                edge_rev_path.display()
+            ))
+            .map_err(|e| format!("duckdb COPY (redges): {e}"))?;
 
         // Melted concept store: one row per (tile, concept-node, concept value), sorted
         // (node_id, concept_id) so a node-scoped Concept semijoin zone-map-prunes and the
