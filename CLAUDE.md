@@ -5,17 +5,19 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## What is Rós Madair?
 
 A static-file query engine for heritage (Arches) graph data. The
-`ros-madair-emit` CLI compiles alizarin graph + resource data into static
-artifacts (an indexed SQLite "head", content-hashed msgpack "chunks", and a
-manifest) that are served from a CDN or static host and queried without a
-backend database — a reader consults the head, fetches only the tile fragments
-it needs via HTTP Range, and hydrates them into a schema-shaped tree.
+`ros-madair-emit` CLI compiles alizarin graph + resource data into a **DuckDB +
+Parquet substrate** — tile-row Parquet with the geo zone-map column, node-keyed
+concept/ordered stores, a columnar edge table, a concept catalog, and a signed
+manifest — served from a CDN or static host and queried without a backend
+database. A reader compiles the typed query IR to DuckDB SQL, fetches only the
+row groups it needs via HTTP Range, and hydrates matches into a schema-shaped
+tree.
 
-> **Architecture in transition.** The coarse/fine read engine described below is
-> being **replaced by a DuckDB + Parquet substrate**. The old v1 page-index
-> stack (`ros-madair-core`, `-client`, `-builder`, `-alizarin`, `-napi`) has
-> been **deleted**. See [Direction](#direction-duckdb--parquet-substrate) and
-> the README's "Direction" section for the plan.
+> **Architecture now.** The coarse/fine read engine has been **replaced by a
+> DuckDB + Parquet substrate**. The old v1 page-index stack (`ros-madair-core`,
+> `-client`, `-builder`, `-alizarin`, `-napi`) has been **deleted**. See
+> [Direction](#direction-duckdb--parquet-substrate) and the README's "Direction"
+> section for the plan.
 
 ## Build Commands
 
@@ -32,8 +34,10 @@ cargo run -p ros-madair-emit --release -- <data_dir> <out_dir> [--base-uri URI]
 ```
 
 `data_dir` layout: `graphs/*.json` (resource models), `resources/**/*.json`
-(business data), `vocabularies/*.xml` (SKOS, optional). Output: `tiles_<slug>.parquet`,
-`edges_<slug>.parquet`, `concept_catalog.parquet`, `manifest.json`. Sign a
+(business data), `vocabularies/*.xml` (SKOS, optional). Output (per-model files
+named by graph id): `tiles_<graphid>.parquet`, `edges_<graphid>.parquet`,
+`concepts_<graphid>.parquet`, `ordered_<graphid>.parquet`,
+`concept_catalog.parquet`, `manifest.json`. Sign a
 snapshot with `ros-madair-emit sign <dir> <key>` (attests the manifest
 `snapshot_id`); `verify`/`pubkey` round it out.
 
@@ -54,7 +58,7 @@ cd ../ros-madair-docs && npm install && npm run dev   # http://localhost:3000
 
 ## Architecture
 
-Six-crate Rust workspace. The v1 head/chunk read engine has been **deleted**
+Eight-crate Rust workspace. The v1 head/chunk read engine has been **deleted**
 (slice 3/4); the substrate is now the only read path:
 
 | Crate | Purpose |
@@ -63,22 +67,28 @@ Six-crate Rust workspace. The v1 head/chunk read engine has been **deleted**
 | `ros-madair-format` | The snapshot **contract** (manifest types + `FORMAT_VERSION`) and attestation **verify** types; held to `wasm32` so a reader can parse + verify without linking the emitter |
 | `ros-madair-emit` | CLI/library: compile a data_dir into the tile-row + edge Parquet substrate + concept catalog + manifest; `sign`/`verify`/`pubkey` attest the manifest `snapshot_id` |
 | `ros-madair-query` | The typed `Query`/`Expr` IR (`Concept`/`Range`/`Bbox`/`HasLink`/`OnLink`/`OnTile`) + the `ModelCatalog` discovery surface and `explain` (IR → English). Backend-agnostic: no compiler. |
-| `ros-madair-duck` | The `Query` IR → DuckDB SQL over tile-row Parquet (exact spatial, exact links, concept-catalog DFS join, `OnLink` multi-hop path predicate over an edge table, layered base+overlay), **plus tile-graph hydration** (`hydrate` module, folded in from the retired `read` crate), reverse traversal (`cited_by`), and reader-side snapshot **verify** (`open_layers` refuses a tampered layer) |
+| `ros-madair-compile` | **The** pure `Query` IR → DuckDB-SQL compiler (`compile_expr`/`compile_query`); no libduckdb, builds for `wasm32` |
+| `ros-madair-duck` | Native executor of the compiled SQL over tile-row Parquet (exact spatial, exact links, concept-catalog DFS join, `OnLink` multi-hop path predicate over an edge table, layered base+overlay), **plus tile-graph hydration** (`hydrate` module, folded in from the retired `read` crate), reverse traversal (`cited_by`), and reader-side snapshot **verify** (`open_layers` refuses a tampered layer) |
+| `ros-madair-wasm` | Browser runtime: wraps `ros-madair-compile` behind wasm-bindgen (published to npm as `ros-madair`) so a page compiles the SAME SQL `duck` runs, over duckdb-wasm |
 | `ros-madair-python` | PyO3 bindings (over `duck`) |
 
 `emit`, `query`, and `python` depend on `format` and/or `handlers`; `duck`
-depends on `query` (the IR), `handlers` (the `reference` handler for hydration),
-and `format` (reader-side verify). None form a cycle. `query` and `duck` share
-**one IR**; `duck` is its only compiler.
+depends on `query` (the IR), `compile` (the compiler), `handlers` (the
+`reference` handler for hydration), and `format` (reader-side verify). None form
+a cycle. `query` holds the **one IR**; `compile` is its **one compiler**, with
+**two consumers** — `duck` executes the lowering natively, `wasm` runs the same
+lowering in the browser over duckdb-wasm.
 
 ### Data flow
 
 ```
 alizarin graphs + resources + vocabularies (data_dir)
         │  ros-madair-emit
-        ├─► tiles_<slug>.parquet   tile = row; promoted columns (concept_id/q_ordered/geo_*)
-        │                          whose row-group min/max stats ARE the zone-map; `data` = hydration JSON
-        ├─► edges_<slug>.parquet   one row per link target (the edge table HasLink/OnLink/cited_by semijoin)
+        ├─► tiles_<graphid>.parquet  tile = row; only geo_* promoted (its row-group
+        │                          min/max stats ARE the spatial zone-map); `data` = hydration JSON
+        ├─► concepts_<graphid>.parquet  melted concept store (one row per node/concept_id)
+        ├─► ordered_<graphid>.parquet   melted ordered-scalar store (dates/numbers), node-keyed
+        ├─► edges_<graphid>.parquet  one row per link target (the edge table HasLink/OnLink/cited_by semijoin)
         ├─► concept_catalog.parquet  concept DFS intervals (hierarchy = a range join)
         └─► manifest.json          layout + FORMAT_VERSION contract; signed snapshot_id
                 │  ros-madair-duck
@@ -92,16 +102,19 @@ alizarin graphs + resources + vocabularies (data_dir)
 - `ros-madair-emit`: `input` (graph/resource loading), `geo` (bbox extraction),
   `closure` (SKOS + concept closure), `parquet` (the tile-row writer — streams
   through a DuckDB staging table + `COPY … ORDER BY` cluster key — plus the
-  columnar edge table `edges_<slug>.parquet`, one row per link target, that the
+  columnar edge table `edges_<graphid>.parquet`, one row per link target, that the
   path/multi-hop query compiler semijoins), `manifest` (artifact hashing +
   snapshot id), `attest` (build-time signing over the manifest).
 - `ros-madair-query`: the typed `Expr`/`Query` IR (incl. `OnLink`/`OnTile`), the
   `ModelCatalog` discovery surface (paths → predicate family, for NL→IR
-  authoring), and `explain` (IR → English). Backend-agnostic — no compiler; `duck`
-  lowers the IR to SQL.
-- `ros-madair-duck`: `DuckReader` + `compile_expr` — the only compiler for that
-  same IR, lowering `Concept`/`Range`/`Bbox`/`HasLink`/`OnLink`/`All`/`Any`/`Not`
-  to DuckDB SQL over the tile-row Parquet (`resolve_ids`, `count_records`), plus
+  authoring), and `explain` (IR → English). Backend-agnostic — no compiler;
+  `ros-madair-compile` lowers the IR to SQL.
+- `ros-madair-compile`: `compile_expr`/`compile_query` — **the** pure compiler
+  for that IR, lowering `Concept`/`Range`/`Bbox`/`HasLink`/`OnLink`/`All`/`Any`/`Not`
+  to DuckDB SQL (no libduckdb, builds for `wasm32`). `duck` and `wasm` both
+  consume it.
+- `ros-madair-duck`: `DuckReader` — the native executor of that compiled SQL
+  over the tile-row Parquet (`resolve_ids`, `count_records`), plus
   `hydrate_layers`/`cited_by`/`geo_points` read from the Parquet `data` column.
   `OnLink` compiles to an edge-table semijoin and nests for multi-hop chains;
   `resolve_ids_linked` supplies extra models for cross-model hops; `open_layers`
@@ -117,10 +130,14 @@ alizarin graphs + resources + vocabularies (data_dir)
 
 - **Datatype-driven index class.** A field's storage/class is a pure function of
   its datatype (`datatype_index_spec`), computed identically by emit and query:
-  concept → `concept_id` promoted column, ordered scalar (date) → `q_ordered`,
-  geometry → `geo_*`, link → the `edges` table, everything else → detail-only in
-  the tile's `data` JSON. Promoted columns' row-group min/max stats ARE the
-  zone-map — no separate index.
+  concept → **melted** into the node-keyed `concepts_<graphid>.parquet` store
+  (one row per node/concept_id), ordered scalar (date/number) → **melted** into
+  `ordered_<graphid>.parquet`, geometry → the `geo_*` columns promoted on the
+  tile row, link → the `edges` table, everything else → detail-only in the tile's
+  `data` JSON. Only `geo_*` is promoted on the tile; its row-group min/max stats
+  ARE the spatial zone-map. A `Concept` filter compiles to a node-scoped semijoin
+  over the melted concept store; a `Range` to a node-scoped read over the ordered
+  store — no separate index build.
 - **Exact filters, no coarse superset.** DuckDB prunes row groups by the zone-map
   then filters exactly (`ST_Intersects` for spatial, per-node link check), so a
   result is the exact set — the v1 head's coarse-superset-then-verify dance is
@@ -162,30 +179,36 @@ spatial a less complete one (the exact-intersection fine step is unimplemented;
     join), and hydrate/overlay/`cited_by` rehomed on Parquet. Verified by
     `crates/ros-madair-duck/tests/{behavioral,descendant}.rs`.
   - **Slice 2.5 — path / multi-hop queries — done.** An additive edge table
-    (`edges_<slug>.parquet`, emit) + the `OnLink` predicate (query IR) compiled to
+    (`edges_<graphid>.parquet`, emit) + the `OnLink` predicate (query IR) compiled to
     leaf-first edge semijoins (duck): cross-resource, nested for multi-hop chains,
     cross-model (`resolve_ids_linked`), and cross-layer via `open_layers`
     (base+overlay composition of the `tiles`/`edges`/`concepts` views — so
     cross-layer traversal needs **no shadow records**). Dot-qualified paths also
     landed, and `link_targets` is now consolidated onto the edge table
     (`HasLink`/`cited_by`/`geo_points` all query `edges`; the per-tile JSON column
-    is dropped). Deferred: cardinality-n layer merge, edge-side pruning (`src_node`
-    partition / Bloom / dense ordinals), and per-node concept promotion (a
-    nodegroup with two concept nodes).
+    is dropped). Deferred: cardinality-n layer merge, and edge-side pruning
+    (`src_node` partition / Bloom / dense ordinals). (The melted per-node concept
+    store — one row per node/concept_id — already handles a nodegroup with two
+    concept nodes.)
   - **Slice 3 — done.** The old engine is deleted: `format`'s chunk framing, the
     emit head/chunk writer (the `head`/`chunks`/`composability`/`locality`
     modules), the entire `ros-madair-read` crate (its tile-graph **hydration**
     folded into `ros-madair-duck`'s `hydrate` module; resolve/overlay/`cited_by`
     already lived in `duck`), and the `query` head-SQL compiler (the `Query`/`Expr`
-    IR + `ModelCatalog` + `explain` stay; `duck` is the only compiler).
+    IR + `ModelCatalog` + `explain` stay; the pure IR→SQL lowering now lives in
+    `ros-madair-compile`).
     `ros-madair-python` was ported onto `duck`. `format` is trimmed to the manifest
     **contract** + attestation **verify** types, and the snapshot-id derivation now
     lives there (the ONE copy the writer and reader share). `duck`'s `open_layers`
     verifies each layer via `format::verify` and refuses a tampered one — closing
     the sign→verify loop end-to-end.
-  - **Slice 4 — pending.** Browser runtime → DuckDB-WASM (the same SQL `duck`
-    compiles, run in the browser; the `ros-madair-docs` demos already do this by
-    hand pending a WASM/JS path for the compiler).
+  - **Slice 4 — browser runtime has landed.** The pure IR→SQL lowering was
+    extracted into `ros-madair-compile` (no libduckdb; builds for `wasm32`), and
+    `ros-madair-wasm` (npm `ros-madair`) wraps it behind wasm-bindgen so a browser
+    page compiles the SAME SQL `duck` runs natively and hands it to duckdb-wasm;
+    CI builds the wasm target. Remaining: repoint the last `ros-madair-docs`
+    demos (concept-picker, layered-search) from hand-written SQL to the compiler —
+    the site-references demo is already repointed.
 
 See the README's Direction section for the full findings and the roadmap. The
 old differential harnesses (`duckdb_equiv.rs`, then `duck`'s `parity.rs`) tested

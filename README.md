@@ -12,8 +12,9 @@ Range, and hydrates matches into a schema-shaped tree.
 > substrate subsumes it). The `ros-madair-read` crate is gone (its tile-graph
 > hydration folded into `ros-madair-duck`); `ros-madair-query` is now a
 > backend-agnostic IR (no compiler); `ros-madair-format` is the snapshot contract
-> + attestation verify. The browser runtime (DuckDB-WASM) is the remaining slice —
-> see [Direction](#direction-duckdb--parquet-substrate).
+> + attestation verify. The browser runtime (DuckDB-WASM) has landed —
+> `ros-madair-compile` (the pure IR→SQL compiler) builds for `wasm32` and
+> `ros-madair-wasm` wraps it; see [Direction](#direction-duckdb--parquet-substrate).
 
 ## How It Works
 
@@ -27,9 +28,11 @@ database.
 alizarin graphs + resources + vocabularies (a data_dir)
         │  ros-madair-emit   (CLI)
         ▼
-  tiles_<slug>.parquet   tile = row; promoted columns (concept_ids / q_ordered / geo_*)
-                         whose row-group min/max stats ARE the zone-map; `data` = hydration JSON
-  edges_<slug>.parquet   one row per link target — HasLink / OnLink / cited_by semijoin this
+  tiles_<graphid>.parquet  tile = row; only geo_* promoted (its row-group min/max
+                         stats ARE the spatial zone-map); `data` = hydration JSON
+  concepts_<graphid>.parquet  melted concept store (one row per node/concept_id)
+  ordered_<graphid>.parquet   melted ordered-scalar store (dates/numbers), node-keyed
+  edges_<graphid>.parquet  one row per link target — HasLink / OnLink / cited_by semijoin this
   concept_catalog.parquet  concept DFS intervals (hierarchy = a range join)
   manifest.json          layout + FORMAT_VERSION contract; signed snapshot_id
         │  ros-madair-duck (native) / DuckDB-WASM (browser)
@@ -47,7 +50,9 @@ alizarin graphs + resources + vocabularies (a data_dir)
 | `ros-madair-format` | The snapshot **contract** (manifest types + `FORMAT_VERSION`, the shared snapshot-id derivation) and attestation **verify** (`format::verify`); held to `wasm32` |
 | `ros-madair-emit` | CLI/library: compile a data_dir into the tile-row + edge Parquet substrate + concept catalog + manifest; `sign`/`verify`/`pubkey` subcommands |
 | `ros-madair-query` | The typed `Query`/`Expr` IR (`Concept`/`Range`/`Bbox`/`HasLink`/`OnLink`/`OnTile`) + `ModelCatalog` (discovery) and `explain`. Backend-agnostic — no compiler |
-| `ros-madair-duck` | The IR → DuckDB SQL over Parquet (exact spatial, links, DFS concept join, multi-hop `OnLink`, layered overlay), **tile-graph hydration**, `cited_by`, and reader-side snapshot **verify** |
+| `ros-madair-compile` | **The** pure IR → DuckDB-SQL compiler (`compile_expr`/`compile_query`); no libduckdb, builds for `wasm32` |
+| `ros-madair-duck` | Native executor of the compiled SQL over Parquet — **consumes `ros-madair-compile`** (exact spatial, links, DFS concept join, multi-hop `OnLink`, layered overlay), **tile-graph hydration**, `cited_by`, and reader-side snapshot **verify** |
+| `ros-madair-wasm` | Browser runtime: wraps `ros-madair-compile` behind wasm-bindgen (npm `ros-madair`) so a page compiles the SAME SQL `duck` runs, over duckdb-wasm |
 | `ros-madair-python` | PyO3 bindings (over `duck`) |
 
 ## Quick Start
@@ -74,7 +79,9 @@ The `data_dir` follows the alizarin/Clódóir convention:
   vocabularies/*.xml      SKOS (optional)
 ```
 
-Output (`<out_dir>`): `tiles_<slug>.parquet`, `edges_<slug>.parquet`,
+Output (`<out_dir>`, per-model files named by graph id):
+`tiles_<graphid>.parquet`, `concepts_<graphid>.parquet`,
+`ordered_<graphid>.parquet`, `edges_<graphid>.parquet`,
 `concept_catalog.parquet`, `manifest.json`. Sign it with
 `ros-madair-emit sign <out_dir> <key>` (attests the manifest `snapshot_id`);
 `verify` / `pubkey` round out the attestation CLI.
@@ -195,7 +202,7 @@ These are rehomed to read their tiles from Parquet; their logic is unchanged.
   resources" reads **only those partitions**, skipping every other nodegroup's
   bytes.
 - **Hierarchical nodegroups = DFS-interval (nested-set) order.** Each nodegroup
-  gets a `pre`/`submax` interval (the same trick the head already uses for
+  gets a `pre`/`submax` interval (the same trick the v1 head used for
   concept hierarchies); sorting tiles by `ng_order` makes a whole subtree one
   contiguous range, so **"nodegroup X and its children" is a single range
   read**. An emitted `*.nodegroup_intervals.json` sidecar carries the bounds.
@@ -241,7 +248,7 @@ the emit-time **tier** (`exclude_nodegroups`) that never ships the bytes at all.
   column via the `hydrate` module (folded in from the retired `read` crate), and
   `cited_by`/`geo_points` do reverse link lookups over the `edges` table.
 - **Done — path / multi-hop queries.** An additive edge table
-  (`edges_<slug>.parquet`, one row per link target) plus the `OnLink` path
+  (`edges_<graphid>.parquet`, one row per link target) plus the `OnLink` path
   predicate: a cross-resource hop compiles to a leaf-first edge semijoin, nests
   for multi-hop chains, resolves **cross-model** (`resolve_ids_linked`), and
   crosses **layers** via `open_layers` — base+overlay composition of the
@@ -266,9 +273,9 @@ the emit-time **tier** (`exclude_nodegroups`) that never ships the bytes at all.
   IR→SQL lowering was extracted into `ros-madair-compile` (no libduckdb; builds for
   `wasm32`), and `ros-madair-wasm` wraps it behind wasm-bindgen so a page compiles the
   SAME SQL `duck` runs natively and hands it to duckdb-wasm. CI builds the wasm target.
-  The dead v1 `js/` glue (removed v1 WASM client) is deleted. Remaining: point the
-  `ros-madair-docs` demos at the compiler (they still build SQL by hand) — a JS wrapper
-  caching one compiler per model.
+  The dead v1 `js/` glue (removed v1 WASM client) is deleted. Remaining: repoint the last
+  two `ros-madair-docs` demos — concept-picker and layered-search — from hand-written SQL
+  to the compiler (the site-references demo is already repointed).
 
 ## Dependencies
 
