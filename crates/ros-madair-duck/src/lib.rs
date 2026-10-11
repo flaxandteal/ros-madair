@@ -327,11 +327,17 @@ impl DuckReader {
                 "open_layers: no tiles_*.parquet in any layer".into(),
             ));
         }
+        // Same shadow-set composition as the stores, so a filter that is NOT the
+        // dedup key — above all a SPATIAL box on the promoted geo_* columns — pushes
+        // into each layer's scan and prunes on the row-group bbox zone-maps, instead
+        // of the old `row_number() OVER (PARTITION BY resource_id, nodegroup_id)`
+        // window forcing a full tile scan to resolve the dedup. The switch also fixes
+        // that window's one-row-per-(resource,nodegroup) semantics: shadow-set keeps
+        // ALL tiles of the winning layer, correct for a cardinality-n nodegroup (the
+        // old form silently dropped all but one of its tiles).
         conn.execute_batch(&format!(
-            "CREATE VIEW tiles AS SELECT * EXCLUDE (_layer) FROM ({}) \
-             QUALIFY row_number() OVER \
-               (PARTITION BY resource_id, nodegroup_id ORDER BY _layer DESC) = 1;",
-            ranked_union(&tile_layers)
+            "CREATE VIEW tiles AS {};",
+            shadow_set_union(&tile_layers, &["resource_id", "nodegroup_id"], "*")
         ))?;
 
         // Edges (optional): keep ALL edges from the winning layer per
@@ -735,7 +741,7 @@ fn shadow_set_union(layers: &[(usize, String)], keys: &[&str], cols: &str) -> St
             }
         })
         .collect::<Vec<_>>()
-        .join("\nUNION ALL\n")
+        .join("\nUNION ALL BY NAME\n")
 }
 
 fn open_layer(dir: &Path) -> Result<DuckReader, DuckError> {
