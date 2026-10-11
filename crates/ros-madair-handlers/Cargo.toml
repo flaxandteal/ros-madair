@@ -22,6 +22,9 @@ alizarin-core.workspace = true
 # published upstream version as alizarin-core, from crates.io.
 alizarin-clm-core = "2.0.0-beta.9"
 serde = { version = "1", features = ["derive"] }
+# The extension-handler trait speaks `serde_json::Value`; the `number` handler
+# reads/keys it. serde_json is wasm32-clean, so the browser constraint holds.
+serde_json = "1"
 
 # WASM: alizarin-core pulls uuid v4 → getrandom 0.2, which refuses to build for
 # wasm32-unknown-unknown unless told where randomness comes from. Enabling the

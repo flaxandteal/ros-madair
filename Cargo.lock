@@ -1692,6 +1692,7 @@ dependencies = [
  "alizarin-core",
  "getrandom 0.2.17",
  "serde",
+ "serde_json",
 ]
 
 [[package]]

@@ -38,7 +38,11 @@ categories = ["database", "wasm", "web-programming"]
 
 [profile.release]
 opt-level = "s"
-debug = true
+# No debug symbols in release — they bloated the published emit binary to ~845 MB
+# (an unstripped CLI nobody wants to download). strip = true drops the symbol
+# table + debuginfo; opt-level "s" already keeps the code size down.
+debug = false
+strip = true
 
 [profile.dev]
 debug = true

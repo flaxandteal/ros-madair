@@ -605,24 +605,37 @@ fn append_resource(
             );
             match spec.class {
                 IndexClass::Ordered => {
-                    // EVERY ordered node melts (not just the first): date/edtf → the
-                    // days-from-civil quantizer, one row per node in the ordered store,
-                    // sorted (node_id, q_ordered) so a range predicate zone-map-prunes
-                    // instead of scanning q_ordered across the geo-clustered tile row.
-                    if matches!(node.datatype.as_str(), "date" | "edtf") {
-                        if let Some(q) = spec
+                    // EVERY ordered node melts (not just the first): one row per node
+                    // in the ordered store, sorted (node_id, q_ordered) so a range
+                    // predicate zone-map-prunes instead of scanning q_ordered across
+                    // the geo-clustered tile row. Keys are RAW; the emitter owns the
+                    // quantizer per IndexClass::Ordered's contract — date/edtf →
+                    // days-from-civil, number → fixed-point (RM owns `number`;
+                    // alizarin-core does not classify it).
+                    let q = match node.datatype.as_str() {
+                        "date" | "edtf" => spec
                             .keys
                             .first()
-                            .and_then(|k| alizarin_core::quantize::quantize_date(k))
-                        {
-                            ordered_rows.push((
-                                tile.resourceinstance_id.clone(),
-                                tile.tileid.clone(),
-                                tile.nodegroup_id.clone(),
-                                node_id.clone(),
-                                q,
-                            ));
+                            .and_then(|k| alizarin_core::quantize::quantize_date(k)),
+                        "number" => {
+                            let decimals = ros_madair_handlers::number_scale(
+                                node_config_value(node).as_ref(),
+                            );
+                            spec.keys
+                                .first()
+                                .and_then(|k| k.parse::<f64>().ok())
+                                .and_then(|v| ros_madair_handlers::quantize_number(v, decimals))
                         }
+                        _ => None,
+                    };
+                    if let Some(q) = q {
+                        ordered_rows.push((
+                            tile.resourceinstance_id.clone(),
+                            tile.tileid.clone(),
+                            tile.nodegroup_id.clone(),
+                            node_id.clone(),
+                            q,
+                        ));
                     }
                 }
                 IndexClass::SpatialBbox if geo.is_none() => {
