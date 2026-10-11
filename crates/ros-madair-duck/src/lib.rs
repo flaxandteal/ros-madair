@@ -341,12 +341,12 @@ impl DuckReader {
         let has_edges = !edge_layers.is_empty();
         if has_edges {
             conn.execute_batch(&format!(
-                "CREATE VIEW edges AS \
-                 SELECT src_resource, src_node, src_nodegroup, src_tile, target_resource FROM (\
-                   SELECT *, max(_layer) OVER \
-                     (PARTITION BY src_resource, src_nodegroup) AS _win FROM ({})\
-                 ) WHERE _layer = _win;",
-                ranked_union(&edge_layers)
+                "CREATE VIEW edges AS {};",
+                shadow_set_union(
+                    &edge_layers,
+                    &["src_resource", "src_nodegroup"],
+                    "src_resource, src_node, src_nodegroup, src_tile, target_resource",
+                )
             ))?;
         }
 
@@ -371,24 +371,24 @@ impl DuckReader {
         let has_concept_index = !concept_layers.is_empty();
         if has_concept_index {
             conn.execute_batch(&format!(
-                "CREATE VIEW concept_index AS \
-                 SELECT resource_id, tile_id, nodegroup_id, node_id, concept_id FROM (\
-                   SELECT *, max(_layer) OVER \
-                     (PARTITION BY resource_id, nodegroup_id) AS _win FROM ({})\
-                 ) WHERE _layer = _win;",
-                ranked_union(&concept_layers)
+                "CREATE VIEW concept_index AS {};",
+                shadow_set_union(
+                    &concept_layers,
+                    &["resource_id", "nodegroup_id"],
+                    "resource_id, tile_id, nodegroup_id, node_id, concept_id",
+                )
             ))?;
         }
         let ordered_layers = layers_with(&conn, dirs, "ordered_*.parquet");
         let has_ordered = !ordered_layers.is_empty();
         if has_ordered {
             conn.execute_batch(&format!(
-                "CREATE VIEW ordered_index AS \
-                 SELECT resource_id, tile_id, nodegroup_id, node_id, q_ordered FROM (\
-                   SELECT *, max(_layer) OVER \
-                     (PARTITION BY resource_id, nodegroup_id) AS _win FROM ({})\
-                 ) WHERE _layer = _win;",
-                ranked_union(&ordered_layers)
+                "CREATE VIEW ordered_index AS {};",
+                shadow_set_union(
+                    &ordered_layers,
+                    &["resource_id", "nodegroup_id"],
+                    "resource_id, tile_id, nodegroup_id, node_id, q_ordered",
+                )
             ))?;
         }
 
@@ -688,6 +688,56 @@ fn layers_with(conn: &Connection, dirs: &[&Path], pattern: &str) -> Vec<(usize, 
         .collect()
 }
 
+/// Compose layers keeping every row of the HIGHEST-ranked layer that carries
+/// each `keys` tuple — the same winning-layer semantics as a
+/// `max(_layer) OVER (PARTITION BY keys)` window, but WITHOUT a window over the
+/// base.
+///
+/// Why not the window: a window partitioned by `keys` blocks predicate pushdown
+/// for any filter that is NOT one of `keys` (pushing it would change which layer
+/// wins per partition). So a selective cross-layer query — a spatial box, a
+/// `Concept` semijoin, an `OnLink` target filter — full-scans the whole base to
+/// resolve the window before filtering (measured ~50× on a selective edge
+/// probe). Instead, each layer anti-joins only against the (small) set of keys
+/// that HIGHER layers redefine: overlays are tiny, so the base's anti-join build
+/// side is tiny AND the base keeps its own pushable filters. Equivalent output
+/// (topmost layer per key wins, all its rows kept), pruning preserved.
+///
+/// `cols` is the projected column list; `keys` the shadow key columns. A single
+/// layer yields a bare scan (no shadowing).
+fn shadow_set_union(layers: &[(usize, String)], keys: &[&str], cols: &str) -> String {
+    let mut sorted = layers.to_vec();
+    sorted.sort_by_key(|(r, _)| *r);
+    let key_proj = keys.join(", ");
+    sorted
+        .iter()
+        .enumerate()
+        .map(|(i, (_r, glob))| {
+            let higher = &sorted[i + 1..];
+            if higher.is_empty() {
+                format!("SELECT {cols} FROM read_parquet('{}') base", sql_lit(glob))
+            } else {
+                let higher_keys = higher
+                    .iter()
+                    .map(|(_, g)| format!("SELECT {key_proj} FROM read_parquet('{}')", sql_lit(g)))
+                    .collect::<Vec<_>>()
+                    .join(" UNION ALL ");
+                let on = keys
+                    .iter()
+                    .map(|k| format!("h.{k} = base.{k}"))
+                    .collect::<Vec<_>>()
+                    .join(" AND ");
+                format!(
+                    "SELECT {cols} FROM read_parquet('{}') base \
+                     WHERE NOT EXISTS (SELECT 1 FROM ({higher_keys}) h WHERE {on})",
+                    sql_lit(glob)
+                )
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\nUNION ALL\n")
+}
+
 fn open_layer(dir: &Path) -> Result<DuckReader, DuckError> {
     let glob = format!("{}/tiles_*.parquet", dir.display());
     let mut duck = DuckReader::open_with(&glob, SpatialSource::None)?;
@@ -963,6 +1013,94 @@ mod tests {
         let conn = Connection::open_in_memory().unwrap();
         let v: i64 = conn.query_row("SELECT 1 + 41", [], |r| r.get(0)).unwrap();
         assert_eq!(v, 42);
+    }
+
+    /// The layer-pushdown guard: `shadow_set_union` must let a selective filter
+    /// PRUNE the base scan, where the old `max(_layer) OVER (PARTITION BY …)`
+    /// window forced a full base scan. Builds a large base + tiny overlay, composes
+    /// the edges view both ways, and compares the largest scan cardinality each
+    /// plan reaches (via EXPLAIN ANALYZE). If a window is ever reintroduced this
+    /// fails loudly. Also checks the generated SQL carries no window and the exact
+    /// same result set as the window form.
+    #[test]
+    fn shadow_set_union_prunes_where_the_window_scanned() {
+        const BASE: i64 = 50_000;
+        const DOMAIN: i64 = 50; // target filter ~ BASE/DOMAIN rows
+        let dir = std::env::temp_dir().join(format!("rm-shadow-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let base = dir.join("edges_base.parquet");
+        let overlay = dir.join("edges_overlay.parquet");
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(&format!(
+            "COPY (SELECT ('r'||i)::VARCHAR AS src_resource, 'works_at' AS src_node, \
+                   'ng' AS src_nodegroup, ('tl'||i)::VARCHAR AS src_tile, \
+                   ('t'||lpad((i%{DOMAIN})::VARCHAR,4,'0')) AS target_resource \
+             FROM range({BASE}) t(i) ORDER BY target_resource, src_resource) \
+             TO '{}' (FORMAT PARQUET, ROW_GROUP_SIZE 2048);",
+            base.display()
+        ))
+        .unwrap();
+        conn.execute_batch(&format!(
+            "COPY (SELECT ('o'||i)::VARCHAR AS src_resource, 'works_at' AS src_node, \
+                   'ng' AS src_nodegroup, ('ot'||i)::VARCHAR AS src_tile, 't0000' AS target_resource \
+             FROM range(10) t(i)) TO '{}' (FORMAT PARQUET, ROW_GROUP_SIZE 2048);",
+            overlay.display()
+        ))
+        .unwrap();
+
+        let layers = vec![(0usize, base.display().to_string()), (1usize, overlay.display().to_string())];
+        let cols = "src_resource, src_node, src_nodegroup, src_tile, target_resource";
+        let shadow_sql = shadow_set_union(&layers, &["src_resource", "src_nodegroup"], cols);
+        assert!(!shadow_sql.to_uppercase().contains("OVER ("), "no window in the shadow-set form");
+        assert!(shadow_sql.contains("NOT EXISTS"), "base layer anti-joins the overlay's keys");
+
+        // The old window composition, for the pruning comparison.
+        let window_sql = format!(
+            "SELECT {cols} FROM (SELECT *, max(_layer) OVER (PARTITION BY src_resource, src_nodegroup) \
+             AS _win FROM (SELECT *, 0 AS _layer FROM read_parquet('{}') UNION ALL BY NAME \
+             SELECT *, 1 AS _layer FROM read_parquet('{}'))) WHERE _layer = _win",
+            base.display(),
+            overlay.display()
+        );
+
+        // Largest scan cardinality any operator in the plan reaches.
+        let max_rows = |view_sql: &str| -> i64 {
+            conn.execute_batch("DROP VIEW IF EXISTS e;").ok();
+            conn.execute_batch(&format!("CREATE VIEW e AS {view_sql};")).unwrap();
+            let plan: String = conn
+                .query_row(
+                    "EXPLAIN ANALYZE SELECT count(*) FROM e WHERE target_resource = 't0000'",
+                    [],
+                    |r| r.get::<_, String>(1),
+                )
+                .unwrap();
+            plan.split_whitespace()
+                .filter_map(|tok| {
+                    let digits: String = tok.chars().filter(|c| c.is_ascii_digit()).collect();
+                    (!digits.is_empty() && tok.chars().all(|c| c.is_ascii_digit() || c == ','))
+                        .then(|| digits.parse::<i64>().ok())
+                        .flatten()
+                })
+                .max()
+                .unwrap_or(0)
+        };
+        let shadow_max = max_rows(&shadow_sql);
+        let window_max = max_rows(&window_sql);
+        eprintln!("max scan cardinality — shadow: {shadow_max}, window: {window_max}");
+        assert!(
+            shadow_max * 3 < window_max,
+            "shadow-set must prune the base (shadow {shadow_max} vs window {window_max})"
+        );
+        assert!(shadow_max < BASE, "shadow-set did not full-scan the base ({shadow_max})");
+
+        // And the composition still returns the SAME rows as the window form.
+        let count = |view_sql: &str| -> i64 {
+            conn.execute_batch("DROP VIEW IF EXISTS e;").ok();
+            conn.execute_batch(&format!("CREATE VIEW e AS {view_sql};")).unwrap();
+            conn.query_row("SELECT count(*) FROM e", [], |r| r.get(0)).unwrap()
+        };
+        assert_eq!(count(&shadow_sql), count(&window_sql), "shadow-set == window result set");
     }
 
     /// OFFLINE guarantee for JSON: `json_extract` works with autoinstall DISABLED
