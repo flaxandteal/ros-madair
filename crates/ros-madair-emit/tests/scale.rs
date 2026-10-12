@@ -67,12 +67,23 @@ fn emit_scales_to_the_full_footprint_set() {
     // + a height. Deterministic LCG (no RNG dep); coords spread to exercise the geo
     // zone-map, concepts to exercise the melted concept store.
     let (x0, y0, x1, y1) = (80.18_f64, 12.89_f64, 80.36_f64, 13.25_f64);
-    const GEMS: [&str; 8] = ["CR/LFM", "CR/LFINF", "MUR+CLBRS", "S/LFM", "W/LWAL", "E/LWAL", "MUR+STDRE", "MIX"];
+    const GEMS: [&str; 8] = [
+        "CR/LFM",
+        "CR/LFINF",
+        "MUR+CLBRS",
+        "S/LFM",
+        "W/LWAL",
+        "E/LWAL",
+        "MUR+STDRE",
+        "MIX",
+    ];
     let rdir = dir.join("resources").join("placed");
     std::fs::create_dir_all(&rdir).unwrap();
     let mut a: u64 = 0x9E3779B9;
     let mut rnd = || {
-        a = a.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        a = a
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
         (a >> 33) as f64 / (1u64 << 31) as f64
     };
     let mut resources = Vec::with_capacity(N);
@@ -92,46 +103,93 @@ fn emit_scales_to_the_full_footprint_set() {
                 "data": {GEO: fc, CON: gem, NUM: height}}],
         }));
     }
-    std::fs::write(rdir.join("placed.json"),
-        serde_json::to_vec(&json!({"business_data": {"resources": resources}})).unwrap()).unwrap();
+    std::fs::write(
+        rdir.join("placed.json"),
+        serde_json::to_vec(&json!({"business_data": {"resources": resources}})).unwrap(),
+    )
+    .unwrap();
 
     let pq = scratch("out");
     let mut cfg = HashMap::new();
-    cfg.insert(GRAPH.to_string(), ClusterConfig { row_group_size: 8192, ..Default::default() });
+    cfg.insert(
+        GRAPH.to_string(),
+        ClusterConfig {
+            row_group_size: 8192,
+            ..Default::default()
+        },
+    );
     let t = std::time::Instant::now();
     ros_madair_emit::emit_parquet(
-        dir.to_str().unwrap(), pq.to_str().unwrap(), "https://example.org/",
-        &default_registry(), &cfg,
-    ).expect("emit at scale");
+        dir.to_str().unwrap(),
+        pq.to_str().unwrap(),
+        "https://example.org/",
+        &default_registry(),
+        &cfg,
+    )
+    .expect("emit at scale");
     let secs = t.elapsed().as_secs_f64();
 
     let conn = Connection::open_in_memory().unwrap();
     let count = |f: &str| -> i64 {
         let p = pq.join(format!("{f}_{GRAPH}.parquet"));
-        if !p.exists() { return -1; }
-        conn.query_row(&format!("SELECT count(*) FROM read_parquet('{}')", p.display()), [], |r| r.get(0)).unwrap()
+        if !p.exists() {
+            return -1;
+        }
+        conn.query_row(
+            &format!("SELECT count(*) FROM read_parquet('{}')", p.display()),
+            [],
+            |r| r.get(0),
+        )
+        .unwrap()
     };
     let rgs = |f: &str| -> i64 {
-        conn.query_row(&format!("SELECT sum(num_row_groups) FROM parquet_file_metadata('{}')",
-            pq.join(format!("{f}_{GRAPH}.parquet")).display()), [], |r| r.get(0)).unwrap_or(-1)
+        conn.query_row(
+            &format!(
+                "SELECT sum(num_row_groups) FROM parquet_file_metadata('{}')",
+                pq.join(format!("{f}_{GRAPH}.parquet")).display()
+            ),
+            [],
+            |r| r.get(0),
+        )
+        .unwrap_or(-1)
     };
     let tiles = count("tiles");
     let concepts = count("concepts");
     let ordered = count("ordered");
-    let geo_pop: i64 = conn.query_row(&format!(
-        "SELECT count(*) FROM read_parquet('{}') WHERE geo_min_lng IS NOT NULL",
-        pq.join(format!("tiles_{GRAPH}.parquet")).display()), [], |r| r.get(0)).unwrap();
+    let geo_pop: i64 = conn
+        .query_row(
+            &format!(
+                "SELECT count(*) FROM read_parquet('{}') WHERE geo_min_lng IS NOT NULL",
+                pq.join(format!("tiles_{GRAPH}.parquet")).display()
+            ),
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
 
     eprintln!("=== emit scale gate ===");
     eprintln!("resources in: {N}   emit wall-time: {secs:.1}s");
     eprintln!("tiles={tiles} (row groups {})   concepts={concepts}   ordered={ordered}   geo-populated tiles={geo_pop}",
         rgs("tiles"));
-    eprintln!("concepts row groups={}   ordered row groups={}", rgs("concepts"), rgs("ordered"));
+    eprintln!(
+        "concepts row groups={}   ordered row groups={}",
+        rgs("concepts"),
+        rgs("ordered")
+    );
 
     assert_eq!(tiles, N as i64, "every resource emitted a tile");
     assert!(rgs("tiles") > 1, "multiple row groups (prunable)");
-    assert_eq!(concepts, N as i64, "every GEM concept melted into the concept store");
-    assert_eq!(ordered, N as i64, "every height melted into the ordered store");
-    assert_eq!(geo_pop, N as i64, "every footprint promoted a geo bbox (the spatial zone-map)");
+    assert_eq!(
+        concepts, N as i64,
+        "every GEM concept melted into the concept store"
+    );
+    assert_eq!(
+        ordered, N as i64,
+        "every height melted into the ordered store"
+    );
+    assert_eq!(
+        geo_pop, N as i64,
+        "every footprint promoted a geo bbox (the spatial zone-map)"
+    );
     eprintln!("OK: emit scales to the full footprint set, geo+concept+ordered all melted");
 }

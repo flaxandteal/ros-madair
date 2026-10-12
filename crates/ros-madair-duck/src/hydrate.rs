@@ -147,14 +147,11 @@ fn collect_cache_titles(tiles: &[StaticTile]) -> HashMap<String, String> {
                 let Some(id) = e.get("id").and_then(|v| v.as_str()) else {
                     continue;
                 };
-                let title = e
-                    .get("title")
-                    .and_then(|v| v.as_str())
-                    .or_else(|| {
-                        e.get("descriptors")
-                            .and_then(|d| d.get("name"))
-                            .and_then(|v| v.as_str())
-                    });
+                let title = e.get("title").and_then(|v| v.as_str()).or_else(|| {
+                    e.get("descriptors")
+                        .and_then(|d| d.get("name"))
+                        .and_then(|v| v.as_str())
+                });
                 if let Some(title) = title {
                     out.insert(id.to_string(), title.to_string());
                 }

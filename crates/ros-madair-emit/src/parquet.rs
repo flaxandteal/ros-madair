@@ -620,9 +620,8 @@ fn append_resource(
                             .first()
                             .and_then(|k| alizarin_core::quantize::quantize_date(k)),
                         "number" => {
-                            let decimals = ros_madair_handlers::number_scale(
-                                node_config_value(node).as_ref(),
-                            );
+                            let decimals =
+                                ros_madair_handlers::number_scale(node_config_value(node).as_ref());
                             spec.keys
                                 .first()
                                 .and_then(|k| k.parse::<f64>().ok())

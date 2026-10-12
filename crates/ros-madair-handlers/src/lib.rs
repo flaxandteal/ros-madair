@@ -39,10 +39,10 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+pub use alizarin_core::extension_type_registry::ExtensionTypeRegistry;
 use alizarin_core::extension_type_registry::{
     ExtensionError, ExtensionTypeHandler, HandlerCapabilities, IndexClass, IndexSpec,
 };
-pub use alizarin_core::extension_type_registry::ExtensionTypeRegistry;
 
 /// The version of the `alizarin-clm-core` actually linked into this build
 /// (read from its manifest by `build.rs`, so it cannot drift).
@@ -302,7 +302,10 @@ mod tests {
     fn number_scale_reads_config_else_default() {
         assert_eq!(number_scale(None), DEFAULT_NUMBER_DECIMALS);
         assert_eq!(number_scale(Some(&serde_json::json!({ "decimals": 2 }))), 2);
-        assert_eq!(number_scale(Some(&serde_json::json!({ "decimals": 99 }))), 18); // capped
+        assert_eq!(
+            number_scale(Some(&serde_json::json!({ "decimals": 99 }))),
+            18
+        ); // capped
     }
 
     #[test]

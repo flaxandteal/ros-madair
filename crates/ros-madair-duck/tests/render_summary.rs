@@ -69,9 +69,18 @@ fn linked_resource_title_renders_from_cache_without_loading_target() {
     std::fs::create_dir_all(&rdir).unwrap();
     // B is "Beta Place"; A links to B through the resource-instance node.
     let resources = vec![
-        resource(B, "Beta Place", "1b000000-0000-4000-8000-000000000010", json!({})),
-        resource(A, "Alpha", "1a000000-0000-4000-8000-000000000010",
-                 json!({ LINK: [{ "resourceId": B }] })),
+        resource(
+            B,
+            "Beta Place",
+            "1b000000-0000-4000-8000-000000000010",
+            json!({}),
+        ),
+        resource(
+            A,
+            "Alpha",
+            "1a000000-0000-4000-8000-000000000010",
+            json!({ LINK: [{ "resourceId": B }] }),
+        ),
     ];
     std::fs::write(
         rdir.join("things.json"),
@@ -81,15 +90,17 @@ fn linked_resource_title_renders_from_cache_without_loading_target() {
 
     let pq = scratch("out");
     ros_madair_emit::emit_parquet(
-        dir.to_str().unwrap(), pq.to_str().unwrap(), "https://example.org/",
-        &default_registry(), &std::collections::HashMap::new(),
+        dir.to_str().unwrap(),
+        pq.to_str().unwrap(),
+        "https://example.org/",
+        &default_registry(),
+        &std::collections::HashMap::new(),
     )
     .expect("emit");
 
     let tiles = pq.join(format!("tiles_{GRAPH}.parquet"));
     let duck = DuckReader::open(tiles.to_str().unwrap()).expect("open");
-    let raw: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(&gp).unwrap()).unwrap();
+    let raw: serde_json::Value = serde_json::from_slice(&std::fs::read(&gp).unwrap()).unwrap();
     let mut graph: StaticGraph = serde_json::from_value(raw["graph"][0].clone()).unwrap();
     graph.build_indices();
 

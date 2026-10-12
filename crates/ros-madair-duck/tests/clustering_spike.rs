@@ -96,7 +96,10 @@ fn connectivity_clustering_localises_multi_hop_frontiers() {
     let avg_v = tot_value as f64 / n as f64;
     let avg_c = tot_conn as f64 / n as f64;
     eprintln!("--- graph-clustering spike ---");
-    eprintln!("corpus: {N} resources, {} communities, {total_groups} row groups", N / S);
+    eprintln!(
+        "corpus: {N} resources, {} communities, {total_groups} row groups",
+        N / S
+    );
     eprintln!("avg 2-hop frontier size: {avg_f:.0} resources");
     eprintln!("avg row groups touched — value order:        {avg_v:.1}");
     eprintln!("avg row groups touched — connectivity order: {avg_c:.1}");

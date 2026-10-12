@@ -807,9 +807,10 @@ fn first_coarse_path(expr: &Expr, spatial: bool) -> Option<&str> {
         }
         Expr::Not(inner) => first_coarse_path(inner, spatial),
         Expr::OnLink { r#where, .. } => first_coarse_path(r#where, spatial),
-        Expr::Concept { .. } | Expr::Range { .. } | Expr::HasLink { .. } | Expr::Backlink { .. } => {
-            None
-        }
+        Expr::Concept { .. }
+        | Expr::Range { .. }
+        | Expr::HasLink { .. }
+        | Expr::Backlink { .. } => None,
     }
 }
 

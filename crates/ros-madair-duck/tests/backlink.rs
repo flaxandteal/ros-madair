@@ -75,24 +75,65 @@ fn corpus() -> (PathBuf, StaticGraph) {
     std::fs::create_dir_all(&rdir).unwrap();
     let resources = vec![
         // R1 → T via L1 (cites); R2 → T via L2 (mentions) — different predicates.
-        resource(R1, vec![link_tile("1a110000-0000-4000-8000-000000000010", R1, NG1, L1, T)]),
-        resource(R2, vec![link_tile("2b220000-0000-4000-8000-000000000010", R2, NG2, L2, T)]),
+        resource(
+            R1,
+            vec![link_tile(
+                "1a110000-0000-4000-8000-000000000010",
+                R1,
+                NG1,
+                L1,
+                T,
+            )],
+        ),
+        resource(
+            R2,
+            vec![link_tile(
+                "2b220000-0000-4000-8000-000000000010",
+                R2,
+                NG2,
+                L2,
+                T,
+            )],
+        ),
         // R3 links to something else — must NOT be a backlink of T.
-        resource(R3, vec![link_tile("3c330000-0000-4000-8000-000000000010", R3, NG1, L1, OTHER)]),
+        resource(
+            R3,
+            vec![link_tile(
+                "3c330000-0000-4000-8000-000000000010",
+                R3,
+                NG1,
+                L1,
+                OTHER,
+            )],
+        ),
     ];
-    std::fs::write(rdir.join("things.json"),
-        serde_json::to_vec(&json!({"business_data": {"resources": resources}})).unwrap()).unwrap();
+    std::fs::write(
+        rdir.join("things.json"),
+        serde_json::to_vec(&json!({"business_data": {"resources": resources}})).unwrap(),
+    )
+    .unwrap();
 
     let pq = scratch("out");
-    ros_madair_emit::emit_parquet(dir.to_str().unwrap(), pq.to_str().unwrap(), "https://example.org/",
-        &default_registry(), &std::collections::HashMap::new()).expect("emit");
+    ros_madair_emit::emit_parquet(
+        dir.to_str().unwrap(),
+        pq.to_str().unwrap(),
+        "https://example.org/",
+        &default_registry(),
+        &std::collections::HashMap::new(),
+    )
+    .expect("emit");
     let raw: serde_json::Value = serde_json::from_slice(&std::fs::read(&gp).unwrap()).unwrap();
     let graph: StaticGraph = serde_json::from_value(raw["graph"][0].clone()).unwrap();
     (pq.join(format!("tiles_{GRAPH}.parquet")), graph)
 }
 
 fn q(w: Expr) -> Query {
-    Query { model: GRAPH.into(), r#where: Some(w), measures: vec![Measure::SelectIds], limit: None }
+    Query {
+        model: GRAPH.into(),
+        r#where: Some(w),
+        measures: vec![Measure::SelectIds],
+        limit: None,
+    }
 }
 
 #[test]
@@ -113,15 +154,26 @@ fn backlink_finds_all_referrers_across_predicates() {
 
     // Untyped: both R1 (via cites) and R2 (via mentions) link to T — found without
     // naming either predicate.
-    assert_eq!(ids(Expr::Backlink { target: T.into() }), set(&[R1, R2]),
-        "backlink finds referrers through ANY predicate");
+    assert_eq!(
+        ids(Expr::Backlink { target: T.into() }),
+        set(&[R1, R2]),
+        "backlink finds referrers through ANY predicate"
+    );
 
     // A target nobody links to → empty (not an error).
-    assert_eq!(ids(Expr::Backlink { target: "no-such-target".into() }), Vec::<String>::new());
+    assert_eq!(
+        ids(Expr::Backlink {
+            target: "no-such-target".into()
+        }),
+        Vec::<String>::new()
+    );
 
     // EXACT → negatable: resources that do NOT link to T = just R3.
-    assert_eq!(ids(Expr::Not(Box::new(Expr::Backlink { target: T.into() }))), set(&[R3]),
-        "backlink negates soundly (it is exact, not a coarse superset)");
+    assert_eq!(
+        ids(Expr::Not(Box::new(Expr::Backlink { target: T.into() }))),
+        set(&[R3]),
+        "backlink negates soundly (it is exact, not a coarse superset)"
+    );
 
     eprintln!("OK: untyped backlinks resolve across predicates and negate soundly");
 }

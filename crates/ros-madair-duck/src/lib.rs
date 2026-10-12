@@ -215,11 +215,11 @@ impl DuckReader {
                 ))
                 .is_ok();
         let _ = has_edges_rev; // wired into the compiler's direction choice in a follow-on
-        // Melted concept / ordered axis stores (the siblings concepts_*.parquet /
-        // ordered_*.parquet next to the tiles glob), same best-effort registration as
-        // edges: a pre-melt snapshot still OPENS; only a Concept/Range query then errors
-        // typed. concept_index is the node/value-sorted membership store (distinct from
-        // the DFS-interval `concepts` catalog view registered by with_catalog).
+                               // Melted concept / ordered axis stores (the siblings concepts_*.parquet /
+                               // ordered_*.parquet next to the tiles glob), same best-effort registration as
+                               // edges: a pre-melt snapshot still OPENS; only a Concept/Range query then errors
+                               // typed. concept_index is the node/value-sorted membership store (distinct from
+                               // the DFS-interval `concepts` catalog view registered by with_catalog).
         let concept_glob = parquet_glob.replace("tiles_", "concepts_");
         let has_concept_index = concept_glob != parquet_glob
             && conn
@@ -1070,11 +1070,20 @@ mod tests {
         ))
         .unwrap();
 
-        let layers = vec![(0usize, base.display().to_string()), (1usize, overlay.display().to_string())];
+        let layers = vec![
+            (0usize, base.display().to_string()),
+            (1usize, overlay.display().to_string()),
+        ];
         let cols = "src_resource, src_node, src_nodegroup, src_tile, target_resource";
         let shadow_sql = shadow_set_union(&layers, &["src_resource", "src_nodegroup"], cols);
-        assert!(!shadow_sql.to_uppercase().contains("OVER ("), "no window in the shadow-set form");
-        assert!(shadow_sql.contains("NOT EXISTS"), "base layer anti-joins the overlay's keys");
+        assert!(
+            !shadow_sql.to_uppercase().contains("OVER ("),
+            "no window in the shadow-set form"
+        );
+        assert!(
+            shadow_sql.contains("NOT EXISTS"),
+            "base layer anti-joins the overlay's keys"
+        );
 
         // The old window composition, for the pruning comparison.
         let window_sql = format!(
@@ -1088,7 +1097,8 @@ mod tests {
         // Largest scan cardinality any operator in the plan reaches.
         let max_rows = |view_sql: &str| -> i64 {
             conn.execute_batch("DROP VIEW IF EXISTS e;").ok();
-            conn.execute_batch(&format!("CREATE VIEW e AS {view_sql};")).unwrap();
+            conn.execute_batch(&format!("CREATE VIEW e AS {view_sql};"))
+                .unwrap();
             let plan: String = conn
                 .query_row(
                     "EXPLAIN ANALYZE SELECT count(*) FROM e WHERE target_resource = 't0000'",
@@ -1113,15 +1123,24 @@ mod tests {
             shadow_max * 3 < window_max,
             "shadow-set must prune the base (shadow {shadow_max} vs window {window_max})"
         );
-        assert!(shadow_max < BASE, "shadow-set did not full-scan the base ({shadow_max})");
+        assert!(
+            shadow_max < BASE,
+            "shadow-set did not full-scan the base ({shadow_max})"
+        );
 
         // And the composition still returns the SAME rows as the window form.
         let count = |view_sql: &str| -> i64 {
             conn.execute_batch("DROP VIEW IF EXISTS e;").ok();
-            conn.execute_batch(&format!("CREATE VIEW e AS {view_sql};")).unwrap();
-            conn.query_row("SELECT count(*) FROM e", [], |r| r.get(0)).unwrap()
+            conn.execute_batch(&format!("CREATE VIEW e AS {view_sql};"))
+                .unwrap();
+            conn.query_row("SELECT count(*) FROM e", [], |r| r.get(0))
+                .unwrap()
         };
-        assert_eq!(count(&shadow_sql), count(&window_sql), "shadow-set == window result set");
+        assert_eq!(
+            count(&shadow_sql),
+            count(&window_sql),
+            "shadow-set == window result set"
+        );
     }
 
     /// OFFLINE guarantee for JSON: `json_extract` works with autoinstall DISABLED

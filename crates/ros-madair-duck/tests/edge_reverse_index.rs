@@ -184,7 +184,10 @@ fn row_groups_containing(conn: &Connection, file: &Path, tgt: &str) -> i64 {
 #[test]
 fn reverse_index_prunes_a_target_the_forward_index_cannot() {
     let (tiles, edges, redges) = corpus();
-    assert!(redges.exists(), "emit wrote the reverse edge index redges_*.parquet");
+    assert!(
+        redges.exists(),
+        "emit wrote the reverse edge index redges_*.parquet"
+    );
 
     let conn = Connection::open_in_memory().unwrap();
 
@@ -197,7 +200,11 @@ fn reverse_index_prunes_a_target_the_forward_index_cannot() {
         )
         .unwrap()
     };
-    assert_eq!(count(&edges), count(&redges), "reverse index is a re-sort of the same edges");
+    assert_eq!(
+        count(&edges),
+        count(&redges),
+        "reverse index is a re-sort of the same edges"
+    );
     assert_eq!(count(&edges), (N_RESOURCES * 2) as i64);
 
     // Both files have >1 row group (otherwise there is nothing to prune).
@@ -219,7 +226,10 @@ fn reverse_index_prunes_a_target_the_forward_index_cannot() {
         groups(&edges),
         groups(&redges)
     );
-    assert!(groups(&edges) > 1 && groups(&redges) > 1, "need multiple row groups to prune");
+    assert!(
+        groups(&edges) > 1 && groups(&redges) > 1,
+        "need multiple row groups to prune"
+    );
 
     // The structural win: a mid-domain target is scattered across both predicate
     // bands in the forward file (≥2 unprunable row groups) but contiguous in the
@@ -228,8 +238,14 @@ fn reverse_index_prunes_a_target_the_forward_index_cannot() {
     let fwd = row_groups_containing(&conn, &edges, &tgt);
     let rev = row_groups_containing(&conn, &redges, &tgt);
     eprintln!("target {tgt}: forward touches {fwd} row groups, reverse touches {rev}");
-    assert_eq!(rev, 1, "reverse index localises the target to one row group");
-    assert!(fwd >= 2, "forward index scatters the target across ≥2 bands (got {fwd})");
+    assert_eq!(
+        rev, 1,
+        "reverse index localises the target to one row group"
+    );
+    assert!(
+        fwd >= 2,
+        "forward index scatters the target across ≥2 bands (got {fwd})"
+    );
 
     // Correctness: an UNTYPED reverse lookup (who links to T through any predicate)
     // is identical whichever file answers it — pruning changes cost, not results.
@@ -246,7 +262,11 @@ fn reverse_index_prunes_a_target_the_forward_index_cannot() {
             .filter_map(Result::ok)
             .collect()
     };
-    assert_eq!(who_links_to(&edges), who_links_to(&redges), "same answer, cheaper scan");
+    assert_eq!(
+        who_links_to(&edges),
+        who_links_to(&redges),
+        "same answer, cheaper scan"
+    );
     assert!(!who_links_to(&redges).is_empty());
 
     // Regression: the reader still opens with the new redges_ sibling present.
