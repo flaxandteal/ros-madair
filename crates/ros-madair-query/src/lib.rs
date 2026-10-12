@@ -127,6 +127,15 @@ pub enum Expr {
     /// link/hop child joined on `edges.src_tile` (`ros-madair-duck`), which the
     /// head schema cannot express.
     OnTile(Vec<Expr>),
+    /// Reverse PATH predicate: resources that link TO `target` through ANY
+    /// predicate (untyped backlinks — "what references this resource"). The
+    /// complement of a typed `OnLink` hop: `OnLink` walks a resource's own links
+    /// forward; `Backlink` finds every resource pointing AT a given one, across
+    /// all relationships. Substrate-only — it lowers to a semijoin over the
+    /// REVERSE edge index (`redges_*.parquet` → the `edges_rev` view), sorted
+    /// `(target_resource, src_node)` so this target-anchored lookup zone-map
+    /// prunes (the src-first forward `edges` table could not). EXACT (negatable).
+    Backlink { target: String },
 }
 
 /// Operators for [`Expr::Concept`].
@@ -670,6 +679,7 @@ fn explain_expr(expr: &Expr, resolver: &PathResolver, graph: &StaticGraph) -> St
             tile_group_name(cs, resolver, graph),
             explain_join(cs, " and ", resolver, graph)
         ),
+        Expr::Backlink { target } => format!("links to {target} (through any relationship)"),
     }
 }
 
@@ -719,6 +729,9 @@ fn explain_leaf_ng(expr: &Expr, resolver: &PathResolver) -> Option<String> {
             cs.iter().find_map(|c| explain_leaf_ng(c, resolver))
         }
         Expr::Not(inner) => explain_leaf_ng(inner, resolver),
+        // Backlink is not node-scoped (no path/nodegroup) — it cannot be an
+        // OnTile leaf, so it contributes no nodegroup.
+        Expr::Backlink { .. } => None,
     }
 }
 

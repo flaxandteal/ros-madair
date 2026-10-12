@@ -314,6 +314,26 @@ pub fn compile_expr(
                 sql_lit(&node.nodeid)
             ))
         }
+        // Untyped reverse lookup: every resource that links to `target` through
+        // ANY predicate ("what references this resource"). Over the REVERSE edge
+        // index (`edges_rev`, sorted target-first) so this target-anchored lookup
+        // zone-map prunes — the src-first forward `edges` could not. EXACT, so it
+        // negates soundly (unlike Bbox). `redges_` co-emits with `edges_`, so the
+        // edge-table availability flag gates it.
+        Expr::Backlink { target } => {
+            if !has_edges {
+                return Err(CompileError(format!(
+                    "backlink to '{target}' needs the reverse edge index — this reader \
+                     has no redges_*.parquet / edges_rev view (open a snapshot emitted \
+                     with the reverse edge slice)"
+                )));
+            }
+            Ok(format!(
+                "SELECT DISTINCT src_resource AS resource_id FROM edges_rev \
+                 WHERE target_resource = '{}'",
+                sql_lit(target)
+            ))
+        }
         // Cross-resource PATH predicate → an edge-table semijoin. Compile the inner
         // predicate against the TARGET model (a set of target resource ids), then
         // keep the source resources whose `path` link lands in that set. Nested
@@ -449,6 +469,13 @@ fn tile_nodegroup(
             }
             Ok(())
         }
+        // A backlink is not node-scoped (it spans the whole resource graph), so it
+        // cannot be one of an on_tile's single-nodegroup children.
+        Expr::Backlink { .. } => Err(CompileError(
+            "backlink cannot be an on_tile child — a tile is one nodegroup instance, \
+             but a backlink is resource-graph-wide, not node-scoped"
+                .into(),
+        )),
     }
 }
 
@@ -707,6 +734,10 @@ fn compile_tile_cond(
         Expr::OnTile(_) => Err(CompileError(
             "nested on_tile is not supported; flatten the conditions into one on_tile".to_string(),
         )),
+        // A backlink is resource-graph-wide, not a single-tile condition.
+        Expr::Backlink { .. } => Err(CompileError(
+            "backlink cannot be an on_tile child — it is not node-scoped".to_string(),
+        )),
     }
 }
 
@@ -776,7 +807,9 @@ fn first_coarse_path(expr: &Expr, spatial: bool) -> Option<&str> {
         }
         Expr::Not(inner) => first_coarse_path(inner, spatial),
         Expr::OnLink { r#where, .. } => first_coarse_path(r#where, spatial),
-        Expr::Concept { .. } | Expr::Range { .. } | Expr::HasLink { .. } => None,
+        Expr::Concept { .. } | Expr::Range { .. } | Expr::HasLink { .. } | Expr::Backlink { .. } => {
+            None
+        }
     }
 }
 

@@ -355,6 +355,21 @@ impl DuckReader {
                 )
             ))?;
         }
+        // Reverse edge index across layers (the sibling redges_*.parquet), so an
+        // untyped `Backlink` prunes on target across a base+overlay composition.
+        // Same winning-layer shadow-set as edges; named redges_ so the edges_*
+        // glob above can't swallow it.
+        let rev_layers = layers_with(&conn, dirs, "redges_*.parquet");
+        if !rev_layers.is_empty() {
+            conn.execute_batch(&format!(
+                "CREATE VIEW edges_rev AS {};",
+                shadow_set_union(
+                    &rev_layers,
+                    &["src_resource", "src_nodegroup"],
+                    "src_resource, src_node, src_nodegroup, src_tile, target_resource",
+                )
+            ))?;
+        }
 
         // Concept catalog (optional): union the DFS-interval catalogs, topmost wins per
         // concept_id. (The `concepts` view is the interval catalog — distinct from the
