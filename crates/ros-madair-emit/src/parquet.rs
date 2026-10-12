@@ -33,7 +33,9 @@ use std::sync::Arc;
 
 use alizarin_core::datatype_index::datatype_index_spec;
 use alizarin_core::extension_type_registry::{ExtensionTypeRegistry, IndexClass};
-use alizarin_core::graph::{StaticGraph, StaticNode, StaticNodegroup, StaticResource};
+use alizarin_core::graph::{
+    StaticGraph, StaticNode, StaticNodegroup, StaticResource, StaticResourceRegistry,
+};
 use alizarin_core::rdm_cache::{RdmCache, RdmCollection};
 
 // Arrow/parquet: the small in-memory concept-catalog writer only. The tile path
@@ -701,12 +703,24 @@ fn append_resource(
             .unwrap_or(i64::MAX);
         // Sorted key order (see the sorted view above) so the content-hashed
         // `data` column is byte-identical across runs.
-        let data_json = serde_json::to_string(
-            &sorted
-                .iter()
-                .copied()
-                .collect::<std::collections::BTreeMap<&String, &serde_json::Value>>(),
-        )?;
+        let mut data_obj: std::collections::BTreeMap<String, serde_json::Value> = sorted
+            .iter()
+            .map(|(k, v)| ((*k).clone(), (*v).clone()))
+            .collect();
+        // Render-summary carry (anti-N+1): embed this tile's slice of the resource
+        // `__cache` (populate_caches filled `r.cache = {tileId: {nodeId: CacheEntry}}`
+        // with each linked target's title + descriptors) under a reserved "__cache"
+        // key. Hydrate reads it to resolve related-resource display from the single
+        // `data` fetch instead of loading every linked target; it strips the key back
+        // out before building StaticTiles. BTreeMap keeps the column byte-identical.
+        if let (Some(serde_json::Value::Object(cache)), Some(tid)) =
+            (r.cache.as_ref(), tile.tileid.as_deref())
+        {
+            if let Some(slice) = cache.get(tid) {
+                data_obj.insert("__cache".to_string(), slice.clone());
+            }
+        }
+        let data_json = serde_json::to_string(&data_obj)?;
 
         // Concepts and dates are melted into concepts_<slug>/ordered_<slug> (below),
         // not promoted onto the tile row — so the tile row is the 1:1 axis only
@@ -1061,6 +1075,22 @@ pub fn emit_parquet_with_progress(
     const PROGRESS_STEP: usize = 2000;
     let mut done: usize = 0;
     let mut cancelled = false;
+
+    // PASS 1 (render-summary prerequisite): a lightweight registry of resource
+    // SUMMARIES (id → descriptors) over ALL business data, so pass 2's
+    // `populate_caches` can resolve a linked target's title without holding every
+    // full resource in memory. Summaries only — memory-bounded even at 763k.
+    let mut summary_registry = StaticResourceRegistry::new();
+    for path in crate::input::business_data_files(data_dir)? {
+        let file = fs::File::open(&path)?;
+        let _ = alizarin_core::stream_business_data_resources(file, |_offset, bytes| {
+            if let Ok(r) = alizarin_core::parse_business_data_resource_bytes(bytes) {
+                summary_registry.insert_summary(r.to_summary());
+            }
+            Ok(())
+        });
+    }
+
     // STREAM the business-data too: element-by-element, never a whole-file parse.
     // Téarma ships as ONE ~486 MB business_data JSON; `fs::read` + whole-file
     // `parse_business_data_bytes` balloons to multiple GB and OOMs on-device (the
@@ -1078,8 +1108,21 @@ pub fn emit_parquet_with_progress(
         // re-raise, rather than letting the file-skip swallow it.
         let mut append_err: Option<EmitError> = None;
         let stream_res = alizarin_core::stream_business_data_resources(file, |_offset, bytes| {
-            let r = alizarin_core::parse_business_data_resource_bytes(bytes)?;
+            let mut r = alizarin_core::parse_business_data_resource_bytes(bytes)?;
             if let Some(&gi) = by_graph.get(r.resourceinstance.graph_id.as_str()) {
+                // PASS 2: fill `r.cache` (__cache) with each linked target's title +
+                // descriptors from the pass-1 summary registry. enrich/recompute are
+                // OFF — we only want the cache (hydrate re-derives descriptors from
+                // the tiles), so the sole `data` change is the added `__cache` key on
+                // resources that carry links. Best-effort — a dangling ref just leaves
+                // its entry unresolved, never fails the emit.
+                let _ = summary_registry.populate_caches(
+                    std::slice::from_mut(&mut r),
+                    &models[gi].graph,
+                    false,
+                    false,
+                    false,
+                );
                 if let Err(e) = append_resource(
                     &stage,
                     &models[gi].slug,

@@ -14,7 +14,7 @@ use std::collections::HashMap;
 use alizarin_core::graph::{GraphLookup, StaticResourceMetadata};
 use alizarin_core::json_conversion::resource_tiles_to_tree_with_context;
 use alizarin_core::type_serialization::{
-    ExternalResolver, SerializationContext, SerializationOptions,
+    ExternalResolver, ResourceDisplayResolver, SerializationContext, SerializationOptions,
 };
 use alizarin_core::StaticTile;
 use ros_madair_handlers::default_registry;
@@ -48,12 +48,18 @@ pub fn hydrate_tiles_with_labels(
 ) -> Result<serde_json::Value, String> {
     let metadata = build_metadata(uuid, graph, tiles);
     let resolver = VocabResolver { labels };
+    // Render-summary: resolve resource-instance link display names from the `__cache`
+    // the emitter materialised into the `data` column (via alizarin's
+    // `populate_caches`), so a related resource's title renders WITHOUT a second
+    // query to fetch that target — the anti-N+1 the static substrate needs.
+    let link_resolver = CacheResolver {
+        titles: collect_cache_titles(tiles),
+    };
     let registry = default_registry();
     // `options` carries mode + the language preference chain; `ctx` carries the
-    // resolvers/registry. `resource_resolver` is None — resource-instance display
-    // names are a separate concern from concept/reference labels. A flat label per
-    // concept, so the resolver ignores language; the chain only selects among
-    // i18n string datatypes.
+    // resolvers/registry. `resource_resolver` now resolves link titles from the
+    // carried `__cache` (above). A flat label per concept, so the concept resolver
+    // ignores language; the chain only selects among i18n string datatypes.
     let options = SerializationOptions::display_seq(languages.iter().copied());
     let ctx = SerializationContext {
         node_config: None,
@@ -61,7 +67,7 @@ pub fn hydrate_tiles_with_labels(
         // concept_lookup threads emit-side concept identity; the hydration path
         // resolves concepts via `external_resolver`, so None.
         concept_lookup: None,
-        resource_resolver: None,
+        resource_resolver: Some(&link_resolver),
         extension_registry: Some(&registry),
     };
     resource_tiles_to_tree_with_context(tiles, &metadata, graph, &options, &ctx)
@@ -106,4 +112,54 @@ impl ExternalResolver for VocabResolver<'_> {
     ) -> Option<String> {
         self.labels.get(concept_id).cloned()
     }
+}
+
+/// Resolves a linked resource's UUID to its display title from the `__cache`
+/// slices the emitter carried in the tile `data`. This is what lets a
+/// resource-instance render its target's name from the one `data` fetch, with no
+/// query to load the target (the static-substrate anti-N+1).
+struct CacheResolver {
+    titles: HashMap<String, String>,
+}
+
+impl ResourceDisplayResolver for CacheResolver {
+    fn resolve_resource_display(&self, resource_id: &str, _language: &str) -> Option<String> {
+        self.titles.get(resource_id).cloned()
+    }
+}
+
+/// Collect `resource_id -> title` from every tile's `__cache` slice (the reserved
+/// key the emitter wrote into `data`). A cache entry is either a single
+/// `RelatedResourceEntry` (`{id, title, descriptors}`) or a list under `"_"`;
+/// title falls back to `descriptors.name` when `title` is absent.
+fn collect_cache_titles(tiles: &[StaticTile]) -> HashMap<String, String> {
+    let mut out = HashMap::new();
+    for t in tiles {
+        let Some(serde_json::Value::Object(cache)) = t.data.get("__cache") else {
+            continue;
+        };
+        for entry in cache.values() {
+            let items: Vec<&serde_json::Value> = match entry.get("_").and_then(|v| v.as_array()) {
+                Some(list) => list.iter().collect(),
+                None => vec![entry],
+            };
+            for e in items {
+                let Some(id) = e.get("id").and_then(|v| v.as_str()) else {
+                    continue;
+                };
+                let title = e
+                    .get("title")
+                    .and_then(|v| v.as_str())
+                    .or_else(|| {
+                        e.get("descriptors")
+                            .and_then(|d| d.get("name"))
+                            .and_then(|v| v.as_str())
+                    });
+                if let Some(title) = title {
+                    out.insert(id.to_string(), title.to_string());
+                }
+            }
+        }
+    }
+    out
 }
