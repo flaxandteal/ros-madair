@@ -1,10 +1,13 @@
 collection_name,concept_label,parent_label,sort_order
-ServiceRole,Shelter,,1
-ServiceRole,Hospital,,2
-ServiceRole,School,,3
-ServiceRole,Fire station,,4
-ServiceRole,Police station,,5
-ServiceRole,Emergency operations centre,,6
-ServiceRole,Muster point,,7
-ServiceRole,Electrical substation,,8
-ServiceRole,Water / pumping station,,9
+PersonRole,Doctor,,1
+PersonRole,Nurse,,2
+PersonRole,Paramedic,,3
+PersonRole,Fire officer,,4
+PersonRole,Police officer,,5
+PersonRole,Emergency coordinator,,6
+PersonRole,Structural engineer,,7
+PersonRole,Shelter warden,,8
+PersonRole,Harbour master,,9
+PersonRole,Utility technician,,10
+PersonRole,Port operative,,11
+PersonRole,Teacher,,12
