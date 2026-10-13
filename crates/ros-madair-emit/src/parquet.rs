@@ -790,10 +790,28 @@ impl TileStage {
         let db = scratch.join("stage.duckdb");
         let _ = fs::remove_file(&db);
         let conn = Connection::open(&db).map_err(|e| format!("duckdb open: {e}"))?;
+        // The DuckDB memory cap for the staging ingest + the external `COPY … ORDER
+        // BY` sort. Default 512MB keeps an on-device emit memory-bounded; a large
+        // server-side emit (e.g. the 763k demo corpus, whose 6.8M-tile sort over the
+        // fat `data` column exceeds 512MB even with disk spill) raises it via
+        // `ROS_MADAIR_EMIT_MEMORY_LIMIT` (any DuckDB size literal, e.g. `8GB`).
+        // `ROS_MADAIR_EMIT_THREADS` optionally caps sort threads (lower = less peak
+        // memory). Partitioning by nodegroup (CLI `--partition-by-nodegroup`) is the
+        // orthogonal lever: it shrinks each sort so a modest cap suffices.
+        let mem_limit = std::env::var("ROS_MADAIR_EMIT_MEMORY_LIMIT")
+            .ok()
+            .filter(|s| !s.trim().is_empty())
+            .unwrap_or_else(|| "512MB".to_string());
+        let threads_pragma = match std::env::var("ROS_MADAIR_EMIT_THREADS") {
+            Ok(t) if !t.trim().is_empty() => {
+                format!("SET threads={};\n", t.trim().replace('\'', ""))
+            }
+            _ => String::new(),
+        };
         conn.execute_batch(&format!(
             "SET temp_directory='{}';
-             SET memory_limit='512MB';
-             CREATE TABLE stage (
+             SET memory_limit='{mem_limit}';
+             {threads_pragma}CREATE TABLE stage (
                model_slug VARCHAR, resource_id VARCHAR, descriptor_name VARCHAR,
                nodegroup_id VARCHAR, tileid VARCHAR, parenttile_id VARCHAR,
                sortorder INTEGER, cluster_key UBIGINT, ng_order BIGINT,
@@ -1047,14 +1065,29 @@ pub fn emit_parquet_with_progress(
         .map(|(i, m)| (m.graph.graphid.as_str(), i))
         .collect();
 
-    // Per-model config + nodegroup DFS intervals, computed once.
+    // Per-model config + nodegroup DFS intervals, computed once. A graph with no
+    // explicit config gets the default; `ROS_MADAIR_EMIT_PARTITION_BY_NODEGROUP`
+    // (CLI `--partition-by-nodegroup`) flips the default's partition flag so a large
+    // emit splits each model into per-nodegroup files — each COPY sort is then one
+    // nodegroup, not the whole model. An explicit per-graph config (library API)
+    // still wins.
+    let partition_default = matches!(
+        std::env::var("ROS_MADAIR_EMIT_PARTITION_BY_NODEGROUP")
+            .unwrap_or_default()
+            .trim(),
+        "1" | "true" | "on" | "yes"
+    );
+    let default_cfg = ClusterConfig {
+        partition_by_nodegroup: partition_default,
+        ..Default::default()
+    };
     let cfgs: Vec<ClusterConfig> = models
         .iter()
         .map(|m| {
             config_by_graph
                 .get(&m.graph.graphid)
                 .cloned()
-                .unwrap_or_default()
+                .unwrap_or_else(|| default_cfg.clone())
         })
         .collect();
     let ng_intervals: Vec<HashMap<String, (i64, i64)>> = models
@@ -1075,19 +1108,36 @@ pub fn emit_parquet_with_progress(
     let mut done: usize = 0;
     let mut cancelled = false;
 
+    // Render-summary `__cache` embedding is ON by default (one-fetch hydrate), but
+    // can be disabled — it inflates tile `data` ~49% (each linked resource's title +
+    // descriptors), which a consumer that composes its own render path does not want,
+    // and which tips a very large sorted COPY over the memory cap. Disable with the
+    // CLI `--no-render-cache` (which sets this env) or `ROS_MADAIR_EMIT_RENDER_CACHE=0`.
+    let render_cache = !matches!(
+        std::env::var("ROS_MADAIR_EMIT_RENDER_CACHE")
+            .unwrap_or_default()
+            .trim()
+            .to_ascii_lowercase()
+            .as_str(),
+        "0" | "false" | "off" | "no"
+    );
+
     // PASS 1 (render-summary prerequisite): a lightweight registry of resource
     // SUMMARIES (id → descriptors) over ALL business data, so pass 2's
     // `populate_caches` can resolve a linked target's title without holding every
     // full resource in memory. Summaries only — memory-bounded even at 763k.
+    // Skipped entirely when the cache is off.
     let mut summary_registry = StaticResourceRegistry::new();
-    for path in crate::input::business_data_files(data_dir)? {
-        let file = fs::File::open(&path)?;
-        let _ = alizarin_core::stream_business_data_resources(file, |_offset, bytes| {
-            if let Ok(r) = alizarin_core::parse_business_data_resource_bytes(bytes) {
-                summary_registry.insert_summary(r.to_summary());
-            }
-            Ok(())
-        });
+    if render_cache {
+        for path in crate::input::business_data_files(data_dir)? {
+            let file = fs::File::open(&path)?;
+            let _ = alizarin_core::stream_business_data_resources(file, |_offset, bytes| {
+                if let Ok(r) = alizarin_core::parse_business_data_resource_bytes(bytes) {
+                    summary_registry.insert_summary(r.to_summary());
+                }
+                Ok(())
+            });
+        }
     }
 
     // STREAM the business-data too: element-by-element, never a whole-file parse.
@@ -1114,14 +1164,17 @@ pub fn emit_parquet_with_progress(
                 // OFF — we only want the cache (hydrate re-derives descriptors from
                 // the tiles), so the sole `data` change is the added `__cache` key on
                 // resources that carry links. Best-effort — a dangling ref just leaves
-                // its entry unresolved, never fails the emit.
-                let _ = summary_registry.populate_caches(
-                    std::slice::from_mut(&mut r),
-                    &models[gi].graph,
-                    false,
-                    false,
-                    false,
-                );
+                // its entry unresolved, never fails the emit. Skipped when the cache
+                // is off (then no `__cache` key is embedded at all).
+                if render_cache {
+                    let _ = summary_registry.populate_caches(
+                        std::slice::from_mut(&mut r),
+                        &models[gi].graph,
+                        false,
+                        false,
+                        false,
+                    );
+                }
                 if let Err(e) = append_resource(
                     &stage,
                     &models[gi].slug,

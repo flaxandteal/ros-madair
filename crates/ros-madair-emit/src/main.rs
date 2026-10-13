@@ -16,7 +16,8 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::process::ExitCode;
 
-const USAGE: &str = "usage: ros-madair-emit <data_dir> <out_dir> [--base-uri URI]";
+const USAGE: &str = "usage: ros-madair-emit <data_dir> <out_dir> [--base-uri URI] \
+                     [--partition-by-nodegroup] [--no-render-cache] [--memory-limit SIZE]";
 
 fn usage() -> ExitCode {
     eprintln!("{USAGE}");
@@ -172,11 +173,29 @@ fn main() -> ExitCode {
     let mut base_uri = "https://example.org/".to_string();
     let mut i = 1;
     while i < args.len() {
-        if args[i] == "--base-uri" {
-            i += 1;
-            base_uri = args.get(i).cloned().unwrap_or(base_uri);
-        } else {
-            positional.push(args[i].clone());
+        match args[i].as_str() {
+            "--base-uri" => {
+                i += 1;
+                base_uri = args.get(i).cloned().unwrap_or(base_uri);
+            }
+            // Scale levers for a large server-side emit. They set the env vars
+            // ros-madair-emit's `parquet` module reads, so the clustering config
+            // need not be threaded through the CLI's empty config map:
+            //  - partition each model's tiles per nodegroup, so each COPY sort is
+            //    one nodegroup (~hundreds of k rows) not the whole model (millions);
+            //  - drop the render-summary __cache (sheds ~49% of tile `data`);
+            //  - raise the DuckDB memory cap above the 512MB on-device default.
+            "--partition-by-nodegroup" => {
+                std::env::set_var("ROS_MADAIR_EMIT_PARTITION_BY_NODEGROUP", "1")
+            }
+            "--no-render-cache" => std::env::set_var("ROS_MADAIR_EMIT_RENDER_CACHE", "0"),
+            "--memory-limit" => {
+                i += 1;
+                if let Some(v) = args.get(i) {
+                    std::env::set_var("ROS_MADAIR_EMIT_MEMORY_LIMIT", v);
+                }
+            }
+            _ => positional.push(args[i].clone()),
         }
         i += 1;
     }
