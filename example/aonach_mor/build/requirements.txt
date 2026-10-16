@@ -1,0 +1,4 @@
+# Aonach Mór synthetic-corpus generation + graph analysis (build-time only).
+numpy>=1.26        # power-law org sizes, deterministic sampling
+networkx>=3.0      # "really look at the edges": reachability, chain-depth, degree, components
+Faker>=24.0        # believable names/handles (optional; falls back to the Irish roster)

@@ -277,6 +277,60 @@ the emit-time **tier** (`exclude_nodegroups`) that never ships the bytes at all.
   two `ros-madair-docs` demos — concept-picker and layered-search — from hand-written SQL
   to the compiler (the site-references demo is already repointed).
 
+## Caveats & architectural debt (to revise)
+
+This section is deliberately blunt: the spatial layer and the Aonach Mór
+"Responder" enrichment were explored iteratively and are **not settled**. Read
+this before building on either.
+
+- **Spatial ownership is UNDECIDED — and the shipped code conflicts with the
+  recorded decision.** An earlier decision (memory `spatial-via-flatbush-not-
+  geoclustering`) said spatial is *not* RM's job: a standalone R-tree (flatbush)
+  owns geometry, RM composes the id-set via edges, and in-engine Z-order / `geo_*`
+  / the DuckDB spatial extension are dropped. The code then went the *other* way:
+  an in-engine **grid** (`grid_<graph>.parquet`) with a `GridBox` predicate that
+  computes Morton cells via `ros_madair_handlers::cells_in_box` — RM doing
+  geometry. A review panel scored grid (A) vs flatbush-delegate (B) and landed on
+  **defer**: the distinguishing numbers are unmeasurable until footprints are real
+  polygons (see next point). `GridBox` ships as the **interim** spatial predicate
+  for the live 763k demo; whether it stays, is replaced by flatbush delegation, or
+  becomes a *complementary* design (flatbush returns exact ids, RM's grid bounds a
+  faceted search, intersect) is an **open owner decision**, not a settled one.
+- **Footprints are POINTS, not polygons.** `emit_buildings.py` writes a
+  single-point `FeatureCollection`; footprints are meant to be polygon/
+  multipolygon. This shortcut makes the grid trivially correct on the current data
+  and **masks every real spatial trade-off** — the panel's verdict is explicitly
+  blocked on this. *Nothing honest about the spatial choice can be decided until
+  the emitter writes real geometry.* The `emit` bbox→cells fan-out exists and is
+  superset-correct for polygons, but is dormant on points.
+- **Shelved ideas (do not resurrect without a measured reason):** a dense
+  integer-ordinal shared between flatbush and the RM stores (brittle positional
+  coupling — a silent-wrong-building risk in a safety path; only revisit if a
+  measured byte problem forces it, and prefer an explicit id map to insertion
+  order). A second review-panel re-run (more deliberation on point data the first
+  panel already declared undiscriminating).
+- **Known clean-up both spatial options agree on, NOT yet done:** drop the DuckDB
+  spatial extension dependency + the legacy `Expr::Bbox`/`ST_Intersects` fine step
+  + `geo_*` promotion. This is the real offline win and is orthogonal to the
+  grid-vs-flatbush choice.
+- **`GridBox` has a `MAX_BOX_CELLS` cap** that hard-errors (loudly, never a silent
+  miss) on a near-regional query box; a real hazard-footprint size distribution
+  was never checked against it.
+- **The Aonach Mór "Responder" enrichment is HALF-BUILT.** The building model
+  gained `insured_value` (TIV) + `capacity` nodes and emit writes them, but the
+  live 763k substrate predates that and the rest is unwritten: organisations,
+  person→building keyholder/contact links, hazard footprints, exposure, and
+  insurance policies (generators planned per the port plan; models exist as CSV).
+  The intended demo beats — field flow (tap→facilities+capacity+contacts, two
+  **signed** owner-slices composed in-browser), the insurer **default-deny window**
+  + **ΣTIV accumulation**, and the **break-it** beat (over-reach→deny is browser-
+  doable; tamper→refuse is the native/app's job) — are the deliverable; spatial is
+  only a pre-filter and is *not* on that critical path.
+- **Live demos:** `/docs/aonach-mor` is the reliable tabbed resilience demo
+  (sample + chunked "full city"); `/docs/aonach-763k` is the interim grid-based
+  scale demo on the 763k substrate. The docs page proves *capability*, not the
+  crypto-trust mechanic (which lives in the app).
+
 ## Dependencies
 
 Rós Madair depends on [alizarin-core](https://github.com/flaxandteal/alizarin)

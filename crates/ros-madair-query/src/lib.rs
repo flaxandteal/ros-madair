@@ -102,6 +102,24 @@ pub enum Expr {
         max_lng: f64,
         max_lat: f64,
     },
+    /// Spatial prune via the grid-cell edge (`grid_<graphid>.parquet`). Like
+    /// [`Expr::Bbox`] it selects resources near the query box, but it lowers to a
+    /// `cell IN (cells_in_box(...))` semijoin over the cell-sorted grid edge —
+    /// reading only the overlapping cells' row groups — instead of scanning the
+    /// `tiles` view's promoted `geo_*` columns (which, once tiles are partitioned
+    /// by nodegroup, cannot zone-map-prune the geo-less partitions). It is a
+    /// cell-granular SUPERSET (a resource in a box-edge cell can fall just outside
+    /// the exact box, ~cell-size slop), so like `Bbox` it compiles coarse and
+    /// cannot be soundly negated; refine exactly client-side if needed. The
+    /// in-substrate spatial prune — no R-tree download, no `tiles` scan.
+    /// Substrate-only (`ros-madair-duck`/`-compile`).
+    GridBox {
+        path: String,
+        min_lng: f64,
+        min_lat: f64,
+        max_lng: f64,
+        max_lat: f64,
+    },
     /// Cross-resource PATH predicate: resources whose `path` link points at a
     /// resource (of `model`) that matches `where`. `path` is a
     /// `resource-instance(-list)` node alias (dot-qualified to reach it through
@@ -662,6 +680,15 @@ fn explain_expr(expr: &Expr, resolver: &PathResolver, graph: &StaticGraph) -> St
         } => {
             format!("{path} lies within ({min_lng}, {min_lat})–({max_lng}, {max_lat})")
         }
+        Expr::GridBox {
+            path,
+            min_lng,
+            min_lat,
+            max_lng,
+            max_lat,
+        } => {
+            format!("{path} lies in a grid cell overlapping ({min_lng}, {min_lat})–({max_lng}, {max_lat})")
+        }
         Expr::HasLink { path, target } => match target {
             Some(t) => format!("{path} links to {t}"),
             None => format!("{path} has any link"),
@@ -720,6 +747,7 @@ fn explain_leaf_ng(expr: &Expr, resolver: &PathResolver) -> Option<String> {
         Expr::Concept { path, .. }
         | Expr::Range { path, .. }
         | Expr::Bbox { path, .. }
+        | Expr::GridBox { path, .. }
         | Expr::HasLink { path, .. }
         | Expr::OnLink { path, .. } => resolver
             .resolve(path)
@@ -896,6 +924,23 @@ mod tests {
             json.contains("\"where\""),
             "inner serialized as `where`: {json}"
         );
+        let back: Expr = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, ir, "round-trips");
+    }
+
+    #[test]
+    fn grid_box_serde_roundtrips() {
+        // The browser emits this as `grid_box`; it must round-trip so the wasm
+        // compiler lowers it to the grid-cell semijoin.
+        let ir = Expr::GridBox {
+            path: "footprint".to_string(),
+            min_lng: 80.2,
+            min_lat: 13.0,
+            max_lng: 80.3,
+            max_lat: 13.1,
+        };
+        let json = serde_json::to_string(&ir).unwrap();
+        assert!(json.contains("\"grid_box\""), "tagged snake_case: {json}");
         let back: Expr = serde_json::from_str(&json).unwrap();
         assert_eq!(back, ir, "round-trips");
     }

@@ -241,6 +241,66 @@
      "sortorder": 14,
      "ontologyclass": "http://www.cidoc-crm.org/cidoc-crm/E62_String",
      "nodegroup_id": "2c6779b2-1366-59bc-bb0a-1e574930c200"
+    },
+    {
+     "nodeid": "bb8f7871-5ec1-5b25-a592-ba2bf2e631b0",
+     "name": "Value dimension",
+     "alias": "value_dimension",
+     "datatype": "semantic",
+     "graph_id": "0f366bdd-8e7f-519e-8ebc-ebff8a3e99a9",
+     "istopnode": false,
+     "is_collector": true,
+     "isrequired": false,
+     "issearchable": false,
+     "exportable": true,
+     "sortorder": 15,
+     "ontologyclass": "http://www.cidoc-crm.org/cidoc-crm/E54_Dimension",
+     "nodegroup_id": "bb8f7871-5ec1-5b25-a592-ba2bf2e631b0"
+    },
+    {
+     "nodeid": "b43d767c-46e7-53ac-a91a-dadd7a500f5f",
+     "name": "Insured value",
+     "alias": "insured_value",
+     "datatype": "number",
+     "graph_id": "0f366bdd-8e7f-519e-8ebc-ebff8a3e99a9",
+     "istopnode": false,
+     "is_collector": false,
+     "isrequired": false,
+     "issearchable": true,
+     "exportable": true,
+     "sortorder": 16,
+     "ontologyclass": "http://www.cidoc-crm.org/cidoc-crm/E60_Number",
+     "nodegroup_id": "bb8f7871-5ec1-5b25-a592-ba2bf2e631b0"
+    },
+    {
+     "nodeid": "3b85f7f4-feed-5245-a7e3-ddf9ca76c0f3",
+     "name": "Capacity dimension",
+     "alias": "capacity_dimension",
+     "datatype": "semantic",
+     "graph_id": "0f366bdd-8e7f-519e-8ebc-ebff8a3e99a9",
+     "istopnode": false,
+     "is_collector": true,
+     "isrequired": false,
+     "issearchable": false,
+     "exportable": true,
+     "sortorder": 17,
+     "ontologyclass": "http://www.cidoc-crm.org/cidoc-crm/E54_Dimension",
+     "nodegroup_id": "3b85f7f4-feed-5245-a7e3-ddf9ca76c0f3"
+    },
+    {
+     "nodeid": "1f65b2e7-4125-545b-9311-03091ff4fa6d",
+     "name": "Occupant capacity",
+     "alias": "capacity",
+     "datatype": "number",
+     "graph_id": "0f366bdd-8e7f-519e-8ebc-ebff8a3e99a9",
+     "istopnode": false,
+     "is_collector": false,
+     "isrequired": false,
+     "issearchable": true,
+     "exportable": true,
+     "sortorder": 18,
+     "ontologyclass": "http://www.cidoc-crm.org/cidoc-crm/E60_Number",
+     "nodegroup_id": "3b85f7f4-feed-5245-a7e3-ddf9ca76c0f3"
     }
    ],
    "nodegroups": [
@@ -291,6 +351,16 @@
     },
     {
      "nodegroupid": "2c6779b2-1366-59bc-bb0a-1e574930c200",
+     "cardinality": "1",
+     "parentnodegroup_id": null
+    },
+    {
+     "nodegroupid": "bb8f7871-5ec1-5b25-a592-ba2bf2e631b0",
+     "cardinality": "1",
+     "parentnodegroup_id": null
+    },
+    {
+     "nodegroupid": "3b85f7f4-feed-5245-a7e3-ddf9ca76c0f3",
      "cardinality": "1",
      "parentnodegroup_id": null
     }
@@ -393,6 +463,34 @@
      "rangenode_id": "2c6779b2-1366-59bc-bb0a-1e574930c200",
      "graph_id": "0f366bdd-8e7f-519e-8ebc-ebff8a3e99a9",
      "ontologyproperty": "http://www.cidoc-crm.org/cidoc-crm/P3_has_note"
+    },
+    {
+     "edgeid": "7ffd6098-532d-5e5b-abef-d7cce12ce827",
+     "domainnode_id": "d825e61b-6412-5c9a-9151-ffe10a5cd7cd",
+     "rangenode_id": "bb8f7871-5ec1-5b25-a592-ba2bf2e631b0",
+     "graph_id": "0f366bdd-8e7f-519e-8ebc-ebff8a3e99a9",
+     "ontologyproperty": "http://www.cidoc-crm.org/cidoc-crm/P43_has_dimension"
+    },
+    {
+     "edgeid": "f63a61d8-3b64-5886-af3c-e592c9ccaa23",
+     "domainnode_id": "bb8f7871-5ec1-5b25-a592-ba2bf2e631b0",
+     "rangenode_id": "b43d767c-46e7-53ac-a91a-dadd7a500f5f",
+     "graph_id": "0f366bdd-8e7f-519e-8ebc-ebff8a3e99a9",
+     "ontologyproperty": "http://www.cidoc-crm.org/cidoc-crm/P90_has_value"
+    },
+    {
+     "edgeid": "c3d22c08-0cbd-5751-bbd9-0825017798cc",
+     "domainnode_id": "d825e61b-6412-5c9a-9151-ffe10a5cd7cd",
+     "rangenode_id": "3b85f7f4-feed-5245-a7e3-ddf9ca76c0f3",
+     "graph_id": "0f366bdd-8e7f-519e-8ebc-ebff8a3e99a9",
+     "ontologyproperty": "http://www.cidoc-crm.org/cidoc-crm/P43_has_dimension"
+    },
+    {
+     "edgeid": "2593bbdb-b254-50b9-b029-ea01c2fd18b2",
+     "domainnode_id": "3b85f7f4-feed-5245-a7e3-ddf9ca76c0f3",
+     "rangenode_id": "1f65b2e7-4125-545b-9311-03091ff4fa6d",
+     "graph_id": "0f366bdd-8e7f-519e-8ebc-ebff8a3e99a9",
+     "ontologyproperty": "http://www.cidoc-crm.org/cidoc-crm/P90_has_value"
     }
    ]
   }

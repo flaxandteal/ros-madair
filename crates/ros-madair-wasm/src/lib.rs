@@ -65,6 +65,7 @@ impl Compiler {
         has_edges: bool,
         has_concept_index: bool,
         has_ordered: bool,
+        has_grid: bool,
         spatial: bool,
     ) -> Result<String, JsError> {
         // Thin FFI shell over the pure core (a `#[wasm_bindgen]` method returning
@@ -76,6 +77,7 @@ impl Compiler {
             has_edges,
             has_concept_index,
             has_ordered,
+            has_grid,
             spatial,
         )
         .map_err(|e| JsError::new(&e))
@@ -93,6 +95,7 @@ impl Compiler {
         has_edges: bool,
         has_concept_index: bool,
         has_ordered: bool,
+        has_grid: bool,
         spatial: bool,
     ) -> Result<String, String> {
         let query: Query =
@@ -118,6 +121,7 @@ impl Compiler {
             has_edges,
             has_concept_index,
             has_ordered,
+            has_grid,
             spatial,
         )
         .map_err(|e| e.0)
@@ -136,6 +140,7 @@ pub fn compile(
     has_edges: bool,
     has_concept_index: bool,
     has_ordered: bool,
+    has_grid: bool,
     spatial: bool,
 ) -> Result<String, JsError> {
     Compiler::new(graphs_json)?.compile(
@@ -144,8 +149,33 @@ pub fn compile(
         has_edges,
         has_concept_index,
         has_ordered,
+        has_grid,
         spatial,
     )
+}
+
+/// The grid cells a bounding box overlaps, as a comma-separated list the browser
+/// splices straight into `… WHERE cell IN (<here>)`. Uses the SAME
+/// `ros_madair_handlers::cells_in_box` contract emit's `grid_cell` wrote with, so a
+/// browser-built grid render query (`SELECT resource_id, descriptor, render_summary
+/// FROM grid WHERE cell IN (…)`) hits exactly the cells the compiler's `GridBox`
+/// would. Throws on a degenerate or too-large box (see `cells_in_box`).
+#[wasm_bindgen]
+pub fn cells_in_box(
+    min_lng: f64,
+    min_lat: f64,
+    max_lng: f64,
+    max_lat: f64,
+) -> Result<String, JsError> {
+    ros_madair_handlers::cells_in_box(min_lng, min_lat, max_lng, max_lat)
+        .map(|cells| {
+            cells
+                .iter()
+                .map(|c| c.to_string())
+                .collect::<Vec<_>>()
+                .join(",")
+        })
+        .map_err(|e| JsError::new(&e))
 }
 
 /// Parse one-or-many Arches model documents into indexed `StaticGraph`s. Mirrors

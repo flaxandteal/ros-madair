@@ -61,7 +61,11 @@ pub mod verify;
 /// melted `concepts_<slug>.parquet` / `ordered_<slug>.parquet` axis stores. A v1
 /// reader would find no `concept_ids`/`q_ordered` columns and mis-answer every
 /// facet/range query — exactly the silent-misread hazard this gates.
-pub const FORMAT_VERSION: u32 = 2;
+// v3 adds the additive `resources_<graphid>.parquet` entry table (per-resource
+// slug/descriptor/render-summary spine) and `grid_<graphid>.parquet` spatial
+// cell edge. A v2 reader would simply not know them; a reader that lowers a
+// `GridBox` or reads a render summary needs v3, so the version gates it.
+pub const FORMAT_VERSION: u32 = 3;
 
 // ---------------------------------------------------------------------------
 // Snapshot id derivation (the ONE copy — writer and reader both call it)

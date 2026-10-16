@@ -103,6 +103,99 @@ pub fn quantize_number(value: f64, decimals: u32) -> Option<i64> {
     })
 }
 
+// ---------------------------------------------------------------------------
+// Grid-cell spatial contract
+// ---------------------------------------------------------------------------
+//
+// A resource's geometry centroid → a discrete whole-world cell. emit writes one
+// `grid_<graphid>.parquet` row per resource (`cell, resource_id`) sorted by
+// `cell`; the compiler lowers a `GridBox` to `cell IN (cells_in_box(...))`. Both
+// MUST compute cells identically or the `IN` silently misses rows — so, exactly
+// like [`number_scale`], the cell scheme lives in ONE place (here, wasm-clean)
+// that emit and compile share. The scheme: a `GRID_BITS`-per-axis Z-order
+// (Morton) cell, whole-world extent. 16 bits ≈ 360°/65536 ≈ 0.0055° ≈ 600 m
+// cells — ample locality for a city-scale query; a box typically spans O(10)
+// cells per axis.
+
+/// Bits per axis in the grid cell. The cell is a 2·GRID_BITS Z-order code.
+pub const GRID_BITS: u32 = 16;
+/// A box spanning more than this many cells is almost certainly a mistake (a
+/// near-global query); [`cells_in_box`] refuses it loudly rather than emit a
+/// multi-thousand-element `IN` list. 16384 = a 128×128-cell window (~77 km²).
+pub const MAX_BOX_CELLS: usize = 16_384;
+
+/// Spread the low [`GRID_BITS`] of `x` into even bit positions of a u64.
+fn spread_bits(x: u32) -> u64 {
+    let mut x = x as u64 & 0xFFFF_FFFF;
+    x = (x | (x << 16)) & 0x0000_FFFF_0000_FFFF;
+    x = (x | (x << 8)) & 0x00FF_00FF_00FF_00FF;
+    x = (x | (x << 4)) & 0x0F0F_0F0F_0F0F_0F0F;
+    x = (x | (x << 2)) & 0x3333_3333_3333_3333;
+    x = (x | (x << 1)) & 0x5555_5555_5555_5555;
+    x
+}
+
+/// Interleave `a` (even bits) and `b` (odd bits) — a 2D Morton / Z-order code.
+fn morton2(a: u32, b: u32) -> u64 {
+    spread_bits(a) | (spread_bits(b) << 1)
+}
+
+/// Quantize one longitude to its axis grid index (0..2^GRID_BITS − 1). Monotonic
+/// in `lng`, so a point inside `[min_lng, max_lng]` always lands in
+/// `[lng_index(min_lng), lng_index(max_lng)]` — the property [`cells_in_box`]
+/// relies on to cover the box exactly.
+fn lng_index(lng: f64) -> u32 {
+    let n = ((lng + 180.0) / 360.0).clamp(0.0, 1.0);
+    (n * ((1u32 << GRID_BITS) - 1) as f64).round() as u32
+}
+
+/// Quantize one latitude to its axis grid index (0..2^GRID_BITS − 1).
+fn lat_index(lat: f64) -> u32 {
+    let n = ((lat + 90.0) / 180.0).clamp(0.0, 1.0);
+    (n * ((1u32 << GRID_BITS) - 1) as f64).round() as u32
+}
+
+/// A geometry centroid `(lng, lat)` → its Z-order grid cell. The value emit
+/// stores in `grid_<graphid>.parquet`'s `cell` column. Returned as `i64` (the
+/// DuckDB `BIGINT` the cell column holds); always non-negative (≤ 2^(2·GRID_BITS)).
+pub fn grid_cell(lng: f64, lat: f64) -> i64 {
+    morton2(lng_index(lng), lat_index(lat)) as i64
+}
+
+/// Every grid cell a bounding box overlaps — the `cell IN (…)` set a `GridBox`
+/// compiles to. Enumerates the inclusive axis-index rectangle and Morton-codes
+/// each; because [`lng_index`]/[`lat_index`] are monotonic, this covers exactly
+/// the cells any in-box centroid can occupy (no false negatives). `Err` if the
+/// box is degenerate (`min > max`) or spans more than [`MAX_BOX_CELLS`] — a loud
+/// failure, never a silent truncation.
+pub fn cells_in_box(
+    min_lng: f64,
+    min_lat: f64,
+    max_lng: f64,
+    max_lat: f64,
+) -> Result<Vec<i64>, String> {
+    if min_lng > max_lng || min_lat > max_lat {
+        return Err(format!(
+            "degenerate grid box: min ({min_lng}, {min_lat}) > max ({max_lng}, {max_lat})"
+        ));
+    }
+    let (gx0, gx1) = (lng_index(min_lng), lng_index(max_lng));
+    let (gy0, gy1) = (lat_index(min_lat), lat_index(max_lat));
+    let count = (gx1 - gx0 + 1) as usize * (gy1 - gy0 + 1) as usize;
+    if count > MAX_BOX_CELLS {
+        return Err(format!(
+            "grid box spans {count} cells (> {MAX_BOX_CELLS}); the query area is too large for a cell-list prune"
+        ));
+    }
+    let mut cells = Vec::with_capacity(count);
+    for gy in gy0..=gy1 {
+        for gx in gx0..=gx1 {
+            cells.push(morton2(gx, gy) as i64);
+        }
+    }
+    Ok(cells)
+}
+
 /// The built-in `number` handler: a `number` node is [`IndexClass::Ordered`],
 /// its value melted into the node-keyed `ordered_*` store and range-queryable.
 /// Keys are the RAW numeric string; the emitter quantizes them via
@@ -330,6 +423,43 @@ mod tests {
     #[test]
     fn version_is_real() {
         assert_ne!(CLM_CORE_VERSION, "unknown");
+    }
+
+    #[test]
+    fn grid_cell_is_deterministic_and_nonnegative() {
+        // Same point → same cell (the emit/compile contract rests on this).
+        let a = grid_cell(80.27, 13.08);
+        let b = grid_cell(80.27, 13.08);
+        assert_eq!(a, b);
+        assert!(a >= 0);
+        // Distinct faraway points → distinct cells.
+        assert_ne!(grid_cell(80.27, 13.08), grid_cell(-122.4, 37.8));
+    }
+
+    #[test]
+    fn cells_in_box_covers_every_contained_point() {
+        // Any centroid inside the box must have its grid_cell present in the
+        // box's cell set — the no-false-negative property the IN prune needs.
+        let (min_lng, min_lat, max_lng, max_lat) = (80.20, 13.00, 80.30, 13.10);
+        let cells = cells_in_box(min_lng, min_lat, max_lng, max_lat).unwrap();
+        let set: std::collections::HashSet<i64> = cells.iter().copied().collect();
+        assert!(!set.is_empty());
+        for i in 0..=10 {
+            for j in 0..=10 {
+                let lng = min_lng + (max_lng - min_lng) * (i as f64 / 10.0);
+                let lat = min_lat + (max_lat - min_lat) * (j as f64 / 10.0);
+                assert!(
+                    set.contains(&grid_cell(lng, lat)),
+                    "cell for ({lng},{lat}) missing from box set"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn cells_in_box_rejects_degenerate_and_oversize() {
+        assert!(cells_in_box(80.3, 13.0, 80.2, 13.1).is_err()); // min_lng > max_lng
+        assert!(cells_in_box(-180.0, -90.0, 180.0, 90.0).is_err()); // whole world
     }
 
     #[test]

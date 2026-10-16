@@ -13,7 +13,11 @@ description = "The pure Query IR → DuckDB SQL lowering (no libduckdb): compile
 
 [dependencies]
 alizarin-core.workspace = true
-ros-madair-query = { path = "../ros-madair-query", version = "0.1.0-alpha.24" }
+ros-madair-query = { path = "../ros-madair-query", version = "0.1.0-alpha.25" }
+# The shared grid-cell contract: emit stores `grid_cell`, the compiler lowers a
+# GridBox to `cell IN (cells_in_box(...))` — the SAME scheme, from ONE crate, or
+# the IN silently misses. Handlers is wasm-clean, so compile stays wasm-buildable.
+ros-madair-handlers = { path = "../ros-madair-handlers", version = "0.1.0-alpha.25" }
 serde_json = "1"
 
 # WASM: alizarin-core pulls uuid v4 → getrandom 0.2, which refuses to build for

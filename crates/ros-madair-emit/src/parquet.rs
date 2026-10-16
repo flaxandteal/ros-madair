@@ -121,6 +121,8 @@ pub struct ParquetModelSummary {
     pub concepts: usize,
     /// Melted ordered (date/edtf) rows written to `ordered_<slug>.parquet`.
     pub ordered: usize,
+    /// Grid-cell edge rows written to `grid_<slug>.parquet` (one per geo resource).
+    pub grid: usize,
 }
 
 // ---------------------------------------------------------------------------
@@ -524,6 +526,59 @@ fn write_ng_sidecar(
 /// Every promoted column is a pure function of the tile (+ the resource's
 /// cluster key), so this holds one tile's worth of state at a time.
 #[allow(clippy::too_many_arguments)]
+/// Flatten one related-resource cache object to the compact `{id, title}` a
+/// render card needs, dropping the fat `descriptors`/`meta`.
+fn push_related(e: &serde_json::Value, acc: &mut Vec<serde_json::Value>) {
+    if let serde_json::Value::Object(o) = e {
+        acc.push(serde_json::json!({
+            "id": o.get("id").cloned().unwrap_or(serde_json::Value::Null),
+            "title": o.get("title").cloned().unwrap_or(serde_json::Value::Null),
+        }));
+    }
+}
+
+/// Project the per-tile hydration cache (`r.cache` = `{tileId: {nodeId:
+/// CacheEntry}}`, where a `CacheEntry` is an untagged single `{id,title,…}` or a
+/// list `{"_":[…]}`) into a COMPACT per-resource render summary
+/// `{nodeId: [{id, title}]}` — the handful of related titles a result card shows
+/// (e.g. the linked site's name → ward). Merged across the resource's tiles so
+/// it is one blob per resource, carried on the entry table / grid edge instead
+/// of buried per-tile. `None` when there is no cache (render cache off, or the
+/// resource has no links). This is the Q1 fix: the render header lives with the
+/// resource, not scattered across its ~10 nodegroup-partition tile rows.
+fn build_render_summary(cache: Option<&serde_json::Value>) -> Option<String> {
+    let serde_json::Value::Object(tiles) = cache? else {
+        return None;
+    };
+    let mut by_node: std::collections::BTreeMap<String, Vec<serde_json::Value>> =
+        std::collections::BTreeMap::new();
+    for slice in tiles.values() {
+        let serde_json::Value::Object(nodes) = slice else {
+            continue;
+        };
+        for (node_id, entry) in nodes {
+            let acc = by_node.entry(node_id.clone()).or_default();
+            match entry {
+                // List cache entry: the related resources live under "_".
+                serde_json::Value::Object(o) if o.get("_").is_some() => {
+                    if let Some(serde_json::Value::Array(list)) = o.get("_") {
+                        for e in list {
+                            push_related(e, acc);
+                        }
+                    }
+                }
+                // Single cache entry: the object itself is the relation.
+                _ => push_related(entry, acc),
+            }
+        }
+    }
+    by_node.retain(|_, v| !v.is_empty());
+    if by_node.is_empty() {
+        return None;
+    }
+    serde_json::to_string(&by_node).ok()
+}
+
 fn append_resource(
     stage: &TileStage,
     model_slug: &str,
@@ -535,9 +590,47 @@ fn append_resource(
     ng_intervals: &HashMap<String, (i64, i64)>,
 ) -> Result<(), EmitError> {
     let name = r.resourceinstance.descriptors.name.clone();
-    let centroid = first_geo_bbox(r, graph, registry)
-        .map(|(mnx, mny, mxx, mxy)| ((mnx + mxx) / 2.0, (mny + mxy) / 2.0));
+    let geo_bbox = first_geo_bbox(r, graph, registry);
+    let centroid = geo_bbox.map(|(mnx, mny, mxx, mxy)| ((mnx + mxx) / 2.0, (mny + mxy) / 2.0));
     let key = cluster_key(&cfg.dimensions, centroid, name.as_deref().unwrap_or(""));
+
+    // Entry table (resources_<graphid>.parquet): ONE row per resource — the slug
+    // + model-scoping + display-name spine a consumer lists/counts/backlinks on,
+    // sorted by resource_id so an id-probe prunes. Written for EVERY resource
+    // (even tile-less), before the tiles early-return.
+    let rid = &r.resourceinstance.resourceinstanceid;
+    let gid = &r.resourceinstance.graph_id;
+    let legacy = &r.resourceinstance.legacyid;
+    {
+        let mut ra = stage.conn.appender("resources_stage")?;
+        ra.append_row(params![model_slug, rid, gid, legacy, &name])?;
+    }
+
+    // Grid edge (grid_<graphid>.parquet): one row per (resource, CELL THE FOOTPRINT
+    // BBOX OVERLAPS) + the render fields (descriptor, render_summary). Indexing the
+    // footprint's whole bbox — not just its centroid — makes `GridBox` a true
+    // SUPERSET of "footprint intersects the query box": a building whose footprint
+    // reaches into the box is returned even if its centroid lies outside, so a
+    // responder NEVER misses an asset in the hazard (over-inclusion is the safe
+    // failure; under-inclusion is not). The cell scheme is the SHARED contract
+    // (ros_madair_handlers::cells_in_box) emit and the compiler both compute, so a
+    // `GridBox`'s `cell IN (…)` can't silently miss. Sorted by cell at write, so a
+    // box query reads only the overlapping cells' row groups — and the render data
+    // RIDES that prune (the Q1 insight: the render lands on the exact rows the
+    // spatial query already touches). A multi-cell footprint yields >1 row, so a
+    // reader dedups by resource_id (the compiler's `SELECT DISTINCT` already does).
+    if let Some((mnx, mny, mxx, mxy)) = geo_bbox {
+        // A building footprint spans O(1) cells; cells_in_box only errs on a
+        // degenerate/global box, so fall back to the centroid cell (never drop it).
+        let cells = ros_madair_handlers::cells_in_box(mnx, mny, mxx, mxy).unwrap_or_else(|_| {
+            vec![ros_madair_handlers::grid_cell((mnx + mxx) / 2.0, (mny + mxy) / 2.0)]
+        });
+        let summary = build_render_summary(r.cache.as_ref());
+        let mut ga = stage.conn.appender("grid_stage")?;
+        for cell in cells {
+            ga.append_row(params![model_slug, cell, rid, &name, &summary])?;
+        }
+    }
 
     let Some(tiles) = r.tiles.as_ref() else {
         return Ok(());
@@ -825,7 +918,13 @@ impl TileStage {
                nodegroup_id VARCHAR, node_id VARCHAR, concept_id VARCHAR);
              CREATE TABLE ordered_stage (
                model_slug VARCHAR, resource_id VARCHAR, tile_id VARCHAR,
-               nodegroup_id VARCHAR, node_id VARCHAR, q_ordered BIGINT);",
+               nodegroup_id VARCHAR, node_id VARCHAR, q_ordered BIGINT);
+             CREATE TABLE resources_stage (
+               model_slug VARCHAR, resource_id VARCHAR, graph_id VARCHAR,
+               legacyid VARCHAR, descriptor VARCHAR);
+             CREATE TABLE grid_stage (
+               model_slug VARCHAR, cell BIGINT, resource_id VARCHAR,
+               descriptor VARCHAR, render_summary VARCHAR);",
             sql_lit(&scratch.display().to_string())
         ))
         .map_err(|e| format!("duckdb stage schema: {e}"))?;
@@ -976,6 +1075,35 @@ impl TileStage {
             .map_err(|e| format!("duckdb COPY (ordered): {e}"))?;
         let ordered = count("SELECT count(*) FROM ordered_stage WHERE model_slug = ?")? as usize;
 
+        // Entry table: one row per resource (slug/model/display-name spine),
+        // sorted by resource_id so a scattered id-probe prunes to the row groups
+        // the ids hit (the only prune available — no Bloom filters). Carries no
+        // hydration `data`, so it is small; a consumer lists/counts/backlinks on it.
+        let resources_path = sibling("resources");
+        self.conn
+            .execute_batch(&format!(
+                "COPY (SELECT resource_id, graph_id, legacyid, descriptor \
+                 FROM resources_stage WHERE model_slug = '{slug_lit}' ORDER BY resource_id) \
+                 TO '{}' (FORMAT PARQUET, ROW_GROUP_SIZE {rgs});",
+                resources_path.display()
+            ))
+            .map_err(|e| format!("duckdb COPY (resources): {e}"))?;
+
+        // Grid edge: one row per geo-bearing resource, sorted by the Z-order cell
+        // so a `GridBox`'s `cell IN (…)` reads only the overlapping cells' row
+        // groups — and the render fields (descriptor, render_summary) ride that
+        // prune, so a spatial result renders without a scattered second fetch.
+        let grid_path = sibling("grid");
+        self.conn
+            .execute_batch(&format!(
+                "COPY (SELECT cell, resource_id, descriptor, render_summary \
+                 FROM grid_stage WHERE model_slug = '{slug_lit}' ORDER BY cell) \
+                 TO '{}' (FORMAT PARQUET, ROW_GROUP_SIZE {rgs});",
+                grid_path.display()
+            ))
+            .map_err(|e| format!("duckdb COPY (grid): {e}"))?;
+        let grid = count("SELECT count(*) FROM grid_stage WHERE model_slug = ?")? as usize;
+
         let row_groups: i64 = self
             .conn
             .query_row(
@@ -999,6 +1127,7 @@ impl TileStage {
             edges,
             concepts,
             ordered,
+            grid,
         })
     }
 }

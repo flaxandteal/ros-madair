@@ -288,6 +288,25 @@ def _record(gid, f, lng, lat, rng, zones, ages, glabels, sites, forced_role=None
     ]
     if sr:
         tiles.append(tile("service_roles", {nid("service_roles"): [sr]}, "role"))
+    # TIV (every building): height-scaled insured value. Raw in `data`; melts to the
+    # ordered store so the insurer window can SUM it over a footprint (the ΣTIV
+    # accumulation figure an underwriter recomputes after each event).
+    tiv = int(height * rng.uniform(50_000, 200_000))
+    tiles.append(tile("value_dimension", {nid("insured_value"): tiv}, "tiv"))
+    # Capacity: ONLY where a responder can USE the building — true facilities plus the
+    # shelter/muster capability tags ("shelters/hospitals in range with capacity ≥N").
+    # Ordinary housing has no responder capacity, so it carries none.
+    cap = None
+    if forced_role:
+        cap = {"Hospital": rng.randint(80, 600), "Emergency operations centre": rng.randint(40, 120),
+               "Fire station": rng.randint(20, 60), "Police station": rng.randint(20, 80),
+               "Water / pumping station": rng.randint(5, 20), "School": rng.randint(200, 1200)}.get(role)
+    elif tag == "Shelter":
+        cap = rng.randint(50, 400)
+    elif tag == "Muster point":
+        cap = rng.randint(100, 800)
+    if cap is not None:
+        tiles.append(tile("capacity_dimension", {nid("capacity"): cap}, "cap"))
     res = {
         "resourceinstance": {"resourceinstanceid": rid, "graph_id": GRAPHID, "name": name,
             "legacyid": f"bldg-{gid:07d}",
@@ -315,7 +334,14 @@ def building_stream(footprints, replicas, seed):
     for idx, f in enumerate(footprints):
         by_zone.setdefault(f["zone"], []).append(idx)
     for role, n in CRITICAL_FIXED.items():
-        pool = [i for z in CRIT_ZONES[role] for i in by_zone.get(z, [])]
+        # sorted(): CRIT_ZONES[role] is a set, so iterating it raw is hash-salted
+        # per process — which would place the fixed facilities at DIFFERENT gids
+        # (hence rids) in each emit process, and the sibling generators (persons/
+        # insurance/exposure) recover facility rids via building_stream in their OWN
+        # processes. Sorting makes facility placement seed-only-deterministic, so
+        # those cross-model keyholder/coverage/exposure links resolve without
+        # depending on a pinned PYTHONHASHSEED.
+        pool = [i for z in sorted(CRIT_ZONES[role]) for i in by_zone.get(z, [])]
         if not pool:
             pool = list(range(len(footprints)))
         chosen = rng.sample(pool, min(n, len(pool)))

@@ -125,6 +125,13 @@ pub struct DuckReader {
     /// Whether an `ordered_index` view is registered (sibling `ordered_*.parquet`) —
     /// drives `Expr::Range`. Absent for a pre-melt snapshot; a Range then errors.
     has_ordered: bool,
+    /// Whether a `grid` view is registered (sibling `grid_*.parquet`) — drives
+    /// `Expr::GridBox` (the cell-sorted spatial prune). Absent for a pre-v3 snapshot;
+    /// a GridBox then errors rather than mis-compiling.
+    has_grid: bool,
+    /// Whether a `resources` view is registered (sibling `resources_*.parquet`, the
+    /// per-resource entry table). Drives [`render_summaries`](Self::render_summaries).
+    has_resources: bool,
     /// Whether the `spatial` extension actually loaded (ST_Intersects available).
     /// Drives the `Expr::Bbox` fine step: present -> exact ST_Intersects; absent
     /// (mobile - no android spatial binary) -> coarse-only bbox-overlap. See the
@@ -236,12 +243,35 @@ impl DuckReader {
                     sql_lit(&ordered_glob)
                 ))
                 .is_ok();
+        // Grid-cell spatial edge (Expr::GridBox): the sibling grid_*.parquet,
+        // (cell, resource_id, descriptor, render_summary) sorted by cell. Best-effort
+        // like the others — a pre-v3 snapshot still OPENS; a GridBox then errors typed.
+        let grid_glob = parquet_glob.replace("tiles_", "grid_");
+        let has_grid = grid_glob != parquet_glob
+            && conn
+                .execute_batch(&format!(
+                    "CREATE VIEW grid AS SELECT * FROM read_parquet('{}');",
+                    sql_lit(&grid_glob)
+                ))
+                .is_ok();
+        // Entry table (resources_*.parquet): one row per resource (slug/model/name
+        // spine + render_summary), for render/list/backlink reads. Best-effort.
+        let resources_glob = parquet_glob.replace("tiles_", "resources_");
+        let has_resources = resources_glob != parquet_glob
+            && conn
+                .execute_batch(&format!(
+                    "CREATE VIEW resources AS SELECT * FROM read_parquet('{}');",
+                    sql_lit(&resources_glob)
+                ))
+                .is_ok();
         Ok(Self {
             conn,
             has_catalog: false,
             has_edges,
             has_concept_index,
             has_ordered,
+            has_grid,
+            has_resources,
             spatial,
         })
     }
@@ -412,6 +442,37 @@ impl DuckReader {
                 )
             ))?;
         }
+        // Grid edge across layers: a resource's cell is a whole-resource fact (one
+        // row), so the shadow key is `resource_id` alone — the topmost layer that
+        // carries the resource supersedes its cell (an overlay that moves/re-geocodes
+        // a resource replaces its grid row).
+        let grid_layers = layers_with(&conn, dirs, "grid_*.parquet");
+        let has_grid = !grid_layers.is_empty();
+        if has_grid {
+            conn.execute_batch(&format!(
+                "CREATE VIEW grid AS {};",
+                shadow_set_union(
+                    &grid_layers,
+                    &["resource_id"],
+                    "cell, resource_id, descriptor, render_summary",
+                )
+            ))?;
+        }
+        // Entry table across layers: one row per resource, so the shadow key is
+        // `resource_id` — the topmost layer's row wins (an overlay that re-titles a
+        // resource supersedes the base entry).
+        let resource_layers = layers_with(&conn, dirs, "resources_*.parquet");
+        let has_resources = !resource_layers.is_empty();
+        if has_resources {
+            conn.execute_batch(&format!(
+                "CREATE VIEW resources AS {};",
+                shadow_set_union(
+                    &resource_layers,
+                    &["resource_id"],
+                    "resource_id, graph_id, legacyid, descriptor",
+                )
+            ))?;
+        }
 
         Ok(Self {
             conn,
@@ -419,6 +480,8 @@ impl DuckReader {
             has_edges,
             has_concept_index,
             has_ordered,
+            has_grid,
+            has_resources,
             spatial,
         })
     }
@@ -464,6 +527,79 @@ impl DuckReader {
         for row in rows {
             let (id, name) = row?;
             out.entry(id).or_insert(name);
+        }
+        Ok(out)
+    }
+
+    /// Per-resource render summary for a set of resource ids — the compact
+    /// `{nodeId:[{id,title}]}` related-title blob (e.g. the linked site → ward) emit
+    /// carried on the grid edge, PLUS the resource's own descriptor. The render
+    /// header without a tile fetch: the Q1 fix, read from one small store. Empty
+    /// without a grid view. (A spatial result reads these columns for free from the
+    /// same cell-pruned `GridBox` scan; this by-id method serves non-spatial renders
+    /// and native/python callers.)
+    pub fn render_summaries(
+        &self,
+        uris: &[String],
+    ) -> Result<HashMap<String, (Option<String>, Option<String>)>, DuckError> {
+        let mut out = HashMap::new();
+        if uris.is_empty() || !self.has_grid {
+            return Ok(out);
+        }
+        let placeholders = std::iter::repeat_n("?", uris.len())
+            .collect::<Vec<_>>()
+            .join(",");
+        let sql = format!(
+            "SELECT resource_id, descriptor, render_summary FROM grid \
+             WHERE resource_id IN ({placeholders})"
+        );
+        let mut stmt = self.conn.prepare(&sql)?;
+        let rows = stmt.query_map(duckdb::params_from_iter(uris.iter()), |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, Option<String>>(1)?,
+                r.get::<_, Option<String>>(2)?,
+            ))
+        })?;
+        for row in rows {
+            let (id, descriptor, summary) = row?;
+            out.entry(id).or_insert((descriptor, summary));
+        }
+        Ok(out)
+    }
+
+    /// Entry-table rows for a set of resource ids: `(graph_id, legacyid, descriptor)`
+    /// read from the per-resource `resources` view — the slug/model-scoping/name
+    /// spine a consumer lists, counts, and slug-backlinks on (consumer limitation #1).
+    /// Small (no hydration `data`), sorted by `resource_id` so an id-probe prunes.
+    /// Empty without a `resources` view (pre-v3 snapshot).
+    pub fn resource_entries(
+        &self,
+        uris: &[String],
+    ) -> Result<HashMap<String, (String, Option<String>, Option<String>)>, DuckError> {
+        let mut out = HashMap::new();
+        if uris.is_empty() || !self.has_resources {
+            return Ok(out);
+        }
+        let placeholders = std::iter::repeat_n("?", uris.len())
+            .collect::<Vec<_>>()
+            .join(",");
+        let sql = format!(
+            "SELECT resource_id, graph_id, legacyid, descriptor FROM resources \
+             WHERE resource_id IN ({placeholders})"
+        );
+        let mut stmt = self.conn.prepare(&sql)?;
+        let rows = stmt.query_map(duckdb::params_from_iter(uris.iter()), |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, Option<String>>(2)?,
+                r.get::<_, Option<String>>(3)?,
+            ))
+        })?;
+        for row in rows {
+            let (id, graph_id, legacyid, descriptor) = row?;
+            out.entry(id).or_insert((graph_id, legacyid, descriptor));
         }
         Ok(out)
     }
@@ -683,6 +819,7 @@ impl DuckReader {
             self.has_edges,
             self.has_concept_index,
             self.has_ordered,
+            self.has_grid,
             self.spatial,
         )?)
     }

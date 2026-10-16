@@ -62,6 +62,7 @@ pub fn compile_query(
     has_edges: bool,
     has_concept_index: bool,
     has_ordered: bool,
+    has_grid: bool,
     spatial: bool,
 ) -> Result<String, CompileError> {
     match &query.r#where {
@@ -74,6 +75,7 @@ pub fn compile_query(
             has_edges,
             has_concept_index,
             has_ordered,
+            has_grid,
             spatial,
         ),
         None => Ok("SELECT DISTINCT resource_id FROM tiles".to_string()),
@@ -96,6 +98,7 @@ pub fn compile_expr(
     has_edges: bool,
     has_concept_index: bool,
     has_ordered: bool,
+    has_grid: bool,
     spatial: bool,
 ) -> Result<String, CompileError> {
     match expr {
@@ -115,6 +118,7 @@ pub fn compile_expr(
                         has_edges,
                         has_concept_index,
                         has_ordered,
+                        has_grid,
                         spatial,
                     )
                 })
@@ -137,6 +141,7 @@ pub fn compile_expr(
                         has_edges,
                         has_concept_index,
                         has_ordered,
+                        has_grid,
                         spatial,
                     )
                 })
@@ -169,6 +174,7 @@ pub fn compile_expr(
                 has_edges,
                 has_concept_index,
                 has_ordered,
+                has_grid,
                 spatial,
             )?;
             // Parenthesize the subtrahend: DuckDB gives INTERSECT higher precedence
@@ -286,6 +292,45 @@ pub fn compile_expr(
                 sql_lit(&ng)
             ))
         }
+        // Spatial prune over the cell-sorted grid edge: the box → its overlapping
+        // cells (the SHARED `cells_in_box` contract emit's `grid_cell` agrees with),
+        // then a `cell IN (…)` semijoin that reads only those cells' row groups. A
+        // cell-granular SUPERSET (see `first_coarse_path`), so no exact refine here.
+        Expr::GridBox {
+            path,
+            min_lng,
+            min_lat,
+            max_lng,
+            max_lat,
+        } => {
+            if !has_grid {
+                return Err(CompileError(format!(
+                    "grid-box on '{path}' needs the grid edge — this reader has no \
+                     grid_*.parquet (open a snapshot emitted at FORMAT_VERSION 3+ with \
+                     the grid slice)"
+                )));
+            }
+            // Validate the path names a geometry node (good errors), even though the
+            // grid edge is per-resource (one centroid cell), not per-node.
+            let (node, _) = resolve(graph, path)?;
+            expect_class(
+                node,
+                registry,
+                |c| matches!(c, IndexClass::SpatialBbox),
+                path,
+                "grid_box",
+            )?;
+            let cells = ros_madair_handlers::cells_in_box(*min_lng, *min_lat, *max_lng, *max_lat)
+                .map_err(CompileError)?;
+            let list = cells
+                .iter()
+                .map(|c| c.to_string())
+                .collect::<Vec<_>>()
+                .join(", ");
+            Ok(format!(
+                "SELECT DISTINCT resource_id FROM grid WHERE cell IN ({list})"
+            ))
+        }
         Expr::HasLink { path, target } => {
             if !has_edges {
                 return Err(CompileError(format!(
@@ -381,6 +426,7 @@ pub fn compile_expr(
                 has_edges,
                 has_concept_index,
                 has_ordered,
+                has_grid,
                 spatial,
             )?;
             Ok(format!(
@@ -420,6 +466,7 @@ pub fn compile_expr(
                 has_edges,
                 has_concept_index,
                 has_ordered,
+                has_grid,
                 spatial,
             )?;
             Ok(format!(
@@ -476,6 +523,13 @@ fn tile_nodegroup(
              but a backlink is resource-graph-wide, not node-scoped"
                 .into(),
         )),
+        // A grid-box is a resource-level spatial prune (over the per-resource grid
+        // edge), not a single-tile condition.
+        Expr::GridBox { .. } => Err(CompileError(
+            "grid_box cannot be an on_tile child — it is a resource-level spatial \
+             prune, not node-scoped to one tile"
+                .into(),
+        )),
     }
 }
 
@@ -495,6 +549,7 @@ fn compile_tile_cond(
     has_edges: bool,
     has_concept_index: bool,
     has_ordered: bool,
+    has_grid: bool,
     spatial: bool,
 ) -> Result<String, CompileError> {
     match expr {
@@ -515,6 +570,7 @@ fn compile_tile_cond(
                         has_edges,
                         has_concept_index,
                         has_ordered,
+                        has_grid,
                         spatial,
                     )
                 })
@@ -538,6 +594,7 @@ fn compile_tile_cond(
                         has_edges,
                         has_concept_index,
                         has_ordered,
+                        has_grid,
                         spatial,
                     )
                 })
@@ -566,6 +623,7 @@ fn compile_tile_cond(
                     has_edges,
                     has_concept_index,
                     has_ordered,
+                    has_grid,
                     spatial
                 )?
             ))
@@ -721,6 +779,7 @@ fn compile_tile_cond(
                 has_edges,
                 has_concept_index,
                 has_ordered,
+                has_grid,
                 spatial,
             )?;
             Ok(format!(
@@ -737,6 +796,10 @@ fn compile_tile_cond(
         // A backlink is resource-graph-wide, not a single-tile condition.
         Expr::Backlink { .. } => Err(CompileError(
             "backlink cannot be an on_tile child — it is not node-scoped".to_string(),
+        )),
+        // A grid-box is a resource-level spatial prune, not a single-tile condition.
+        Expr::GridBox { .. } => Err(CompileError(
+            "grid_box cannot be an on_tile child — it is a resource-level spatial prune".to_string(),
         )),
     }
 }
@@ -802,6 +865,10 @@ fn first_coarse_path(expr: &Expr, spatial: bool) -> Option<&str> {
     match expr {
         Expr::Bbox { path, .. } if !spatial => Some(path.as_str()),
         Expr::Bbox { .. } => None,
+        // A GridBox is ALWAYS a cell-granular superset (no exact in-substrate
+        // refine — the spatial extension does not sharpen the grid), so it can
+        // never be soundly negated, regardless of `spatial`.
+        Expr::GridBox { path, .. } => Some(path.as_str()),
         Expr::All(children) | Expr::Any(children) | Expr::OnTile(children) => {
             children.iter().find_map(|c| first_coarse_path(c, spatial))
         }
