@@ -4,7 +4,12 @@ build-backend = "maturin"
 
 [project]
 name = "ros-madair"
-version = "0.1.0a24"
+# Version is NOT hardcoded here — maturin reads it from the crate's Cargo.toml
+# (`version.workspace = true` → the workspace version). This is the ONE source of
+# truth, so a hand-bumped Cargo version can't leave the wheel behind (which is how
+# a24 shipped to PyPI while crates/npm were a25). `scripts/sync-version.sh` bumps
+# the Cargo workspace version; nothing to sync here.
+dynamic = ["version"]
 description = "Python binding for the Rós Madair v2 query compiler (head-schema IR to SQL), with the CLM reference handler registered"
 requires-python = ">=3.9"
 classifiers = [

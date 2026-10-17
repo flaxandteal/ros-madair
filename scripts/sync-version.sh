@@ -47,11 +47,12 @@ echo "  ✓ inter-crate dep versions"
 # npm package version comes from its Cargo.toml via wasm-pack — bumped by the Cargo
 # version above, so there is nothing extra to sync here.)
 
-# Update pyproject.toml (ros-madair-python — the PyO3 package)
-if [ -f "$ROOT_DIR/crates/ros-madair-python/pyproject.toml" ]; then
-    sed -i "s/^version = .*/version = \"$PEP440_VERSION\"/" "$ROOT_DIR/crates/ros-madair-python/pyproject.toml"
-    echo "  ✓ crates/ros-madair-python/pyproject.toml"
-fi
+# pyproject.toml (ros-madair-python) needs NO version edit: it declares
+# `dynamic = ["version"]`, so maturin takes the version from the crate's Cargo.toml
+# (`version.workspace = true` → the workspace version set above). Keeping a single
+# source of truth is what stops the wheel drifting behind crates/npm (the a24-on-PyPI
+# bug). The PEP 440 form is still computed for the log line / any external tooling.
+echo "  ✓ crates/ros-madair-python/pyproject.toml (dynamic — tracks Cargo, no edit)"
 
 echo ""
 echo "Version synced to $VERSION (Cargo: $CARGO_VERSION, PEP 440: $PEP440_VERSION)"
