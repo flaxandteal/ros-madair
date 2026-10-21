@@ -1629,7 +1629,7 @@ dependencies = [
 
 [[package]]
 name = "ros-madair-compile"
-version = "0.1.0-alpha.27"
+version = "0.1.0-alpha.28"
 dependencies = [
  "alizarin-core",
  "getrandom 0.2.17",
@@ -1640,7 +1640,7 @@ dependencies = [
 
 [[package]]
 name = "ros-madair-duck"
-version = "0.1.0-alpha.27"
+version = "0.1.0-alpha.28"
 dependencies = [
  "alizarin-core",
  "duckdb",
@@ -1654,7 +1654,7 @@ dependencies = [
 
 [[package]]
 name = "ros-madair-emit"
-version = "0.1.0-alpha.27"
+version = "0.1.0-alpha.28"
 dependencies = [
  "alizarin-core",
  "arrow",
@@ -1673,7 +1673,7 @@ dependencies = [
 
 [[package]]
 name = "ros-madair-format"
-version = "0.1.0-alpha.27"
+version = "0.1.0-alpha.28"
 dependencies = [
  "base64",
  "bs58",
@@ -1687,7 +1687,7 @@ dependencies = [
 
 [[package]]
 name = "ros-madair-handlers"
-version = "0.1.0-alpha.27"
+version = "0.1.0-alpha.28"
 dependencies = [
  "alizarin-clm-core",
  "alizarin-core",
@@ -1698,7 +1698,7 @@ dependencies = [
 
 [[package]]
 name = "ros-madair-python"
-version = "0.1.0-alpha.27"
+version = "0.1.0-alpha.28"
 dependencies = [
  "alizarin-core",
  "pyo3",
@@ -1710,7 +1710,7 @@ dependencies = [
 
 [[package]]
 name = "ros-madair-query"
-version = "0.1.0-alpha.27"
+version = "0.1.0-alpha.28"
 dependencies = [
  "alizarin-core",
  "getrandom 0.2.17",
@@ -1720,7 +1720,7 @@ dependencies = [
 
 [[package]]
 name = "ros-madair-wasm"
-version = "0.1.0-alpha.27"
+version = "0.1.0-alpha.28"
 dependencies = [
  "alizarin-core",
  "getrandom 0.2.17",

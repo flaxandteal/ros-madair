@@ -557,15 +557,19 @@ impl DuckReader {
 
     /// Per-resource render summary for a set of resource ids — the compact
     /// `{nodeId:[{id,title}]}` related-title blob (e.g. the linked site → ward) emit
-    /// carried on the grid edge, PLUS the resource's own descriptor. The render
-    /// header without a tile fetch: the Q1 fix, read from one small store. Empty
-    /// without a grid view. (A spatial result reads these columns for free from the
-    /// same cell-pruned `GridBox` scan; this by-id method serves non-spatial renders
-    /// and native/python callers.)
+    /// carried on the grid edge, PLUS the resource's own descriptor and its
+    /// `geo_descriptor` (a geojson `Point`, v4). The render header without a tile
+    /// fetch — descriptor for the chip, geo_descriptor for the map pin, summary
+    /// for the card — read from one small store. Each value is per the tuple order
+    /// `(descriptor, geo_descriptor, render_summary)`, matching the grid columns.
+    /// Empty without a grid view; `geo_descriptor` is `None` for a non-geo resource.
+    /// (A spatial result reads these columns for free from the same cell-pruned
+    /// `GridBox` scan; this by-id method serves non-spatial renders and
+    /// native/python callers.)
     pub fn render_summaries(
         &self,
         uris: &[String],
-    ) -> Result<HashMap<String, (Option<String>, Option<String>)>, DuckError> {
+    ) -> Result<HashMap<String, (Option<String>, Option<String>, Option<String>)>, DuckError> {
         let mut out = HashMap::new();
         if uris.is_empty() || !self.has_grid {
             return Ok(out);
@@ -574,7 +578,7 @@ impl DuckReader {
             .collect::<Vec<_>>()
             .join(",");
         let sql = format!(
-            "SELECT resource_id, descriptor, render_summary FROM grid \
+            "SELECT resource_id, descriptor, geo_descriptor, render_summary FROM grid \
              WHERE resource_id IN ({placeholders})"
         );
         let mut stmt = self.conn.prepare(&sql)?;
@@ -583,11 +587,12 @@ impl DuckReader {
                 r.get::<_, String>(0)?,
                 r.get::<_, Option<String>>(1)?,
                 r.get::<_, Option<String>>(2)?,
+                r.get::<_, Option<String>>(3)?,
             ))
         })?;
         for row in rows {
-            let (id, descriptor, summary) = row?;
-            out.entry(id).or_insert((descriptor, summary));
+            let (id, descriptor, geo_descriptor, summary) = row?;
+            out.entry(id).or_insert((descriptor, geo_descriptor, summary));
         }
         Ok(out)
     }

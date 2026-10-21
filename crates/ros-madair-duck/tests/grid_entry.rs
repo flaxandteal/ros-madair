@@ -201,12 +201,19 @@ fn grid_box_prunes_to_near_resources_and_entry_table_reads() {
     let render = duck
         .render_summaries(&[NEAR_H.to_string()])
         .expect("render_summaries");
-    let (descriptor, _summary) = render.get(NEAR_H).expect("NEAR_H render");
+    let (descriptor, geo_descriptor, _summary) = render.get(NEAR_H).expect("NEAR_H render");
     assert_eq!(descriptor.as_deref(), Some("Near Hospital"));
+    // geo_descriptor (v4) reaches the app THROUGH render_summaries — the accessor the
+    // map uses to place a pin without hydrating the tile tree.
+    let via_api = geo_descriptor.as_deref().expect("render_summaries geo_descriptor");
+    assert!(
+        via_api.contains("\"type\":\"Point\"") && via_api.contains("coordinates"),
+        "render_summaries must surface the geojson Point, got: {via_api}"
+    );
 
-    // geo_descriptor (v4): the location Point rides the grid edge. These test resources
-    // carry no `point` descriptor, so emit falls back to the footprint's bbox-centre — a
-    // valid geojson Point. Read it straight off the edge.
+    // And independently off the raw edge: these test resources carry no `point`
+    // descriptor, so emit falls back to the footprint's bbox-centre — a valid geojson
+    // Point.
     let probe = duckdb::Connection::open_in_memory().expect("duckdb");
     let gd: String = probe
         .query_row(
