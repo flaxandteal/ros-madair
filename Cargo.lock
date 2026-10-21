@@ -33,9 +33,9 @@ dependencies = [
 
 [[package]]
 name = "alizarin-clm-core"
-version = "2.0.0-beta.9"
+version = "2.0.0-alpha.140"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "10f63515554d519f120e02bf460ab3245100de47de84487b436455de4d227a16"
+checksum = "bcbc4e232ad16a66ddefde0a495bdae6e1c5a858ac342f0390009d011c505467"
 dependencies = [
  "alizarin-core",
  "alizarin-extension-api",
@@ -48,9 +48,9 @@ dependencies = [
 
 [[package]]
 name = "alizarin-core"
-version = "2.0.0-beta.9"
+version = "2.0.0-alpha.140"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "13e2495704ee6662bf9a941c357bbcb514ffecf2f50c7f70f97a3ea09c3e906a"
+checksum = "ff9e0ae621dc163f2dd807c979dbb7bbfe69101c0adb678512b02e2551847025"
 dependencies = [
  "alizarin-extension-api",
  "chrono",
@@ -1629,7 +1629,7 @@ dependencies = [
 
 [[package]]
 name = "ros-madair-compile"
-version = "0.1.0-alpha.26"
+version = "0.1.0-alpha.27"
 dependencies = [
  "alizarin-core",
  "getrandom 0.2.17",
@@ -1640,7 +1640,7 @@ dependencies = [
 
 [[package]]
 name = "ros-madair-duck"
-version = "0.1.0-alpha.26"
+version = "0.1.0-alpha.27"
 dependencies = [
  "alizarin-core",
  "duckdb",
@@ -1654,7 +1654,7 @@ dependencies = [
 
 [[package]]
 name = "ros-madair-emit"
-version = "0.1.0-alpha.26"
+version = "0.1.0-alpha.27"
 dependencies = [
  "alizarin-core",
  "arrow",
@@ -1673,7 +1673,7 @@ dependencies = [
 
 [[package]]
 name = "ros-madair-format"
-version = "0.1.0-alpha.26"
+version = "0.1.0-alpha.27"
 dependencies = [
  "base64",
  "bs58",
@@ -1687,7 +1687,7 @@ dependencies = [
 
 [[package]]
 name = "ros-madair-handlers"
-version = "0.1.0-alpha.26"
+version = "0.1.0-alpha.27"
 dependencies = [
  "alizarin-clm-core",
  "alizarin-core",
@@ -1698,7 +1698,7 @@ dependencies = [
 
 [[package]]
 name = "ros-madair-python"
-version = "0.1.0-alpha.26"
+version = "0.1.0-alpha.27"
 dependencies = [
  "alizarin-core",
  "pyo3",
@@ -1710,7 +1710,7 @@ dependencies = [
 
 [[package]]
 name = "ros-madair-query"
-version = "0.1.0-alpha.26"
+version = "0.1.0-alpha.27"
 dependencies = [
  "alizarin-core",
  "getrandom 0.2.17",
@@ -1720,7 +1720,7 @@ dependencies = [
 
 [[package]]
 name = "ros-madair-wasm"
-version = "0.1.0-alpha.26"
+version = "0.1.0-alpha.27"
 dependencies = [
  "alizarin-core",
  "getrandom 0.2.17",

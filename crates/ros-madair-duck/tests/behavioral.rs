@@ -180,11 +180,27 @@ fn fixture() -> (PathBuf, StaticGraph) {
     ins(&format!("INSERT INTO t VALUES('{R3}','{NG_GEO}','t11',NULL,0,'{r3_geo}','Gamma',NULL,NULL,100.0,100.0,100.0,100.0,NULL)"));
 
     // Tile row: no concept_ids/q_ordered (melted below); the 1:1 axis + data only.
+    // `cluster_key` is the locality sort key (one per resource here, mapped by the CASE);
+    // tiles are emitted ORDER BY (cluster_key, resource_id), and the entry table below
+    // carries the same key so the tile locator (resource_id → cluster_key → tiles) prunes.
+    let cluster_case =
+        format!("(CASE resource_id WHEN '{R1}' THEN 1 WHEN '{R2}' THEN 2 ELSE 3 END)::UBIGINT");
     con.execute_batch(&format!(
         "COPY (SELECT resource_id, nodegroup_id, tileid, parenttile_id, sortorder, data, \
-         descriptor_name, geo_min_lng, geo_max_lng, geo_min_lat, geo_max_lat, link_targets FROM t) \
+         descriptor_name, geo_min_lng, geo_max_lng, geo_min_lat, geo_max_lat, link_targets, \
+         {cluster_case} AS cluster_key FROM t ORDER BY cluster_key, resource_id) \
          TO '{}' (FORMAT PARQUET)",
         tiles.display()
+    ))
+    .unwrap();
+    // Per-resource entry table (resources_<slug>.parquet), sorted by resource_id so an
+    // id-probe prunes; carries cluster_key so a reader can locate a resource's tiles.
+    con.execute_batch(&format!(
+        "COPY (SELECT resource_id, 'test-g' AS graph_id, resource_id AS legacyid, \
+         any_value(descriptor_name) AS descriptor, {cluster_case} AS cluster_key \
+         FROM t GROUP BY resource_id ORDER BY resource_id) \
+         TO '{}' (FORMAT PARQUET)",
+        dir.join("resources_test.parquet").display()
     ))
     .unwrap();
     // Melted concept store: one row per concept node value (node_id == nodegroup_id in

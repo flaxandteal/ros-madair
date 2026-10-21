@@ -114,23 +114,26 @@ pub struct DuckReader {
     conn: Connection,
     has_catalog: bool,
     /// Whether an `edges` view is registered (sibling `edges_*.parquet` next to
-    /// the tiles glob) — drives `Expr::OnLink` path predicates. Absent for a
-    /// tiles-only snapshot; an OnLink then errors rather than mis-compiling.
+    /// the tiles glob) — drives `Expr::OnLink` path predicates. Absent for a head
+    /// with no links; an OnLink then errors rather than mis-compiling.
     has_edges: bool,
     /// Whether a `concept_index` view is registered (sibling `concepts_*.parquet`) —
     /// drives `Expr::Concept` (node-scoped membership semijoin + DFS-catalog range join).
-    /// Absent for a legacy tiles-only / pre-melt snapshot; a Concept then errors rather
-    /// than mis-compiling against a dropped `concept_ids` column.
+    /// Absent for a head with no concept fields; a Concept then errors rather than
+    /// mis-compiling.
     has_concept_index: bool,
     /// Whether an `ordered_index` view is registered (sibling `ordered_*.parquet`) —
-    /// drives `Expr::Range`. Absent for a pre-melt snapshot; a Range then errors.
+    /// drives `Expr::Range`. Absent for a head with no date/number fields; a Range
+    /// then errors.
     has_ordered: bool,
     /// Whether a `grid` view is registered (sibling `grid_*.parquet`) — drives
-    /// `Expr::GridBox` (the cell-sorted spatial prune). Absent for a pre-v3 snapshot;
-    /// a GridBox then errors rather than mis-compiling.
+    /// `Expr::GridBox` (the cell-sorted spatial prune). Absent for a head with no geo
+    /// resources; a GridBox then errors rather than mis-compiling.
     has_grid: bool,
     /// Whether a `resources` view is registered (sibling `resources_*.parquet`, the
-    /// per-resource entry table). Drives [`render_summaries`](Self::render_summaries).
+    /// per-resource entry table). Drives [`render_summaries`](Self::render_summaries)
+    /// and the tile locator in [`resource_tiles`](Self::resource_tiles). Always carried
+    /// by a head with resources (one row per resource, with `cluster_key`).
     has_resources: bool,
     /// Whether the `spatial` extension actually loaded (ST_Intersects available).
     /// Drives the `Expr::Bbox` fine step: present -> exact ST_Intersects; absent
@@ -224,8 +227,9 @@ impl DuckReader {
         let _ = has_edges_rev; // wired into the compiler's direction choice in a follow-on
                                // Melted concept / ordered axis stores (the siblings concepts_*.parquet /
                                // ordered_*.parquet next to the tiles glob), same best-effort registration as
-                               // edges: a pre-melt snapshot still OPENS; only a Concept/Range query then errors
-                               // typed. concept_index is the node/value-sorted membership store (distinct from
+                               // edges: a head with no concept/date/number fields still OPENS; only a
+                               // Concept/Range query then errors typed. concept_index is the node/value-sorted
+                               // membership store (distinct from
                                // the DFS-interval `concepts` catalog view registered by with_catalog).
         let concept_glob = parquet_glob.replace("tiles_", "concepts_");
         let has_concept_index = concept_glob != parquet_glob
@@ -244,8 +248,9 @@ impl DuckReader {
                 ))
                 .is_ok();
         // Grid-cell spatial edge (Expr::GridBox): the sibling grid_*.parquet,
-        // (cell, resource_id, descriptor, render_summary) sorted by cell. Best-effort
-        // like the others — a pre-v3 snapshot still OPENS; a GridBox then errors typed.
+        // (cell, resource_id, descriptor, geo_descriptor, render_summary) sorted by cell.
+        // Best-effort like the others — a head with no geo resources still OPENS; a
+        // GridBox then errors typed.
         let grid_glob = parquet_glob.replace("tiles_", "grid_");
         let has_grid = grid_glob != parquet_glob
             && conn
@@ -309,12 +314,31 @@ impl DuckReader {
         if dirs.is_empty() {
             return Err(DuckError::Compile("open_layers: no layers".into()));
         }
-        // Refuse a layer whose SIGNED content has been altered since it was
-        // signed — the read-side gate that closes the sign→verify loop. A layer
-        // with no manifest/attestations (a local or unsigned build) verifies as
-        // Unsigned, or is simply not a signed snapshot; both proceed. Only a
-        // proven tamper (`Failed`) is fatal.
+        // Two read-side gates per layer:
+        //  1. FORMAT_VERSION. Refuse a layer emitted at a version this reader does
+        //     not implement — a loud, actionable error (re-emit) instead of a
+        //     cryptic failure on a since-renamed/dropped column downstream. A layer
+        //     with no manifest (a raw local glob) is not gated; a `format_version`
+        //     of 0 (a pre-versioning manifest) is refused, since no reader is v0.
+        //  2. Tamper. Refuse a layer whose SIGNED content has been altered since it
+        //     was signed — closes the sign→verify loop. A layer with no
+        //     manifest/attestations (a local or unsigned build) verifies as
+        //     Unsigned, or is simply not a signed snapshot; both proceed. Only a
+        //     proven tamper (`Failed`) is fatal.
         for dir in dirs {
+            if let Ok(bytes) = std::fs::read(dir.join("manifest.json")) {
+                if let Ok(m) = serde_json::from_slice::<ros_madair_format::Manifest>(&bytes) {
+                    if m.format_version != ros_madair_format::FORMAT_VERSION {
+                        return Err(DuckError::Compile(format!(
+                            "layer {}: snapshot FORMAT_VERSION {} is not supported by this \
+                             reader (expected {}); re-emit the snapshot",
+                            dir.display(),
+                            m.format_version,
+                            ros_madair_format::FORMAT_VERSION
+                        )));
+                    }
+                }
+            }
             if let Ok(ros_madair_format::attest::HeadTrust::Failed { reason }) =
                 ros_madair_format::verify::verify_snapshot(dir)
             {
@@ -454,7 +478,7 @@ impl DuckReader {
                 shadow_set_union(
                     &grid_layers,
                     &["resource_id"],
-                    "cell, resource_id, descriptor, render_summary",
+                    "cell, resource_id, descriptor, geo_descriptor, render_summary",
                 )
             ))?;
         }
@@ -469,7 +493,7 @@ impl DuckReader {
                 shadow_set_union(
                     &resource_layers,
                     &["resource_id"],
-                    "resource_id, graph_id, legacyid, descriptor",
+                    "resource_id, graph_id, legacyid, descriptor, cluster_key",
                 )
             ))?;
         }
@@ -572,7 +596,7 @@ impl DuckReader {
     /// read from the per-resource `resources` view — the slug/model-scoping/name
     /// spine a consumer lists, counts, and slug-backlinks on (consumer limitation #1).
     /// Small (no hydration `data`), sorted by `resource_id` so an id-probe prunes.
-    /// Empty without a `resources` view (pre-v3 snapshot).
+    /// Empty for a head with no `resources` view.
     pub fn resource_entries(
         &self,
         uris: &[String],
@@ -684,11 +708,34 @@ impl DuckReader {
     /// is the tile's `{node_id: value}` JSON; the other columns give the tile
     /// tree structure (nodegroup, tileid, parent, sortorder).
     pub fn resource_tiles(&self, uuid: &str) -> Result<Vec<StaticTile>, DuckError> {
+        // Tile locator, as TWO pruned reads. Tiles are sorted by (cluster_key, resource_id),
+        // so a bare `resource_id = ?` can't skip row groups — ids scatter across every
+        // cluster-key group (the N^1.2–1.4 on entry pages).
+        //   Step 1: look the resource's cluster_key up in the resource_id-sorted entry table
+        //           (prunes on resource_id).
+        //   Step 2: BIND that key as a literal constant into the tile scan. A bound constant
+        //           is what lets DuckDB's parquet reader skip row groups by the cluster_key
+        //           zone-map; a scalar subquery (`cluster_key = (SELECT …)`) is NOT reliably
+        //           pushed into row-group pruning on bundled DuckDB, which would leave this
+        //           correct but still O(N) — the silent regression the scale harness exists
+        //           to catch. `resource_id = ?` is then the exact within-cell filter.
+        // Empty if the resource is absent from the entry table (not an error).
+        let mut key_stmt = self
+            .conn
+            .prepare("SELECT cluster_key FROM resources WHERE resource_id = ?")?;
+        let mut keys = key_stmt.query_map([uuid], |r| r.get::<_, u64>(0))?;
+        let cluster_key: u64 = match keys.next() {
+            Some(k) => k?,
+            None => return Ok(Vec::new()),
+        };
+        drop(keys);
+        drop(key_stmt);
         let mut stmt = self.conn.prepare(
             "SELECT nodegroup_id, tileid, parenttile_id, sortorder, data \
-             FROM tiles WHERE resource_id = ?",
+             FROM tiles \
+             WHERE cluster_key = ? AND resource_id = ?",
         )?;
-        let rows = stmt.query_map([uuid], |r| {
+        let rows = stmt.query_map(duckdb::params![cluster_key, uuid], |r| {
             Ok((
                 r.get::<_, String>(0)?,
                 r.get::<_, Option<String>>(1)?,

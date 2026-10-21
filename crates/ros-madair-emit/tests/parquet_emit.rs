@@ -485,7 +485,7 @@ fn emit_writes_a_signable_manifest_that_verifies() {
     assert!(!snapshot_id.is_empty(), "snapshot_id is non-empty");
     assert_eq!(
         manifest["format_version"].as_u64(),
-        Some(2),
+        Some(u64::from(ros_madair_format::FORMAT_VERSION)),
         "format_version stamped (melt)"
     );
     assert_eq!(manifest["base_uri"].as_str(), Some("https://example.org/"));

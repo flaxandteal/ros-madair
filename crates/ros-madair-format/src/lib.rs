@@ -65,7 +65,13 @@ pub mod verify;
 // slug/descriptor/render-summary spine) and `grid_<graphid>.parquet` spatial
 // cell edge. A v2 reader would simply not know them; a reader that lowers a
 // `GridBox` or reads a render summary needs v3, so the version gates it.
-pub const FORMAT_VERSION: u32 = 3;
+// v4 adds a `geo_descriptor` column (a geojson `Point` — the resource's
+// representative location descriptor) to the grid edge, so a spatial result draws
+// its pins off the cell-pruned scan without reading the tiles. Additive, but a v4
+// reader expects the column; the version gates it. (The pending-v4 bundle also
+// carries the edge `predicate` column + EDTF `q_lo/q_hi` + the entry-table reconcile
+// as they land — one bump, not four.)
+pub const FORMAT_VERSION: u32 = 4;
 
 // ---------------------------------------------------------------------------
 // Snapshot id derivation (the ONE copy — writer and reader both call it)
@@ -123,14 +129,13 @@ pub fn snapshot_id(artifacts: &[ArtifactEntry], manifest_bytes: &[u8]) -> String
 /// (manifest, but not the head schema, chunks, or closure) is ceremony.
 ///
 /// [`format_version`](Self::format_version) answers that objection instead of
-/// dodging it: it is READ — `ros_madair_read` refuses a snapshot whose version
-/// it does not implement — and it is gated COHERENTLY, the same
-/// [`FORMAT_VERSION`] stamped into the head (`PRAGMA user_version`) and every
-/// chunk (framing header). It exists because the format is now stable enough to
-/// ship, and the specific hazard it closes is real: chunk payloads are msgpack
-/// named maps, so a dropped or renamed field decodes CLEANLY to a default — a
-/// skewed reader misreads rather than failing. The version turns that silent
-/// misread into a loud, actionable error (re-emit).
+/// dodging it: it is READ — `ros-madair-duck`'s `open_layers` refuses a layer
+/// whose version it does not implement (`format_version != FORMAT_VERSION`),
+/// before it touches a single column. It exists because the format is now stable
+/// enough to ship, and the specific hazard it closes is real: a dropped or
+/// renamed Parquet column would otherwise surface as a cryptic "no such column"
+/// (or worse, decode to a default) deep in a query. The version turns that into a
+/// loud, actionable error at open time (re-emit).
 ///
 /// (`snapshot_id` still moves on any format change — the digest covers the
 /// manifest — but the id only tells you two snapshots DIFFER, not that a reader

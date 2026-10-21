@@ -204,5 +204,24 @@ fn grid_box_prunes_to_near_resources_and_entry_table_reads() {
     let (descriptor, _summary) = render.get(NEAR_H).expect("NEAR_H render");
     assert_eq!(descriptor.as_deref(), Some("Near Hospital"));
 
-    eprintln!("OK: grid prunes spatially, intersects with concept, entry+render read by id");
+    // geo_descriptor (v4): the location Point rides the grid edge. These test resources
+    // carry no `point` descriptor, so emit falls back to the footprint's bbox-centre — a
+    // valid geojson Point. Read it straight off the edge.
+    let probe = duckdb::Connection::open_in_memory().expect("duckdb");
+    let gd: String = probe
+        .query_row(
+            &format!(
+                "SELECT geo_descriptor FROM read_parquet('{}') WHERE resource_id = ? AND geo_descriptor IS NOT NULL LIMIT 1",
+                grid.display()
+            ),
+            duckdb::params![NEAR_H],
+            |r| r.get(0),
+        )
+        .expect("geo_descriptor for NEAR_H");
+    assert!(
+        gd.contains("\"type\":\"Point\"") && gd.contains("coordinates"),
+        "grid edge must carry a geojson Point geo_descriptor, got: {gd}"
+    );
+
+    eprintln!("OK: grid prunes spatially, intersects with concept, entry+render+geo_descriptor read");
 }

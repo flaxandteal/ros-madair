@@ -189,8 +189,7 @@ pub fn compile_expr(
             if !has_concept_index {
                 return Err(CompileError(format!(
                     "concept filter on '{path}' needs the melted concept store — this \
-                     reader has no concepts_*.parquet (a pre-melt tiles-only snapshot is \
-                     unsupported; re-emit with the melt)"
+                     reader has no concepts_*.parquet (this head carries no concept fields)"
                 )));
             }
             let (node, _) = resolve(graph, path)?;
@@ -306,8 +305,7 @@ pub fn compile_expr(
             if !has_grid {
                 return Err(CompileError(format!(
                     "grid-box on '{path}' needs the grid edge — this reader has no \
-                     grid_*.parquet (open a snapshot emitted at FORMAT_VERSION 3+ with \
-                     the grid slice)"
+                     grid_*.parquet (this head carries no geo resources)"
                 )));
             }
             // Validate the path names a geometry node (good errors), even though the

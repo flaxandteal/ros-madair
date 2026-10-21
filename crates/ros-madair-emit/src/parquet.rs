@@ -598,12 +598,19 @@ fn append_resource(
     // + model-scoping + display-name spine a consumer lists/counts/backlinks on,
     // sorted by resource_id so an id-probe prunes. Written for EVERY resource
     // (even tile-less), before the tiles early-return.
+    //
+    // The TILE LOCATOR: `cluster_key` is carried here too. Tiles are sorted by
+    // `(cluster_key, resource_id)`, so a `WHERE resource_id = X` tile read can't prune
+    // (ids scatter across every cluster-key row group → the measured N^1.2–1.4 on entry
+    // pages). With the key here — on the resource_id-sorted entry table, which DOES prune —
+    // hydrate becomes two pruned reads: resource_id → entry → cluster_key → tiles
+    // `WHERE cluster_key = ?`. `key` is already computed above; this just persists it.
     let rid = &r.resourceinstance.resourceinstanceid;
     let gid = &r.resourceinstance.graph_id;
     let legacy = &r.resourceinstance.legacyid;
     {
         let mut ra = stage.conn.appender("resources_stage")?;
-        ra.append_row(params![model_slug, rid, gid, legacy, &name])?;
+        ra.append_row(params![model_slug, rid, gid, legacy, &name, key])?;
     }
 
     // Grid edge (grid_<graphid>.parquet): one row per (resource, CELL THE FOOTPRINT
@@ -626,9 +633,24 @@ fn append_resource(
             vec![ros_madair_handlers::grid_cell((mnx + mxx) / 2.0, (mny + mxy) / 2.0)]
         });
         let summary = build_render_summary(r.cache.as_ref());
+        // Location descriptor (geojson Point) — prefer alizarin's `point` descriptor (a
+        // true centroid / point-on-surface from the model's descriptor template, sibling of
+        // `name`/`map_popup`; available since alizarin-core alpha.140); fall back to the
+        // footprint's bbox-centre (`centroid`, already computed above). It rides the same
+        // cell-pruned scan as `descriptor`, so a spatial result draws its pins without
+        // touching the tiles. bbox-centre is a representative pin, not a true centroid (a
+        // concave footprint's can fall just outside it) — fine for display, the safe fallback.
+        let geo_descriptor: Option<String> = r
+            .resourceinstance
+            .descriptors
+            .point
+            .clone()
+            .or_else(|| {
+                centroid.map(|(lng, lat)| format!(r#"{{"type":"Point","coordinates":[{lng},{lat}]}}"#))
+            });
         let mut ga = stage.conn.appender("grid_stage")?;
         for cell in cells {
-            ga.append_row(params![model_slug, cell, rid, &name, &summary])?;
+            ga.append_row(params![model_slug, cell, rid, &name, &geo_descriptor, &summary])?;
         }
     }
 
@@ -921,10 +943,10 @@ impl TileStage {
                nodegroup_id VARCHAR, node_id VARCHAR, q_ordered BIGINT);
              CREATE TABLE resources_stage (
                model_slug VARCHAR, resource_id VARCHAR, graph_id VARCHAR,
-               legacyid VARCHAR, descriptor VARCHAR);
+               legacyid VARCHAR, descriptor VARCHAR, cluster_key UBIGINT);
              CREATE TABLE grid_stage (
                model_slug VARCHAR, cell BIGINT, resource_id VARCHAR,
-               descriptor VARCHAR, render_summary VARCHAR);",
+               descriptor VARCHAR, geo_descriptor VARCHAR, render_summary VARCHAR);",
             sql_lit(&scratch.display().to_string())
         ))
         .map_err(|e| format!("duckdb stage schema: {e}"))?;
@@ -1082,7 +1104,7 @@ impl TileStage {
         let resources_path = sibling("resources");
         self.conn
             .execute_batch(&format!(
-                "COPY (SELECT resource_id, graph_id, legacyid, descriptor \
+                "COPY (SELECT resource_id, graph_id, legacyid, descriptor, cluster_key \
                  FROM resources_stage WHERE model_slug = '{slug_lit}' ORDER BY resource_id) \
                  TO '{}' (FORMAT PARQUET, ROW_GROUP_SIZE {rgs});",
                 resources_path.display()
@@ -1091,12 +1113,13 @@ impl TileStage {
 
         // Grid edge: one row per geo-bearing resource, sorted by the Z-order cell
         // so a `GridBox`'s `cell IN (…)` reads only the overlapping cells' row
-        // groups — and the render fields (descriptor, render_summary) ride that
-        // prune, so a spatial result renders without a scattered second fetch.
+        // groups — and the render fields (descriptor, geo_descriptor, render_summary)
+        // ride that prune, so a spatial result renders its cards AND pins without a
+        // scattered second fetch (geo_descriptor is the representative point).
         let grid_path = sibling("grid");
         self.conn
             .execute_batch(&format!(
-                "COPY (SELECT cell, resource_id, descriptor, render_summary \
+                "COPY (SELECT cell, resource_id, descriptor, geo_descriptor, render_summary \
                  FROM grid_stage WHERE model_slug = '{slug_lit}' ORDER BY cell) \
                  TO '{}' (FORMAT PARQUET, ROW_GROUP_SIZE {rgs});",
                 grid_path.display()

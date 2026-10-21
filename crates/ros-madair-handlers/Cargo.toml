@@ -20,7 +20,9 @@ alizarin-core.workspace = true
 # CLM lives at ext/clm/core in alizarin (consolidated alpha.128; ext dirs later
 # dropped the "alizarin-" prefix). Crate name is still `alizarin-clm-core`. The same
 # published upstream version as alizarin-core, from crates.io.
-alizarin-clm-core = "2.0.0-beta.9"
+# EXACT, same line as alizarin-core: alpha.140 requires core ^alpha.140 (semver-lower
+# than beta.9, so a caret would resolve back to beta.9 and conflict). Move them together.
+alizarin-clm-core = "=2.0.0-alpha.140"
 serde = { version = "1", features = ["derive"] }
 # The extension-handler trait speaks `serde_json::Value`; the `number` handler
 # reads/keys it. serde_json is wasm32-clean, so the browser constraint holds.
