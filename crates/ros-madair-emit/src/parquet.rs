@@ -346,7 +346,14 @@ fn build_concept_catalog(cache: &RdmCache) -> (Vec<ConceptCatalogRow>, HashMap<S
         tops.sort_unstable();
         let mut seen = std::collections::HashSet::new();
         for t in &tops {
-            dfs_concept(coll, t, &mut counter, &mut seen, &mut rows, &concept_to_values);
+            dfs_concept(
+                coll,
+                t,
+                &mut counter,
+                &mut seen,
+                &mut rows,
+                &concept_to_values,
+            );
         }
     }
     (rows, value_to_concept)
@@ -675,7 +682,10 @@ fn append_resource(
         // A building footprint spans O(1) cells; cells_in_box only errs on a
         // degenerate/global box, so fall back to the centroid cell (never drop it).
         let cells = ros_madair_handlers::cells_in_box(mnx, mny, mxx, mxy).unwrap_or_else(|_| {
-            vec![ros_madair_handlers::grid_cell((mnx + mxx) / 2.0, (mny + mxy) / 2.0)]
+            vec![ros_madair_handlers::grid_cell(
+                (mnx + mxx) / 2.0,
+                (mny + mxy) / 2.0,
+            )]
         });
         let summary = build_render_summary(r.cache.as_ref());
         // Location descriptor (geojson Point) — prefer alizarin's `point` descriptor (a
@@ -685,17 +695,21 @@ fn append_resource(
         // cell-pruned scan as `descriptor`, so a spatial result draws its pins without
         // touching the tiles. bbox-centre is a representative pin, not a true centroid (a
         // concave footprint's can fall just outside it) — fine for display, the safe fallback.
-        let geo_descriptor: Option<String> = r
-            .resourceinstance
-            .descriptors
-            .point
-            .clone()
-            .or_else(|| {
-                centroid.map(|(lng, lat)| format!(r#"{{"type":"Point","coordinates":[{lng},{lat}]}}"#))
+        let geo_descriptor: Option<String> =
+            r.resourceinstance.descriptors.point.clone().or_else(|| {
+                centroid
+                    .map(|(lng, lat)| format!(r#"{{"type":"Point","coordinates":[{lng},{lat}]}}"#))
             });
         let mut ga = stage.conn.appender("grid_stage")?;
         for cell in cells {
-            ga.append_row(params![model_slug, cell, rid, &name, &geo_descriptor, &summary])?;
+            ga.append_row(params![
+                model_slug,
+                cell,
+                rid,
+                &name,
+                &geo_descriptor,
+                &summary
+            ])?;
         }
     }
 

@@ -592,7 +592,8 @@ impl DuckReader {
         })?;
         for row in rows {
             let (id, descriptor, geo_descriptor, summary) = row?;
-            out.entry(id).or_insert((descriptor, geo_descriptor, summary));
+            out.entry(id)
+                .or_insert((descriptor, geo_descriptor, summary));
         }
         Ok(out)
     }

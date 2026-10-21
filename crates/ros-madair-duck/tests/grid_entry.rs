@@ -24,10 +24,10 @@ const ROLE: &str = "c0000000-0000-4000-8000-0000000000b3";
 const NEAR_H: &str = "aaaa0000-0000-4000-8000-000000000001"; // (0,0) Hospital
 const NEAR_S: &str = "aaaa0000-0000-4000-8000-000000000002"; // (0.001,0.001) Shelter
 const FAR_H: &str = "aaaa0000-0000-4000-8000-000000000003"; // (100,100) Hospital
-// A Hospital whose footprint STRADDLES the box edge: one corner inside the box
-// at (0,0), one far outside at (0.05,0.05). Its CENTROID (0.025,0.025) is OUTSIDE
-// the box — so a centroid-only grid would MISS it. bbox-to-cells must return it
-// (over-inclusion is the safe failure; a responder must never miss it).
+                                                            // A Hospital whose footprint STRADDLES the box edge: one corner inside the box
+                                                            // at (0,0), one far outside at (0.05,0.05). Its CENTROID (0.025,0.025) is OUTSIDE
+                                                            // the box — so a centroid-only grid would MISS it. bbox-to-cells must return it
+                                                            // (over-inclusion is the safe failure; a responder must never miss it).
 const STRADDLE_H: &str = "aaaa0000-0000-4000-8000-000000000004";
 
 fn scratch(tag: &str) -> PathBuf {
@@ -60,9 +60,17 @@ fn write_graph(gp: &Path) {
 }
 
 // A two-point footprint (bbox spans both) — for the straddle case.
-fn resource2(id: &str, name: &str, p0: (f64, f64), p1: (f64, f64), role: &str) -> serde_json::Value {
-    let feat = |p: (f64, f64)| json!({"type": "Feature", "properties": {},
-        "geometry": {"type": "Point", "coordinates": [p.0, p.1]}});
+fn resource2(
+    id: &str,
+    name: &str,
+    p0: (f64, f64),
+    p1: (f64, f64),
+    role: &str,
+) -> serde_json::Value {
+    let feat = |p: (f64, f64)| {
+        json!({"type": "Feature", "properties": {},
+        "geometry": {"type": "Point", "coordinates": [p.0, p.1]}})
+    };
     let fc = json!({"type": "FeatureCollection", "features": [feat(p0), feat(p1)]});
     resource_fc(id, name, fc, role)
 }
@@ -93,7 +101,13 @@ fn corpus() -> (PathBuf, StaticGraph) {
         resource(NEAR_H, "Near Hospital", 0.0, 0.0, "Hospital"),
         resource(NEAR_S, "Near Shelter", 0.001, 0.001, "Shelter"),
         resource(FAR_H, "Far Hospital", 100.0, 100.0, "Hospital"),
-        resource2(STRADDLE_H, "Straddle Hospital", (0.0, 0.0), (0.05, 0.05), "Hospital"),
+        resource2(
+            STRADDLE_H,
+            "Straddle Hospital",
+            (0.0, 0.0),
+            (0.05, 0.05),
+            "Hospital",
+        ),
     ];
     std::fs::write(
         rdir.join("places.json"),
@@ -149,7 +163,11 @@ fn grid_box_prunes_to_near_resources_and_entry_table_reads() {
     let grid = pq.with_file_name(format!("grid_{GRAPH}.parquet"));
     assert!(grid.exists(), "emit must write {}", grid.display());
     let resources = pq.with_file_name(format!("resources_{GRAPH}.parquet"));
-    assert!(resources.exists(), "emit must write {}", resources.display());
+    assert!(
+        resources.exists(),
+        "emit must write {}",
+        resources.display()
+    );
 
     let duck = DuckReader::open(pq.to_str().unwrap()).expect("open");
 
@@ -205,7 +223,9 @@ fn grid_box_prunes_to_near_resources_and_entry_table_reads() {
     assert_eq!(descriptor.as_deref(), Some("Near Hospital"));
     // geo_descriptor (v4) reaches the app THROUGH render_summaries — the accessor the
     // map uses to place a pin without hydrating the tile tree.
-    let via_api = geo_descriptor.as_deref().expect("render_summaries geo_descriptor");
+    let via_api = geo_descriptor
+        .as_deref()
+        .expect("render_summaries geo_descriptor");
     assert!(
         via_api.contains("\"type\":\"Point\"") && via_api.contains("coordinates"),
         "render_summaries must surface the geojson Point, got: {via_api}"
@@ -230,5 +250,7 @@ fn grid_box_prunes_to_near_resources_and_entry_table_reads() {
         "grid edge must carry a geojson Point geo_descriptor, got: {gd}"
     );
 
-    eprintln!("OK: grid prunes spatially, intersects with concept, entry+render+geo_descriptor read");
+    eprintln!(
+        "OK: grid prunes spatially, intersects with concept, entry+render+geo_descriptor read"
+    );
 }

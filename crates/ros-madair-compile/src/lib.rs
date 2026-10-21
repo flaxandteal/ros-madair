@@ -797,7 +797,8 @@ fn compile_tile_cond(
         )),
         // A grid-box is a resource-level spatial prune, not a single-tile condition.
         Expr::GridBox { .. } => Err(CompileError(
-            "grid_box cannot be an on_tile child — it is a resource-level spatial prune".to_string(),
+            "grid_box cannot be an on_tile child — it is a resource-level spatial prune"
+                .to_string(),
         )),
     }
 }
