@@ -13,7 +13,7 @@
 //! present: native reads them off the `DuckReader`'s registered views; the browser
 //! passes which Parquet files it registered.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use alizarin_core::datatype_index::datatype_index_spec;
 use alizarin_core::extension_type_registry::{ExtensionTypeRegistry, IndexClass};
@@ -64,22 +64,78 @@ pub fn compile_query(
     has_ordered: bool,
     has_grid: bool,
     spatial: bool,
+    // The tier's field cut (`manifest.tier.exclude_nodegroups`). A predicate whose
+    // path resolves into one of these is REFUSED at compile time (L1 audited deny) —
+    // the data is physically absent in a tiered head, so L0 already returns empty;
+    // this turns the silent-empty into a typed, attributed refusal. Empty = untiered.
+    excluded_nodegroups: &HashSet<String>,
 ) -> Result<String, CompileError> {
     match &query.r#where {
-        Some(expr) => compile_expr(
-            expr,
-            graph,
-            graphs,
-            registry,
-            has_catalog,
-            has_edges,
-            has_concept_index,
-            has_ordered,
-            has_grid,
-            spatial,
-        ),
+        Some(expr) => {
+            if !excluded_nodegroups.is_empty() {
+                check_tier(expr, graph, excluded_nodegroups)?;
+            }
+            compile_expr(
+                expr,
+                graph,
+                graphs,
+                registry,
+                has_catalog,
+                has_edges,
+                has_concept_index,
+                has_ordered,
+                has_grid,
+                spatial,
+            )
+        }
         None => Ok("SELECT DISTINCT resource_id FROM tiles".to_string()),
     }
+}
+
+/// L1 tier refusal: walk the predicate tree and REFUSE any leaf whose `path`
+/// resolves into an excluded nodegroup (the field cut). Returns a typed
+/// `denied` error instead of letting the query compile to a silent-empty scan
+/// over the absent store. A path that does not resolve is left for
+/// [`compile_expr`] to report as the real path error (never masked by a tier
+/// deny). An `OnLink` hop's cross-model `where` is NOT checked here — it is scoped
+/// by its own target head's tier, not this one.
+fn check_tier(
+    expr: &Expr,
+    graph: &StaticGraph,
+    excluded: &HashSet<String>,
+) -> Result<(), CompileError> {
+    let refuse = |path: &str, ng: &str| {
+        CompileError(format!(
+            "denied: '{path}' is out of scope for this tier \
+             (nodegroup '{ng}' was excluded at emit)"
+        ))
+    };
+    let check_path = |path: &str| -> Result<(), CompileError> {
+        if let Ok((_, ng)) = resolve(graph, path) {
+            if excluded.contains(&ng) {
+                return Err(refuse(path, &ng));
+            }
+        }
+        Ok(())
+    };
+    match expr {
+        Expr::All(children) | Expr::Any(children) | Expr::OnTile(children) => {
+            for c in children {
+                check_tier(c, graph, excluded)?;
+            }
+        }
+        Expr::Not(inner) => check_tier(inner, graph, excluded)?,
+        Expr::Concept { path, .. }
+        | Expr::HasLink { path, .. }
+        | Expr::Range { path, .. }
+        | Expr::Bbox { path, .. }
+        | Expr::GridBox { path, .. }
+        | Expr::OnLink { path, .. } => check_path(path)?,
+        // Reverse/untyped backlinks name a target resource, not a field path in this
+        // model, so there is nothing tier-scoped to refuse.
+        _ => {}
+    }
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------

@@ -140,6 +140,11 @@ pub struct DuckReader {
     /// (mobile - no android spatial binary) -> coarse-only bbox-overlap. See the
     /// README "Platform limitation: the exact spatial fine step is DESKTOP-ONLY".
     spatial: bool,
+    /// The tier's field cut, from the top layer's `manifest.tier.exclude_nodegroups`
+    /// (L1 audited deny). A query predicate whose path resolves into one of these is
+    /// REFUSED at compile time with a typed "denied — out of scope" error instead of a
+    /// silent-empty scan. Empty for a single-head/untiered reader (no manifest read).
+    excluded_nodegroups: std::collections::HashSet<String>,
 }
 
 /// Where DuckDB's spatial extension comes from. `json` is statically bundled
@@ -278,6 +283,9 @@ impl DuckReader {
             has_grid,
             has_resources,
             spatial,
+            // Single-head reader: no manifest, so no tier (L1 is a layered/signed-head
+            // feature). An untiered reader never refuses on scope.
+            excluded_nodegroups: std::collections::HashSet::new(),
         })
     }
 
@@ -325,6 +333,13 @@ impl DuckReader {
         //     manifest/attestations (a local or unsigned build) verifies as
         //     Unsigned, or is simply not a signed snapshot; both proceed. Only a
         //     proven tamper (`Failed`) is fatal.
+        // The tier field cut (L1): the UNION of every layer's
+        // `manifest.tier.exclude_nodegroups`. Union is fail-closed — if ANY layer in
+        // the stack scoped a field out, a query touching it is refused; the insurer
+        // window composes its tiered head with only a non-sensitive basemap, so the
+        // union IS the insurer head's exclusions.
+        let mut excluded_nodegroups: std::collections::HashSet<String> =
+            std::collections::HashSet::new();
         for dir in dirs {
             if let Ok(bytes) = std::fs::read(dir.join("manifest.json")) {
                 if let Ok(m) = serde_json::from_slice::<ros_madair_format::Manifest>(&bytes) {
@@ -336,6 +351,9 @@ impl DuckReader {
                             m.format_version,
                             ros_madair_format::FORMAT_VERSION
                         )));
+                    }
+                    if let Some(t) = &m.tier {
+                        excluded_nodegroups.extend(t.exclude_nodegroups.iter().cloned());
                     }
                 }
             }
@@ -507,6 +525,7 @@ impl DuckReader {
             has_grid,
             has_resources,
             spatial,
+            excluded_nodegroups,
         })
     }
 
@@ -884,6 +903,7 @@ impl DuckReader {
             self.has_ordered,
             self.has_grid,
             self.spatial,
+            &self.excluded_nodegroups,
         )?)
     }
 }

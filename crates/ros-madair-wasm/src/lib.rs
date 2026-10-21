@@ -123,6 +123,10 @@ impl Compiler {
             has_ordered,
             has_grid,
             spatial,
+            // No tier enforcement in the browser runtime: the insurer-window (L1
+            // audited deny) is a native/signed-head feature. The browser compiles a
+            // full head, so nothing is scoped out.
+            &std::collections::HashSet::new(),
         )
         .map_err(|e| e.0)
     }

@@ -236,6 +236,62 @@ fn insurer_tier_head_cannot_leak() {
 }
 
 #[test]
+fn insurer_tier_refuses_over_reach_l1() {
+    // L1 (audited deny): opened via open_layers, the reader reads manifest.tier and
+    // REFUSES a query into an excluded nodegroup at COMPILE time — a typed, attributed
+    // "denied" error, not a silent-empty result. (The single-head `open` path has no
+    // manifest, so it is L0 — empty — as the other test asserts.)
+    let out = emit(
+        "l1",
+        Some(ros_madair_emit::TierFilter {
+            name: "insurer-book".into(),
+            exclude_nodegroups: HashSet::from([NG_CONTACT.to_string()]),
+            exclude_models: HashSet::new(),
+            include_resources: Some(HashSet::from([B1.to_string(), B2.to_string()])),
+        }),
+    );
+    let graph = graph();
+    let duck = DuckReader::open_layers(&[out.as_path()]).expect("open_layers");
+    let err = duck
+        .resolve_ids(
+            &Query {
+                model: GRAPH.into(),
+                r#where: Some(Expr::Concept {
+                    path: "keyholder".into(),
+                    op: ConceptOp::Is,
+                    value: KEYHOLDER.into(),
+                }),
+                measures: vec![Measure::SelectIds],
+                limit: None,
+            },
+            &graph,
+            &default_registry(),
+        )
+        .expect_err("an over-reach into an excluded nodegroup must be refused, not empty");
+    let msg = err.to_string().to_lowercase();
+    assert!(
+        msg.contains("denied") && msg.contains("out of scope"),
+        "expected a tier-deny error, got: {err}"
+    );
+
+    // A query that stays IN scope (the footprint / profile) still compiles fine.
+    let ok = DuckReader::open_layers(&[out.as_path()])
+        .unwrap()
+        .resolve_ids(
+            &Query {
+                model: GRAPH.into(),
+                r#where: None,
+                measures: vec![Measure::SelectIds],
+                limit: None,
+            },
+            &graph,
+            &default_registry(),
+        )
+        .expect("an in-scope query must still succeed");
+    assert_eq!(ok.len(), 2, "the two covered buildings remain queryable");
+}
+
+#[test]
 fn tier_moves_the_snapshot_id() {
     // Tamper-evidence: the tier is inside the signed snapshot_id, so a full head and a
     // tiered head of the same data differ — you cannot add the contacts back without
