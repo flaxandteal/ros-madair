@@ -564,7 +564,6 @@ fn geo_points_reverse_link_lookup() {
     );
 }
 
-#[test]
 /// Regression (reference → label inlining): a `reference` field must hydrate to
 /// its concept LABEL, never the raw list-item UUID. This is the SINGLE-HEAD path a
 /// native consumer (Gréasán) probes directly. The catalog maps CAT_A -> "Category

@@ -566,6 +566,7 @@ impl DuckReader {
     /// (A spatial result reads these columns for free from the same cell-pruned
     /// `GridBox` scan; this by-id method serves non-spatial renders and
     /// native/python callers.)
+    #[allow(clippy::type_complexity)] // (descriptor, geo_descriptor, render_summary) by id
     pub fn render_summaries(
         &self,
         uris: &[String],
@@ -603,6 +604,7 @@ impl DuckReader {
     /// spine a consumer lists, counts, and slug-backlinks on (consumer limitation #1).
     /// Small (no hydration `data`), sorted by `resource_id` so an id-probe prunes.
     /// Empty for a head with no `resources` view.
+    #[allow(clippy::type_complexity)] // (graph_id, legacyid, descriptor) by id
     pub fn resource_entries(
         &self,
         uris: &[String],

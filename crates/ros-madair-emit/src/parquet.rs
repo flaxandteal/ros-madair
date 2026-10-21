@@ -631,6 +631,7 @@ fn build_render_summary(cache: Option<&serde_json::Value>) -> Option<String> {
     serde_json::to_string(&by_node).ok()
 }
 
+#[allow(clippy::too_many_arguments)]
 fn append_resource(
     stage: &TileStage,
     model_slug: &str,

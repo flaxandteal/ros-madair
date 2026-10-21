@@ -379,6 +379,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::approx_constant)] // 3.14 is a fixed-point test decimal, not an approximation of π
     fn number_quantizes_fixed_point_and_preserves_order() {
         assert_eq!(quantize_number(3.14, 2), Some(314));
         assert_eq!(quantize_number(3.149, 2), Some(315)); // rounds up

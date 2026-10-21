@@ -9,7 +9,7 @@
 //! negates soundly. Self-contained: a minimal two-predicate graph emitted via the
 //! real engine (so the redges_ sibling is written and composed).
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use alizarin_core::graph::StaticGraph;
 use ros_madair_duck::DuckReader;

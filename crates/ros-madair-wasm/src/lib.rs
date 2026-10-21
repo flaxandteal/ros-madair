@@ -242,7 +242,7 @@ mod tests {
         // has_concept_index = true (the melt is registered); nothing else.
         let sql = Compiler::new(&graph_json())
             .unwrap()
-            .lower(&query, false, false, true, false, false)
+            .lower(&query, false, false, true, false, false, false)
             .expect("compile should succeed");
         assert_eq!(
             sql,
@@ -256,7 +256,7 @@ mod tests {
         let query = json!({ "model": "test-g", "measures": [] }).to_string();
         let sql = Compiler::new(&graph_json())
             .unwrap()
-            .lower(&query, false, false, false, false, false)
+            .lower(&query, false, false, false, false, false, false)
             .unwrap();
         assert_eq!(sql, "SELECT DISTINCT resource_id FROM tiles");
     }
@@ -266,7 +266,7 @@ mod tests {
         let query = json!({ "model": "no-such-graph", "measures": [] }).to_string();
         let err = Compiler::new(&graph_json())
             .unwrap()
-            .lower(&query, false, false, false, false, false);
+            .lower(&query, false, false, false, false, false, false);
         assert!(
             err.is_err(),
             "a query naming an absent model must fail, not mis-compile"
@@ -284,7 +284,7 @@ mod tests {
         // has_concept_index = false → the Concept predicate cannot be served.
         let err = Compiler::new(&graph_json())
             .unwrap()
-            .lower(&query, false, false, false, false, false);
+            .lower(&query, false, false, false, false, false, false);
         assert!(
             err.is_err(),
             "a Concept filter without the melt must be a typed error"
