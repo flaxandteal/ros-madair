@@ -556,6 +556,33 @@ fn geo_points_reverse_link_lookup() {
 }
 
 #[test]
+/// Regression (reference → label inlining): a `reference` field must hydrate to
+/// its concept LABEL, never the raw list-item UUID. This is the SINGLE-HEAD path a
+/// native consumer (Gréasán) probes directly. The catalog maps CAT_A -> "Category
+/// A"; the `category` node stores `[CAT_A]`. A downstream report (alpha.140/alpha.28)
+/// claimed references leak UUIDs; this pins the canonical shape so a real regression
+/// fails here loudly rather than only in a consumer app.
+#[test]
+fn reference_field_hydrates_to_label_not_uuid() {
+    let (dir, graph) = fixture();
+    let duck = DuckReader::open_with_catalog(
+        dir.join("tiles_test.parquet").to_str().unwrap(),
+        dir.join("concept_catalog.parquet").to_str().unwrap(),
+    )
+    .unwrap();
+    let tree = duck.hydrate(R1, &graph, &["en"]).unwrap();
+    let dump = tree.to_string();
+    assert!(
+        !dump.contains(CAT_A),
+        "reference leaked the raw list-item UUID instead of resolving a label:\n{dump}"
+    );
+    assert!(
+        dump.contains("Category A"),
+        "reference should render its concept label 'Category A':\n{dump}"
+    );
+}
+
+#[test]
 fn hydrate_layers_single_layer_smoke() {
     let (dir, graph) = fixture();
     // hydrate_layers now takes a LayeredGraph. `new` rejects an empty overlay set
@@ -577,6 +604,20 @@ fn hydrate_layers_single_layer_smoke() {
     )
     .unwrap();
     assert!(result.is_object(), "hydrate returns a JSON tree");
+
+    // REPRODUCTION: a `reference` field must hydrate to its concept LABEL, not the
+    // raw list-item UUID. The catalog maps CAT_A -> "Category A"; the fixture stores
+    // [CAT_A] on the `category` node. If the UUID leaks, reference label-inlining is
+    // broken.
+    let dump = result.to_string();
+    assert!(
+        !dump.contains(CAT_A),
+        "reference leaked the raw UUID instead of resolving a label:\n{dump}"
+    );
+    assert!(
+        dump.contains("Category A"),
+        "reference should render its concept label 'Category A':\n{dump}"
+    );
 
     let err = ros_madair_duck::hydrate_layers(
         &[dir.as_path()],
