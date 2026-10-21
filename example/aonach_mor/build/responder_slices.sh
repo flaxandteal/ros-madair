@@ -1,25 +1,30 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: AGPL-3.0-or-later
-# © Flax & Teal Limited. Aonach Mór Responder — the TWO SIGNED SLICES.
+# © Flax & Teal Limited. Aonach Mór Responder — the THREE SIGNED SLICES.
 #
-# Produces the two heads the Responder/insurer demo composes, proving the
-# default-deny tier (egress-by-emit) on real-shaped Aonach data:
+# Produces the signed heads the Responder/insurer app composes, proving the
+# default-deny tier (egress-by-emit) AND the "two independent owners compose
+# on-device" beat on real-shaped Aonach data. Each slice is a separately-signed
+# head; the demo composes the two the responder needs, and gives the insurer only
+# its own.
 #
-#   responder_head/  — the FULL head: buildings + their keyholders (persons),
-#                      organisations, sites, policies, coverage. The field
-#                      responder, offline, taps a point and gets buildings in
-#                      range AND their keyholders/contacts.
-#   insurer_head/    — the TIERED head: ONLY the covered buildings, with their
-#                      insured_value + capacity + footprint. NO persons, NO
-#                      organisations — not filtered at read time, PHYSICALLY ABSENT
-#                      (there is no person/organisation parquet in the head at all).
-#                      manifest.tier self-declares the exclusions; the signed
-#                      snapshot_id covers them, so contacts cannot be added back
-#                      without breaking the owner's signature.
+#   building_head/  — OWNER 1 (council). All buildings with capacity / service-role /
+#                     insured_value / footprint (+ their sites). NO persons.
+#   contact_head/   — OWNER 2 (a contacts custodian). The keyholders (persons), whose
+#                     keyholder_for links point at building_head's building ids — a
+#                     SHARED-ID join composed on-device, NOT a merged dump.
+#   insurer_head/   — the TIERED window: ONLY the covered buildings (insured_value +
+#                     capacity + footprint). Persons/orgs PHYSICALLY ABSENT; it is a
+#                     different artifact, not a filtered view. manifest.tier declares
+#                     the scope; the signed snapshot_id covers it.
 #
-# The protection is L0 (absence) + distribution control: the insurer is handed a
-# genuinely contact-free artifact, not a full head with a polite refusal bolted on.
-# (L1 — a typed "denied" at compile time — is the honest UX on top; see tier.rs.)
+# Responder app opens  building_head + contact_head  → tap a building → its
+# keyholders via cited_by ACROSS the two signed slices.
+# Insurer window opens  insurer_head  alone → covered buildings + ΣTIV, no contacts.
+#
+# The protection is L0 (absence) + distribution control: each party is handed a
+# genuinely scoped artifact. (L1 — a typed "denied" at compile time — is the honest
+# UX on top; see crates/ros-madair-duck/tests/tier.rs.)
 #
 # Usage:
 #   cargo build -p ros-madair-emit --bin ros-madair-emit
@@ -45,7 +50,7 @@ python3 "$HERE/emit_organisations.py"  --footprints-count "$COUNT" --seed "$SEED
 python3 "$HERE/emit_persons.py"        --footprints-count "$COUNT" --seed "$SEED" --out "$DATA" >/dev/null
 python3 "$HERE/emit_insurance.py"      --footprints-count "$COUNT" --seed "$SEED" --out "$DATA" >/dev/null
 
-echo "== 2. covered-building ids + the contact model graph ids =="
+echo "== 2. covered-building ids + the model graph ids =="
 python3 - "$DATA" <<'PY'
 import json, sys, glob
 data = sys.argv[1]
@@ -70,26 +75,38 @@ gid = {}
 for f in glob.glob(f"{data}/graphs/*.json"):
     g = json.load(open(f))["graph"][0]
     gid[g["name"]] = g["graphid"]
-open(f"{data}/.gids", "w").write(f"{gid['Person']}\n{gid['Organisation']}\n")
+# building site person organisation policy coverage
+order = ["Building", "Site", "Person", "Organisation", "Insurance policy", "Insurance coverage"]
+open(f"{data}/.gids", "w").write("\n".join(gid[k] for k in order) + "\n")
 print(f"   {len(buildings)} buildings, {len(covered)} covered")
 PY
-PERSON="$(sed -n 1p "$DATA/.gids")"; ORG="$(sed -n 2p "$DATA/.gids")"
+mapfile -t G < "$DATA/.gids"
+BUILDING="${G[0]}"; SITE="${G[1]}"; PERSON="${G[2]}"; ORG="${G[3]}"; POLICY="${G[4]}"; COVERAGE="${G[5]}"
 
-echo "== 3. emit the RESPONDER full head =="
-"$EMIT" "$DATA" "$OUT/responder_head" --base-uri "$BASE" >/dev/null
+echo "== 3. building_head (OWNER 1 — buildings + sites, no contacts) =="
+"$EMIT" "$DATA" "$OUT/building_head" --base-uri "$BASE" \
+  --tier council-buildings \
+  --exclude-model "$PERSON" --exclude-model "$ORG" \
+  --exclude-model "$POLICY" --exclude-model "$COVERAGE" >/dev/null
 
-echo "== 4. emit the INSURER tiered head (covered buildings only; persons/orgs excluded) =="
+echo "== 4. contact_head (OWNER 2 — keyholders/persons only, shared building ids) =="
+"$EMIT" "$DATA" "$OUT/contact_head" --base-uri "$BASE" \
+  --tier keyholder-contacts \
+  --exclude-model "$BUILDING" --exclude-model "$SITE" \
+  --exclude-model "$ORG" --exclude-model "$POLICY" --exclude-model "$COVERAGE" >/dev/null
+
+echo "== 5. insurer_head (TIERED window — covered buildings only, no contacts) =="
 "$EMIT" "$DATA" "$OUT/insurer_head" --base-uri "$BASE" \
   --tier insurer-book --include-resources "$DATA/covered_ids.txt" \
   --exclude-model "$PERSON" --exclude-model "$ORG" >/dev/null
 
-echo "== 5. sign + verify both (one owner key) =="
+echo "== 6. sign + verify all three (one owner key each would be ideal; one key here) =="
 KEY="$OUT/aonach_signing.key"
-for head in responder_head insurer_head; do
+for head in building_head contact_head insurer_head; do
   "$EMIT" sign "$OUT/$head" "$KEY" --actor https://flaxandteal.co.uk --actor-name "Flax & Teal" --role endorsed >/dev/null
   printf "   %-15s " "$head:"; "$EMIT" verify "$OUT/$head"
 done
 
 echo "== done =="
-echo "   responder head: $OUT/responder_head"
-echo "   insurer  head:  $OUT/insurer_head  (tier: insurer-book — contact-free, signed)"
+echo "   RESPONDER composes:  $OUT/building_head  +  $OUT/contact_head"
+echo "   INSURER opens:       $OUT/insurer_head   (tier insurer-book — contact-free, signed)"
