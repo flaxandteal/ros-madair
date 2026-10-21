@@ -60,13 +60,21 @@ jobs:
           cache-on-failure: true   # keep the DuckDB build across runs even on failure
       - name: Publish in dependency order
         if: env.CARGO_REGISTRY_TOKEN != ''
+        # --no-verify: skip cargo's isolated re-build-and-test of each packaged crate.
+        # That verify step runs in a throwaway, version-stamped dir, which defeats BOTH
+        # caches (rust-cache keys on target/; sccache's C/C++ key carries the changing
+        # -I<OUT_DIR> path), so the bundled libduckdb amalgamation recompiled ~fully (~12
+        # min) EVERY release. CI (ci.yml) already builds AND tests the exact workspace, so
+        # the verify pass only re-proves what CI proved. The per-crate sleep STAYS: it is
+        # not for the (now-skipped) verify build but for crates.io's SERVER-SIDE dependency
+        # check — each crate pins `=` deps, so the one before it must be queryable first.
         run: |
           for crate in ros-madair-handlers ros-madair-query ros-madair-format ros-madair-compile ros-madair-emit ros-madair-duck; do
             echo "::group::cargo publish $crate"
-            cargo publish -p "$crate" \
+            cargo publish -p "$crate" --no-verify \
               || echo "::warning::publish $crate failed (already at this version, or crate name not yet owned) — continuing"
             echo "::endgroup::"
-            sleep 25   # let the crates.io index propagate before the dependent crate builds
+            sleep 25   # let crates.io index the just-published crate before the next crate's dep check
           done
 
   # ── Browser compiler → npm (ros-madair, Trusted Publishing / OIDC — NO token) ─
