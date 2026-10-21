@@ -29,8 +29,15 @@ const R1: &str = "11110000-0000-4000-8000-000000000001";
 const R2: &str = "22220000-0000-4000-8000-000000000002";
 const R3: &str = "33330000-0000-4000-8000-000000000003";
 
+// Concept IDS (what the catalog is keyed on, what the melted concept store resolves to).
 const CAT_A: &str = "aaaaaaaa-0000-4000-8000-000000000001";
 const CAT_B: &str = "bbbbbbbb-0000-4000-8000-000000000002";
+// prefLabel VALUE ids — what a real Arches `reference`/`concept` TILE stores, distinct
+// from the concept id (Arches: concept.id != prefLabels.en.id). The catalog bridges
+// value-id -> concept via its `value_ids` column; hydrate must resolve the value-id a
+// tile holds to the concept's label. If these equalled CAT_A/CAT_B the split would hide.
+const CAT_A_VAL: &str = "a1a1a1a1-0000-4000-8000-0000000000a1";
+const CAT_B_VAL: &str = "b2b2b2b2-0000-4000-8000-0000000000b2";
 
 fn scratch(tag: &str) -> PathBuf {
     use std::sync::atomic::{AtomicU64, Ordering};
@@ -132,19 +139,19 @@ fn fixture() -> (PathBuf, StaticGraph) {
     let q_1900 = quantize_date("1900-01-01").unwrap();
 
     let r1_date = tile_data(NG_DATE, json!("2005-06-01"));
-    let r1_ref = tile_data(NG_REF, json!([CAT_A]));
+    let r1_ref = tile_data(NG_REF, json!([CAT_A_VAL]));
     let r1_geo = tile_data(NG_GEO, geo_fc(0.0, 0.0));
     let r1_link = tile_data(NG_LINK, json!([{"resourceId": R3}]));
     let r1_lt = link_targets_json(NG_LINK, &[R3]);
 
     let r2_date = tile_data(NG_DATE, json!("2020-03-15"));
-    let r2_ref = tile_data(NG_REF, json!([CAT_A]));
+    let r2_ref = tile_data(NG_REF, json!([CAT_A_VAL]));
     let r2_geo = tile_data(NG_GEO, geo_fc(50.0, 50.0));
     let r2_link = tile_data(NG_LINK, json!([{"resourceId": R3}]));
     let r2_lt = link_targets_json(NG_LINK, &[R3]);
 
     let r3_date = tile_data(NG_DATE, json!("1900-01-01"));
-    let r3_ref = tile_data(NG_REF, json!([CAT_B]));
+    let r3_ref = tile_data(NG_REF, json!([CAT_B_VAL]));
     let r3_geo = tile_data(NG_GEO, geo_fc(100.0, 100.0));
 
     let con = duckdb::Connection::open_in_memory().unwrap();
@@ -222,12 +229,14 @@ fn fixture() -> (PathBuf, StaticGraph) {
     ))
     .unwrap();
 
-    // Concept catalog: A is root (dfs 0..1), B is child leaf (dfs 1..1).
+    // Concept catalog: A is root (dfs 0..1), B is child leaf (dfs 1..1). `value_ids`
+    // is the v5 bridge — the prefLabel VALUE ids a tile actually stores, per concept —
+    // so hydrate can resolve a tile's value-id to the concept's label.
     con.execute_batch(&format!(
         "COPY (SELECT * FROM (VALUES \
-            ('{CAT_A}',0,1,'Category A'),\
-            ('{CAT_B}',1,1,'Category B')\
-        ) c(concept_id, dfs_enter, dfs_leave, label)) TO '{}' (FORMAT PARQUET)",
+            ('{CAT_A}',0,1,'Category A',['{CAT_A_VAL}']),\
+            ('{CAT_B}',1,1,'Category B',['{CAT_B_VAL}'])\
+        ) c(concept_id, dfs_enter, dfs_leave, label, value_ids)) TO '{}' (FORMAT PARQUET)",
         catalog.display()
     ))
     .unwrap();
@@ -572,9 +581,11 @@ fn reference_field_hydrates_to_label_not_uuid() {
     .unwrap();
     let tree = duck.hydrate(R1, &graph, &["en"]).unwrap();
     let dump = tree.to_string();
+    // The tile stores the prefLabel VALUE id (CAT_A_VAL); the catalog is keyed on the
+    // concept id (CAT_A) and bridges via value_ids. A leak shows the value-id raw.
     assert!(
-        !dump.contains(CAT_A),
-        "reference leaked the raw list-item UUID instead of resolving a label:\n{dump}"
+        !dump.contains(CAT_A_VAL),
+        "reference leaked the raw prefLabel value-id instead of resolving a label:\n{dump}"
     );
     assert!(
         dump.contains("Category A"),
@@ -611,8 +622,8 @@ fn hydrate_layers_single_layer_smoke() {
     // broken.
     let dump = result.to_string();
     assert!(
-        !dump.contains(CAT_A),
-        "reference leaked the raw UUID instead of resolving a label:\n{dump}"
+        !dump.contains(CAT_A_VAL),
+        "reference leaked the raw prefLabel value-id instead of resolving a label:\n{dump}"
     );
     assert!(
         dump.contains("Category A"),

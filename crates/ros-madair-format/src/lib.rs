@@ -68,10 +68,15 @@ pub mod verify;
 // v4 adds a `geo_descriptor` column (a geojson `Point` — the resource's
 // representative location descriptor) to the grid edge, so a spatial result draws
 // its pins off the cell-pruned scan without reading the tiles. Additive, but a v4
-// reader expects the column; the version gates it. (The pending-v4 bundle also
-// carries the edge `predicate` column + EDTF `q_lo/q_hi` + the entry-table reconcile
-// as they land — one bump, not four.)
-pub const FORMAT_VERSION: u32 = 4;
+// reader expects the column; the version gates it.
+// v5 adds a `value_ids` column (List<Utf8>) to `concept_catalog.parquet`: the
+// prefLabel VALUE ids each concept owns. A tile stores the VALUE id (Arches:
+// `concept.id != prefLabels.en.id`), while the catalog is keyed on the concept id,
+// so without this bridge hydrate cannot resolve a reference/concept tile to its
+// label and the raw UUID leaks. A v5 reader's `concept_labels` unnests it; the
+// version gates it. (The edge `predicate` column + EDTF `q_lo/q_hi` + the
+// entry-table reconcile remain pending and will share the next bump — not four.)
+pub const FORMAT_VERSION: u32 = 5;
 
 // ---------------------------------------------------------------------------
 // Snapshot id derivation (the ONE copy — writer and reader both call it)

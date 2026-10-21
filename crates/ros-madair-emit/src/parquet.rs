@@ -40,7 +40,7 @@ use alizarin_core::rdm_cache::{RdmCache, RdmCollection};
 
 // Arrow/parquet: the small in-memory concept-catalog writer only. The tile path
 // streams through DuckDB (below).
-use arrow::array::{Int64Array, StringArray};
+use arrow::array::{Int64Array, ListBuilder, StringArray, StringBuilder};
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
 use parquet::arrow::ArrowWriter;
@@ -257,6 +257,12 @@ struct ConceptCatalogRow {
     dfs_enter: i64,
     dfs_leave: i64,
     label: String,
+    /// Every prefLabel VALUE id this concept owns — what a tile actually stores
+    /// (Arches: `concept.id != prefLabels.en.id`). The bridge that lets the reader
+    /// resolve a tile's value-id to this concept's label on hydrate (v5); without it
+    /// the value-id leaks raw. Projected from the same `value_to_concept` resolution
+    /// the melted concept store uses, so both sides agree on identity.
+    value_ids: Vec<String>,
 }
 
 /// DFS-number one concept subtree over `narrower`. First occurrence wins on a
@@ -268,6 +274,7 @@ fn dfs_concept(
     counter: &mut i64,
     seen: &mut std::collections::HashSet<String>,
     rows: &mut Vec<ConceptCatalogRow>,
+    concept_to_values: &HashMap<String, Vec<String>>,
 ) {
     if !seen.insert(id.to_string()) {
         return;
@@ -280,7 +287,7 @@ fn dfs_concept(
     let mut kids: Vec<&str> = concept.narrower.iter().map(String::as_str).collect();
     kids.sort_unstable();
     for k in kids {
-        dfs_concept(coll, k, counter, seen, rows);
+        dfs_concept(coll, k, counter, seen, rows, concept_to_values);
     }
     let dfs_leave = *counter - 1; // largest pre assigned within this subtree
     rows.push(ConceptCatalogRow {
@@ -288,6 +295,7 @@ fn dfs_concept(
         dfs_enter: enter,
         dfs_leave,
         label: coll.get_label(id, "en").unwrap_or_default(),
+        value_ids: concept_to_values.get(id).cloned().unwrap_or_default(),
     });
 }
 
@@ -297,9 +305,10 @@ fn dfs_concept(
 fn build_concept_catalog(cache: &RdmCache) -> (Vec<ConceptCatalogRow>, HashMap<String, String>) {
     let mut rows = Vec::new();
     let mut value_to_concept = HashMap::new();
-    let mut counter = 0i64;
     let mut coll_ids = cache.get_collection_ids();
     coll_ids.sort();
+    // Pass 1: value-id -> concept-id across all collections (the resolution the melted
+    // concept store also uses).
     for cid in &coll_ids {
         let Some(coll) = cache.get_collection(cid) else {
             continue;
@@ -309,6 +318,26 @@ fn build_concept_catalog(cache: &RdmCache) -> (Vec<ConceptCatalogRow>, HashMap<S
                 value_to_concept.insert(vid.clone(), concept.to_string());
             }
         }
+    }
+    // Invert to concept-id -> [value-id] (sorted, for a deterministic catalog), so each
+    // DFS row can carry the value-ids its concept owns — the hydrate-side bridge.
+    let mut concept_to_values: HashMap<String, Vec<String>> = HashMap::new();
+    for (vid, cid) in &value_to_concept {
+        concept_to_values
+            .entry(cid.clone())
+            .or_default()
+            .push(vid.clone());
+    }
+    for v in concept_to_values.values_mut() {
+        v.sort();
+    }
+    // Pass 2: DFS-number each collection's concepts (unchanged numbering — a shared
+    // counter, per-collection `seen`), attaching value_ids.
+    let mut counter = 0i64;
+    for cid in &coll_ids {
+        let Some(coll) = cache.get_collection(cid) else {
+            continue;
+        };
         let mut tops: Vec<String> = coll
             .get_top_concepts()
             .iter()
@@ -317,7 +346,7 @@ fn build_concept_catalog(cache: &RdmCache) -> (Vec<ConceptCatalogRow>, HashMap<S
         tops.sort_unstable();
         let mut seen = std::collections::HashSet::new();
         for t in &tops {
-            dfs_concept(coll, t, &mut counter, &mut seen, &mut rows);
+            dfs_concept(coll, t, &mut counter, &mut seen, &mut rows, &concept_to_values);
         }
     }
     (rows, value_to_concept)
@@ -330,11 +359,26 @@ fn write_concept_catalog(
     path: &Path,
 ) -> Result<usize, EmitError> {
     rows.sort_by_key(|r| r.dfs_enter);
+    // value_ids: a List<Utf8> per concept. `item` is arrow's default child-field name
+    // for ListBuilder<StringBuilder>; the schema Field must match the built array's type.
+    let mut value_ids_builder = ListBuilder::new(StringBuilder::new());
+    for r in &rows {
+        for v in &r.value_ids {
+            value_ids_builder.values().append_value(v);
+        }
+        value_ids_builder.append(true); // this concept's list (possibly empty), non-null
+    }
+    let value_ids_arr = value_ids_builder.finish();
     let schema = Arc::new(Schema::new(vec![
         Field::new("concept_id", DataType::Utf8, false),
         Field::new("dfs_enter", DataType::Int64, false),
         Field::new("dfs_leave", DataType::Int64, false),
         Field::new("label", DataType::Utf8, true),
+        Field::new(
+            "value_ids",
+            DataType::List(Arc::new(Field::new("item", DataType::Utf8, true))),
+            true,
+        ),
     ]));
     let batch = RecordBatch::try_new(
         schema.clone(),
@@ -351,6 +395,7 @@ fn write_concept_catalog(
             Arc::new(StringArray::from_iter(
                 rows.iter().map(|r| Some(r.label.as_str())),
             )),
+            Arc::new(value_ids_arr),
         ],
     )?;
     let file = fs::File::create(path)?;

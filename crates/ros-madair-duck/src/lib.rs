@@ -433,7 +433,7 @@ impl DuckReader {
         if has_catalog {
             conn.execute_batch(&format!(
                 "CREATE VIEW concepts AS \
-                 SELECT concept_id, dfs_enter, dfs_leave, label FROM ({}) \
+                 SELECT concept_id, dfs_enter, dfs_leave, label, value_ids FROM ({}) \
                  QUALIFY row_number() OVER (PARTITION BY concept_id ORDER BY _layer DESC) = 1;",
                 ranked_union(&cat_layers)
             ))?;
@@ -633,16 +633,24 @@ impl DuckReader {
         Ok(out)
     }
 
-    /// All `(concept_id, label)` from the catalog - the bulk concept→label dump
-    /// (Gréasán `v2_closure`, for on-device reference rendering). Empty without a
-    /// catalog attached.
+    /// All `(id, label)` from the catalog — the bulk id→label dump (Gréasán
+    /// `v2_closure`, and the native hydrate label map), keyed by BOTH the concept id
+    /// AND every prefLabel VALUE id that concept owns (`value_ids`). A tile stores the
+    /// VALUE id (Arches: `concept.id != prefLabels.en.id`), so a value-id-keyed entry
+    /// is what lets hydrate resolve a tile's reference to its label — without it the
+    /// raw value-id leaks (the v5 fix). Empty without a catalog attached.
     pub fn concept_labels(&self) -> Result<HashMap<String, String>, DuckError> {
         let mut out = HashMap::new();
         if !self.has_catalog {
             return Ok(out);
         }
+        // Concept-id -> label AND value-id -> label (unnest the per-concept value_ids),
+        // so the map resolves whichever identity a tile happens to carry.
         let mut stmt = self.conn.prepare(
-            "SELECT concept_id, label FROM concepts WHERE label IS NOT NULL AND label <> ''",
+            "SELECT concept_id, label FROM concepts WHERE label IS NOT NULL AND label <> '' \
+             UNION ALL \
+             SELECT unnest(value_ids), label FROM concepts \
+             WHERE value_ids IS NOT NULL AND label IS NOT NULL AND label <> ''",
         )?;
         let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
         for row in rows {

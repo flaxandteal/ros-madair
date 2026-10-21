@@ -74,8 +74,9 @@ fn descendant_or_self_is_a_subtree_range() {
             ('r3','r3','{NG}','{NG}','root'),('r4','r4','{NG}','{NG}','a') \
          ) ci(resource_id, tile_id, nodegroup_id, node_id, concept_id)) TO '{concepts}' (FORMAT PARQUET); \
          COPY (SELECT * FROM (VALUES \
-            ('root',0,3,'Root'),('a',1,2,'A'),('a1',2,2,'A1'),('b',3,3,'B') \
-         ) c(concept_id, dfs_enter, dfs_leave, label)) TO '{cat}' (FORMAT PARQUET);",
+            ('root',0,3,'Root',[]::VARCHAR[]),('a',1,2,'A',[]::VARCHAR[]),\
+            ('a1',2,2,'A1',[]::VARCHAR[]),('b',3,3,'B',[]::VARCHAR[]) \
+         ) c(concept_id, dfs_enter, dfs_leave, label, value_ids)) TO '{cat}' (FORMAT PARQUET);",
         tiles = tiles.display(),
         concepts = dir.join("concepts_g.parquet").display(),
         cat = cat.display(),
