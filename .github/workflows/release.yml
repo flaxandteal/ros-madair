@@ -104,6 +104,12 @@ jobs:
           targets: wasm32-unknown-unknown
       - name: Install wasm-pack
         uses: jetli/wasm-pack-action@v0.4.0
+        # PIN the wasm-pack version. Left unset, the action tries to resolve "latest"
+        # from the GitHub API and, when that lookup fails (rate-limit/network), silently
+        # falls back to its baked-in v0.9.1 — which predates `--no-opt` and fails the
+        # build step at argument parsing (bit the alpha.27 release). Pin so it can't.
+        with:
+          version: 'v0.13.1'
       - name: Build the wasm package (target web; no libduckdb in its graph)
         # --no-opt: skip wasm-opt so the release can't be broken by a flaky binaryen
         # download. The ~1.7 MB module gzips to a few hundred KB; enable opt later once
