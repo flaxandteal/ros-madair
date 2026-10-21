@@ -17,7 +17,9 @@ use std::path::Path;
 use std::process::ExitCode;
 
 const USAGE: &str = "usage: ros-madair-emit <data_dir> <out_dir> [--base-uri URI] \
-                     [--partition-by-nodegroup] [--no-render-cache] [--memory-limit SIZE]";
+                     [--partition-by-nodegroup] [--no-render-cache] [--memory-limit SIZE] \
+                     [--tier NAME [--exclude-nodegroup NG]... [--exclude-model GRAPHID]... \
+                     [--include-resources IDS_FILE]]";
 
 fn usage() -> ExitCode {
     eprintln!("{USAGE}");
@@ -171,12 +173,58 @@ fn main() -> ExitCode {
 
     let mut positional = Vec::new();
     let mut base_uri = "https://example.org/".to_string();
+    // Tier (egress-by-emit scoped head, e.g. the insurer window). A head is tiered
+    // only when `--tier <name>` is given; the exclusions physically drop rows at emit.
+    let mut tier_name: Option<String> = None;
+    let mut exclude_nodegroups: std::collections::HashSet<String> =
+        std::collections::HashSet::new();
+    let mut exclude_models: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut include_resources: Option<std::collections::HashSet<String>> = None;
     let mut i = 1;
     while i < args.len() {
         match args[i].as_str() {
             "--base-uri" => {
                 i += 1;
                 base_uri = args.get(i).cloned().unwrap_or(base_uri);
+            }
+            // Tier flags — build a default-deny scoped head (see `TierFilter`).
+            "--tier" => {
+                i += 1;
+                tier_name = args.get(i).cloned();
+            }
+            "--exclude-nodegroup" => {
+                i += 1;
+                if let Some(v) = args.get(i) {
+                    exclude_nodegroups.insert(v.clone());
+                }
+            }
+            "--exclude-model" => {
+                i += 1;
+                if let Some(v) = args.get(i) {
+                    exclude_models.insert(v.clone());
+                }
+            }
+            "--include-resources" => {
+                i += 1;
+                match args.get(i).map(|f| (f.clone(), std::fs::read_to_string(f))) {
+                    Some((_, Ok(s))) => {
+                        include_resources = Some(
+                            s.lines()
+                                .map(str::trim)
+                                .filter(|l| !l.is_empty())
+                                .map(String::from)
+                                .collect(),
+                        );
+                    }
+                    Some((f, Err(e))) => {
+                        eprintln!("--include-resources: cannot read {f}: {e}");
+                        return ExitCode::FAILURE;
+                    }
+                    None => {
+                        eprintln!("--include-resources needs a file path");
+                        return ExitCode::FAILURE;
+                    }
+                }
             }
             // Scale levers for a large server-side emit. They set the env vars
             // ros-madair-emit's `parquet` module reads, so the clustering config
@@ -202,6 +250,20 @@ fn main() -> ExitCode {
     if positional.len() != 2 {
         return usage();
     }
+    // Tier exclusions without `--tier <name>` would silently do nothing (no manifest
+    // declaration) — refuse loudly rather than emit a head that looks scoped but isn't.
+    let tiered =
+        !exclude_nodegroups.is_empty() || !exclude_models.is_empty() || include_resources.is_some();
+    if tiered && tier_name.is_none() {
+        eprintln!("tier exclusions (--exclude-nodegroup/--exclude-model/--include-resources) require --tier <name>");
+        return ExitCode::FAILURE;
+    }
+    let tier = tier_name.map(|name| ros_madair_emit::TierFilter {
+        name,
+        exclude_nodegroups,
+        exclude_models,
+        include_resources,
+    });
 
     // The CLM reference handler is registered so the CLI indexes `reference`
     // fields (core knows no `reference` — the handler does). Default per-graph
@@ -225,6 +287,7 @@ fn main() -> ExitCode {
         &base_uri,
         &registry,
         &config_by_graph,
+        tier.as_ref(),
         &mut on_progress,
     ) {
         Ok(summaries) => {

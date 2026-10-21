@@ -76,5 +76,5 @@ pub use ros_madair_handlers::default_registry;
 // `crate::` disambiguates the local module from the extern `parquet` crate.
 pub use crate::parquet::{
     emit_parquet, emit_parquet_with_progress, write_model_parquet, ClusterConfig, ClusterDim,
-    ParquetModelSummary,
+    ParquetModelSummary, TierFilter,
 };

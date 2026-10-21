@@ -488,6 +488,8 @@ pub fn write_model_parquet(
     let ng_intervals = nodegroup_dfs_intervals(graph.nodegroups_slice());
     let scratch = stage_scratch(path, slug);
     let stage = TileStage::new(&scratch)?;
+    // This batch helper emits a full (untiered) model; no nodegroup exclusions.
+    let no_exclusions = std::collections::HashSet::new();
     for r in resources {
         append_resource(
             &stage,
@@ -498,6 +500,7 @@ pub fn write_model_parquet(
             registry,
             value_to_concept,
             &ng_intervals,
+            &no_exclusions,
         )?;
     }
     write_ng_sidecar(&ng_intervals, cfg, path)?;
@@ -641,6 +644,7 @@ fn append_resource(
     registry: &ExtensionTypeRegistry,
     value_to_concept: &HashMap<String, String>,
     ng_intervals: &HashMap<String, (i64, i64)>,
+    exclude_nodegroups: &std::collections::HashSet<String>,
 ) -> Result<(), EmitError> {
     let name = r.resourceinstance.descriptors.name.clone();
     let geo_bbox = first_geo_bbox(r, graph, registry);
@@ -734,6 +738,12 @@ fn append_resource(
     // (resource, tile, nodegroup, node, q_ordered)
     let mut ordered_rows: Vec<(String, Option<String>, String, String, i64)> = Vec::new();
     for tile in tiles {
+        // Tier FIELD CUT: a tile whose nodegroup is excluded (e.g. `contacts`,
+        // `keyholders`) is dropped whole — no tile row, no melted concept/ordered rows,
+        // no edges — so the withheld field is ABSENT from every store, not just hidden.
+        if exclude_nodegroups.contains(tile.nodegroup_id.as_str()) {
+            continue;
+        }
         let mut geo = None;
         // Per-NODE link targets `{node_id: [target,...]}` (not just the first Link
         // node's array): a tile's nodegroup can hold >1 link node (e.g. the place
@@ -1215,6 +1225,33 @@ impl TileStage {
     }
 }
 
+/// A **tier** — the egress-by-emit cut that makes a default-deny scoped head (the
+/// insurer window). The withheld data is physically ABSENT from the emitted
+/// artifacts (not filtered at read time), so an over-reach returns empty because
+/// the bytes are not there — "safe by construction," and tamper-evident since the
+/// manifest's `tier` is inside the signed `snapshot_id`. Two cuts:
+///
+/// - **field cut** (`exclude_nodegroups`): a tile whose nodegroup is listed is
+///   dropped across every per-node store (tiles row, melted concept/ordered, edge
+///   table) — e.g. drop `contacts`/`keyholders`, keep the building profile + geo.
+/// - **row cut** (`include_resources` / `exclude_models`): only the named
+///   resources (the insurer's covered book) are emitted; a model listed in
+///   `exclude_models` is skipped wholesale.
+///
+/// `None` tier = a normal full head. The filter is recorded verbatim into
+/// [`ros_madair_format::TierManifest`] so the head self-declares its scope.
+#[derive(Debug, Clone, Default)]
+pub struct TierFilter {
+    /// The tier name (e.g. `"insurer-book"`), surfaced in the manifest + the UI.
+    pub name: String,
+    /// Nodegroup ids whose tiles are dropped from every store (the field cut).
+    pub exclude_nodegroups: std::collections::HashSet<String>,
+    /// Graph ids skipped entirely (the model-level row cut).
+    pub exclude_models: std::collections::HashSet<String>,
+    /// If `Some`, ONLY these resource ids are emitted (the row cut); `None` = all.
+    pub include_resources: Option<std::collections::HashSet<String>>,
+}
+
 /// Emit tile-row Parquet for every model in `data_dir` into `out_dir`, one
 /// `tiles_<slug>.parquet` per model. `config_by_graph` maps a graph id to its
 /// [`ClusterConfig`]; graphs without an entry get the default. See
@@ -1232,6 +1269,7 @@ pub fn emit_parquet(
         base_uri,
         registry,
         config_by_graph,
+        None,
         &mut |_| std::ops::ControlFlow::Continue(()),
     )
 }
@@ -1246,14 +1284,20 @@ pub fn emit_parquet(
 /// fraction. Then it fires `Phase("writing")` once before the per-model
 /// `COPY ... ORDER BY -> parquet` external sort, which is a single opaque DuckDB
 /// call with no sub-progress. Returning `Break` from `on_progress` cancels the emit.
+#[allow(clippy::too_many_arguments)]
 pub fn emit_parquet_with_progress(
     data_dir: &str,
     out_dir: &str,
     base_uri: &str,
     registry: &ExtensionTypeRegistry,
     config_by_graph: &HashMap<String, ClusterConfig>,
+    tier: Option<&TierFilter>,
     on_progress: &mut dyn FnMut(crate::EmitProgress) -> std::ops::ControlFlow<()>,
 ) -> Result<Vec<ParquetModelSummary>, EmitError> {
+    // The field cut: nodegroups whose tiles are dropped from every per-node store.
+    // Empty when untiered, so `append_resource`'s membership check is a cheap no-op.
+    let empty_ngs = std::collections::HashSet::new();
+    let exclude_ngs = tier.map(|t| &t.exclude_nodegroups).unwrap_or(&empty_ngs);
     let data_dir = Path::new(data_dir);
     let out = Path::new(out_dir);
     fs::create_dir_all(out)?;
@@ -1370,6 +1414,21 @@ pub fn emit_parquet_with_progress(
         let mut append_err: Option<EmitError> = None;
         let stream_res = alizarin_core::stream_business_data_resources(file, |_offset, bytes| {
             let mut r = alizarin_core::parse_business_data_resource_bytes(bytes)?;
+            // Tier ROW CUT: a resource the insurer book does not cover, or a model the
+            // tier excludes wholesale, is skipped here — its rows never reach any store,
+            // so the scoped head cannot name it (default-deny by absence, not by filter).
+            if let Some(t) = tier {
+                if t.exclude_models
+                    .contains(r.resourceinstance.graph_id.as_str())
+                {
+                    return Ok(());
+                }
+                if let Some(inc) = &t.include_resources {
+                    if !inc.contains(&r.resourceinstance.resourceinstanceid) {
+                        return Ok(());
+                    }
+                }
+            }
             if let Some(&gi) = by_graph.get(r.resourceinstance.graph_id.as_str()) {
                 // PASS 2: fill `r.cache` (__cache) with each linked target's title +
                 // descriptors from the pass-1 summary registry. enrich/recompute are
@@ -1396,6 +1455,7 @@ pub fn emit_parquet_with_progress(
                     registry,
                     &value_to_concept,
                     &ng_intervals[gi],
+                    exclude_ngs,
                 ) {
                     append_err = Some(e);
                     return Err(alizarin_core::loader::LoaderError::Other(
@@ -1471,7 +1531,21 @@ pub fn emit_parquet_with_progress(
         snapshot_id: String::new(),
         format_version: ros_madair_format::FORMAT_VERSION,
         base_uri: base_uri.to_string(),
-        tier: None,
+        // Self-declare the tier so the head carries its own scope (and the signed
+        // snapshot_id covers it → the exclusions can't be edited back in without
+        // breaking the signature). Sorted, for a deterministic manifest/id.
+        tier: tier.map(|t| {
+            let mut exclude_nodegroups: Vec<String> =
+                t.exclude_nodegroups.iter().cloned().collect();
+            exclude_nodegroups.sort();
+            let mut exclude_models: Vec<String> = t.exclude_models.iter().cloned().collect();
+            exclude_models.sort();
+            ros_madair_format::TierManifest {
+                name: t.name.clone(),
+                exclude_nodegroups,
+                exclude_models,
+            }
+        }),
         handlers: ros_madair_handlers::describe_registry(registry),
         models: manifest_models,
         artifacts,
