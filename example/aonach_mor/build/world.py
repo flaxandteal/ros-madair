@@ -200,6 +200,19 @@ def build_world(fp, replicas, seed, n_orgs=None, n_persons=None, n_insurers=14):
                 building_keyholders[b[0]] = [p["rid"] for p in khs]
                 for p in khs:
                     p["keyholder_for"].append(b[0])
+    # Shelters / muster points also need a keyholder — the WARDEN who can open them. This
+    # is the flagship EEI ("a usable shelter AND someone who can open it"): without it,
+    # "keyholders of shelters" returns nothing. Draw a ward-matched person, else anyone.
+    by_ward = {}
+    for p in persons:
+        by_ward.setdefault(p["ward"], []).append(p)
+    for b in buildings:
+        if b[1] in ("Shelter", "Muster point") and b[0] not in building_keyholders:
+            pool = by_ward.get(b[4]) or persons
+            if pool:
+                kh = rng.choice(pool)
+                building_keyholders[b[0]] = [kh["rid"]]
+                kh["keyholder_for"].append(b[0])
 
     return {
         "orgs": orgs, "persons": persons, "building_keyholders": building_keyholders,

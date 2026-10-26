@@ -139,7 +139,8 @@ def gem_cat(code):
 #    per-building capability tags ("this hall can serve as a shelter"), which plausibly
 #    scale with the stock.
 CRITICAL_FIXED = {"Hospital": 8, "Emergency operations centre": 2, "Fire station": 14,
-                  "Police station": 14, "Water / pumping station": 10, "School": 60}
+                  "Police station": 14, "Water / pumping station": 10, "School": 60,
+                  "Electrical substation": 9}
 # A true FACILITY is the building itself (named for its ward, capped). Shelter and
 # Muster point are NOT facilities — they are capability TAGS a hall/block carries
 # ("designated as a shelter"), so they ride ordinary buildings and keep the ordinary
@@ -155,6 +156,7 @@ CRIT_ZONES = {
     "Police station": {"commercial_core", "residential_mixed", "residential_affluent"},
     "Water / pumping station": {"industrial", "coastal", "low_income_informal"},
     "School": {"residential_affluent", "residential_mixed", "commercial_core", "coastal", "institutional"},
+    "Electrical substation": {"industrial", "residential_mixed", "commercial_core", "low_income_informal"},
 }
 
 # ── naming pools (believable at 763k) ───────────────────────────────────────
@@ -288,10 +290,28 @@ def _record(gid, f, lng, lat, rng, zones, ages, glabels, sites, forced_role=None
     ]
     if sr:
         tiles.append(tile("service_roles", {nid("service_roles"): [sr]}, "role"))
-    # TIV (every building): height-scaled insured value. Raw in `data`; melts to the
-    # ordered store so the insurer window can SUM it over a footprint (the ΣTIV
-    # accumulation figure an underwriter recomputes after each event).
-    tiv = int(height * rng.uniform(50_000, 200_000))
+    # TIV (every building): insured value driven by WHAT the building is (its responder
+    # role, else its urban zone), modulated by height and a heritage premium. Spans ~10
+    # lakh housing to several-hundred-crore critical facilities — the believable range a
+    # responder/underwriter actually filters on ("worth over N crore"). Raw in `data`;
+    # melts to the ordered store so the insurer window SUMs it over a footprint (ΣTIV).
+    CRORE = 10_000_000
+    _role_band = {  # INR crore, low..high
+        "Hospital": (50, 500), "Emergency operations centre": (20, 120),
+        "Fire station": (10, 60), "Police station": (10, 60), "School": (5, 50),
+        "Water / pumping station": (3, 40), "Electrical substation": (5, 60),
+        "Muster point": (1, 10),
+    }
+    _zone_band = {  # no responder role → value by urban zone
+        "Central business district": (3, 40), "Port": (5, 60), "Industrial": (2, 35),
+        "Heritage": (1, 20), "Coastal": (0.3, 5), "Residential": (0.15, 3),
+        "Peri-urban": (0.1, 2),
+    }
+    lo_cr, hi_cr = _role_band.get(role) or _zone_band.get(cluster, (0.15, 3))
+    base = rng.uniform(lo_cr, hi_cr) * CRORE
+    tiv = int(base * (0.6 + 0.08 * height) * rng.uniform(0.75, 1.3))
+    if heritage == "Listed":
+        tiv = int(tiv * rng.uniform(1.2, 2.0))  # listed-building premium
     tiles.append(tile("value_dimension", {nid("insured_value"): tiv}, "tiv"))
     # Capacity: ONLY where a responder can USE the building — true facilities plus the
     # shelter/muster capability tags ("shelters/hospitals in range with capacity ≥N").

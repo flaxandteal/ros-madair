@@ -235,6 +235,21 @@ def generate_from_world(world, seed):
         if o["occupies"]:
             tiles.append(tile("occupies",
                               {nid("occupies"): [{"resourceId": b} for b in o["occupies"]]}, "occ"))
+        # org_type (E55 legal form, orthogonal to ISIC sector): emergency services, utilities,
+        # government, and a believable NGO/charity share in health/social/education/other —
+        # so "relief NGOs" resolves to real NGO/charity orgs (many of which operate shelters).
+        _emerg = {"Fire station", "Police station", "Emergency operations centre"}
+        if roles and set(roles) & _emerg:
+            org_type = "Emergency service"
+        elif letter in ("D", "E") or (roles and "Water / pumping station" in roles):
+            org_type = "Utility"
+        elif letter == "O":
+            org_type = "Government body"
+        elif letter in ("Q", "S", "P"):
+            org_type = rng.choices(["NGO / charity", "Government body", "Private company"], [5, 2, 3])[0]
+        else:
+            org_type = rng.choices(["Private company", "NGO / charity", "Community group"], [7, 2, 1])[0]
+        tiles.append(tile("org_type", {nid("org_type"): org_type}, "otype"))
 
         resources.append({
             "resourceinstance": {"resourceinstanceid": rid, "graph_id": ORG_GRAPHID, "name": name,

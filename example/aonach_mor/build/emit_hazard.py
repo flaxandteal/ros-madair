@@ -134,6 +134,29 @@ def _point_in_ring(pt, ring):
     return inside
 
 
+def _fc_area_sqkm(fc):
+    """Planar area of a GeoJSON FeatureCollection's Polygon rings, in km² — the shoelace
+    formula on lng/lat with a latitude correction (standing in for GeoSPARQL geof:area).
+    Sums exterior rings across features."""
+    import math
+    total = 0.0
+    for f in fc.get("features", []):
+        g = f.get("geometry", {})
+        polys = g["coordinates"] if g.get("type") == "MultiPolygon" else [g.get("coordinates", [])]
+        for poly in polys:
+            if not poly:
+                continue
+            ring = poly[0]
+            lat0 = sum(p[1] for p in ring) / len(ring)
+            kx = 111.320 * math.cos(math.radians(lat0)); ky = 110.574  # km per degree
+            s = 0.0
+            for i in range(len(ring) - 1):
+                x1, y1 = ring[i]; x2, y2 = ring[i + 1]
+                s += (x1 * kx) * (y2 * ky) - (x2 * kx) * (y1 * ky)
+            total += abs(s) / 2.0
+    return round(total, 4)
+
+
 def _centroid(coords):
     xs = [c[0] for c in coords]
     ys = [c[1] for c in coords]
@@ -495,6 +518,8 @@ def gen_footprints(rng, wards, model_meta, scenario_meta):
                 _tile(HF_GRAPHID, rid, "severity_band",
                       {_nid(HF_GRAPHID, "severity_band"): severity}, "sb", i),
                 _tile(HF_GRAPHID, rid, "geometry", {_nid(HF_GRAPHID, "geometry"): fc}, "geo", i),
+                _tile(HF_GRAPHID, rid, "area_dimension",
+                      {_nid(HF_GRAPHID, "area_sqkm"): _fc_area_sqkm(fc)}, "area", i),
                 _tile(HF_GRAPHID, rid, "phenomenon_span",
                       {_nid(HF_GRAPHID, "phenomenon_start"): pstart,
                        _nid(HF_GRAPHID, "phenomenon_end"): pend}, "span", i),

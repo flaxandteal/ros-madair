@@ -128,6 +128,13 @@ def generate_from_world(world, seed):
         if person["keyholder_for"]:
             tiles.append(tile("keyholder_for",
                               {pnid("keyholder_for"): [{"resourceId": b} for b in person["keyholder_for"]]}, "kh"))
+        # duty_status (E55 standing roster/availability — NOT real-time): keyholders skew
+        # on-call (they can be summoned to open a building); others spread across the roster.
+        if person["keyholder_for"]:
+            duty = rng.choices(["On call", "On duty", "Off duty"], [5, 3, 2])[0]
+        else:
+            duty = rng.choices(["On duty", "Off duty", "On call", "Unavailable"], [4, 3, 2, 1])[0]
+        tiles.append(tile("duty_status", {pnid("duty_status"): duty}, "duty"))
         if note:
             tiles.append(tile("notes", {pnid("notes"): note}, "note"))
         resources.append({

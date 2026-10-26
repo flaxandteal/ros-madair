@@ -255,6 +255,39 @@ SIZE_BAND = Collection(
     ],
 )
 
+ORG_TYPE = Collection(
+    name="OrgType",
+    english_label="Organisation type",
+    description=(
+        "Organisational / legal form — the legal-form axis orthogonal to the ISIC "
+        "economic sector. An E74 Group classified by E55 Type via P2 has type."
+    ),
+    concepts=[
+        Concept("government", "Government body", 1),
+        Concept("private", "Private company", 2),
+        Concept("ngo", "NGO / charity", 3),
+        Concept("utility", "Utility", 4),
+        Concept("emergency", "Emergency service", 5),
+        Concept("community", "Community group", 6),
+    ],
+)
+
+DUTY_STATUS = Collection(
+    name="DutyStatus",
+    english_label="Duty status",
+    description=(
+        "Designated roster / availability status (the standing contactability of a "
+        "person, NOT their real-time presence). An E21 Person classified by E55 Type "
+        "via P2 has type."
+    ),
+    concepts=[
+        Concept("on_call", "On call", 1),
+        Concept("on_duty", "On duty", 2),
+        Concept("off_duty", "Off duty", 3),
+        Concept("unavailable", "Unavailable", 4),
+    ],
+)
+
 SEVERITY_BAND = Collection(
     name="SeverityBand",
     english_label="Severity band",
@@ -464,6 +497,8 @@ COLLECTIONS: list[Collection] = [
     SERVICE_ROLE,
     SECTOR,
     SIZE_BAND,
+    ORG_TYPE,
+    DUTY_STATUS,
     SEVERITY_BAND,
     INTENSITY_BAND,
     CONFIDENCE_BAND,

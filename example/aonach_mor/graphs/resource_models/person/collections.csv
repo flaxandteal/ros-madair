@@ -11,3 +11,7 @@ PersonRole,Harbour master,,9
 PersonRole,Utility technician,,10
 PersonRole,Port operative,,11
 PersonRole,Teacher,,12
+DutyStatus,On call,,1
+DutyStatus,On duty,,2
+DutyStatus,Off duty,,3
+DutyStatus,Unavailable,,4

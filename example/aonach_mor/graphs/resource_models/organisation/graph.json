@@ -166,6 +166,21 @@
      "sortorder": 8,
      "ontologyclass": "http://www.cidoc-crm.org/cidoc-crm/E62_String",
      "nodegroup_id": "480be0dc-4b65-5e3d-9d53-306cff1bec88"
+    },
+    {
+     "nodeid": "98564d5c-e799-5459-a0af-0cd08ac4667e",
+     "name": "Organisation type",
+     "alias": "org_type",
+     "datatype": "concept",
+     "graph_id": "924e9837-8b8a-5cf2-931e-f7b5395bd10f",
+     "istopnode": false,
+     "is_collector": true,
+     "isrequired": false,
+     "issearchable": true,
+     "exportable": true,
+     "sortorder": 9,
+     "ontologyclass": "http://www.cidoc-crm.org/cidoc-crm/E55_Type",
+     "nodegroup_id": "98564d5c-e799-5459-a0af-0cd08ac4667e"
     }
    ],
    "nodegroups": [
@@ -206,6 +221,11 @@
     },
     {
      "nodegroupid": "480be0dc-4b65-5e3d-9d53-306cff1bec88",
+     "cardinality": "1",
+     "parentnodegroup_id": null
+    },
+    {
+     "nodegroupid": "98564d5c-e799-5459-a0af-0cd08ac4667e",
      "cardinality": "1",
      "parentnodegroup_id": null
     }
@@ -273,6 +293,13 @@
      "rangenode_id": "480be0dc-4b65-5e3d-9d53-306cff1bec88",
      "graph_id": "924e9837-8b8a-5cf2-931e-f7b5395bd10f",
      "ontologyproperty": "http://www.cidoc-crm.org/cidoc-crm/P3_has_note"
+    },
+    {
+     "edgeid": "9987ac8c-f704-5c52-9cd9-adabf581ba27",
+     "domainnode_id": "a3d9f86d-9c6d-506e-8f3f-1d3b8900c26f",
+     "rangenode_id": "98564d5c-e799-5459-a0af-0cd08ac4667e",
+     "graph_id": "924e9837-8b8a-5cf2-931e-f7b5395bd10f",
+     "ontologyproperty": "http://www.cidoc-crm.org/cidoc-crm/P2_has_type"
     }
    ]
   }

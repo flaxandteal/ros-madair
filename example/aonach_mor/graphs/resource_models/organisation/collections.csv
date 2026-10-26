@@ -32,3 +32,9 @@ ServiceRole,Emergency operations centre,,6
 ServiceRole,Muster point,,7
 ServiceRole,Electrical substation,,8
 ServiceRole,Water / pumping station,,9
+OrgType,Government body,,1
+OrgType,Private company,,2
+OrgType,NGO / charity,,3
+OrgType,Utility,,4
+OrgType,Emergency service,,5
+OrgType,Community group,,6

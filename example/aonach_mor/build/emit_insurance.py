@@ -181,6 +181,10 @@ def generate_from_world(world, n_policies, seed):
         pname = f"{kind} policy {pid} ({year})"
         pnote = (f"{kind} cover underwritten for org {insured['i']} "
                  f"({len(insured_occ)} occupied building(s)); effective {eff_from} to {eff_to}.")
+        # total sum insured (E54 Dimension → E60 Number): ΣTIV proxy, scaled to the covered
+        # stock so "policies over N crore" / "between 5 and 20 crore" discriminate. Raw rupees
+        # (quantized ×10^6 at emit, like Building.insured_value — same number_scale contract).
+        sum_insured = int(max(1, len(insured_occ)) * rng.uniform(1.0, 8.0) * 10_000_000)
 
         def ptile(alias, data, tag, _i=i, _rid=prid):
             return {"tileid": rid5(POL_GRAPHID, f"tile:{_i}:{tag}"), "nodegroup_id": pnid(alias),
@@ -198,6 +202,7 @@ def generate_from_world(world, n_policies, seed):
                 ptile("insured_party", {pnid("insured_party"): [{"resourceId": insured_rid}]}, "insd"),
                 ptile("effective_span",
                       {pnid("effective_from"): eff_from, pnid("effective_to"): eff_to}, "span"),
+                ptile("sum_insured_dimension", {pnid("total_sum_insured"): sum_insured}, "sum"),
                 ptile("notes", {pnid("notes"): pnote}, "note"),
             ]})
 
