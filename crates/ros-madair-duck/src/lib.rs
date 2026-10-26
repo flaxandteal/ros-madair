@@ -990,27 +990,39 @@ fn open_layer(dir: &Path) -> Result<DuckReader, DuckError> {
 }
 
 /// Run `f` against a layer's `DuckReader`, opened ONCE and pooled for reuse across
-/// hydrates. Opening a DuckDB per layer was the dominant per-entry cost (~75ms
-/// each, and every layer is opened on every entry open); a resource's tiles are a
-/// query, not a reason to re-open. `resource_tiles`/`concept_labels` take `&self`,
-/// so one pooled reader serves every query. The pool lock is held during the query
-/// — fine for a dictionary app opening entries sequentially; concurrent hydrations
-/// (e.g. parallel cognate loads) serialize briefly on the (fast, post-open) query.
+/// hydrates. Opening a DuckDB per layer was the dominant per-entry cost (~75ms each,
+/// and every layer is opened on every entry open); a resource's tiles are a query,
+/// not a reason to re-open. `resource_tiles`/`concept_labels` take `&self`, so one
+/// pooled reader serves every query.
+///
+/// The pool is **per-dir locked**: the GLOBAL lock is held only to get-or-insert the
+/// per-dir slot (O(1), no I/O), then released; the slow `open_layer` and the query
+/// closure `f` run under the slot's **own** lock. So queries on *different* layers run
+/// fully concurrently, and a cold open (or a mass prewarm) blocks only its own dir —
+/// not every other read process-wide. Same-dir calls still serialize, which is required
+/// (`duckdb::Connection` is `Send` but `!Sync`).
 fn with_layer<T>(
     dir: &Path,
     f: impl FnOnce(&DuckReader) -> Result<T, DuckError>,
 ) -> Result<T, DuckError> {
-    use std::sync::{Mutex, OnceLock};
-    static POOL: OnceLock<Mutex<HashMap<std::path::PathBuf, DuckReader>>> = OnceLock::new();
-    let mut pool = POOL
-        .get_or_init(|| Mutex::new(HashMap::new()))
-        .lock()
-        .expect("layer reader pool poisoned");
-    if !pool.contains_key(dir) {
-        let reader = open_layer(dir)?;
-        pool.insert(dir.to_path_buf(), reader);
+    use std::sync::{Arc, Mutex, OnceLock};
+    type Slot = Arc<Mutex<Option<DuckReader>>>;
+    static POOL: OnceLock<Mutex<HashMap<std::path::PathBuf, Slot>>> = OnceLock::new();
+    // Global lock: get-or-insert this dir's slot, then drop the lock immediately.
+    let slot: Slot = {
+        let mut pool = POOL
+            .get_or_init(|| Mutex::new(HashMap::new()))
+            .lock()
+            .expect("layer reader pool poisoned");
+        pool.entry(dir.to_path_buf()).or_default().clone()
+    };
+    // Per-dir lock: open (if cold) and query here. On open failure the slot stays
+    // `None`, so the next call retries rather than caching a broken reader.
+    let mut guard = slot.lock().expect("layer reader slot poisoned");
+    if guard.is_none() {
+        *guard = Some(open_layer(dir)?);
     }
-    f(pool.get(dir).expect("just inserted"))
+    f(guard.as_ref().expect("just opened"))
 }
 
 /// The merged concept-label map for a layer set, cached. Concept labels are stable

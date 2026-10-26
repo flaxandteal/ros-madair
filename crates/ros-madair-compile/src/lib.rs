@@ -491,6 +491,60 @@ pub fn compile_expr(
                 sql_lit(&src_ng)
             ))
         }
+        // Typed REVERSE hop → the SAME edge-table semijoin read from the TARGET side.
+        // `path` + `where` belong to the SOURCE model (the one that owns the forward
+        // link), so resolve them against that graph; keep each `target_resource` whose
+        // `src_resource` is in the inner set. "buildings whose keyholder works for an
+        // NGO" → the buildings, not the people.
+        Expr::OnBacklink {
+            path,
+            model,
+            r#where,
+        } => {
+            if !has_edges {
+                return Err(CompileError(format!(
+                    "reverse on-link path '{path}' needs the edge table — this reader \
+                     has no edges_*.parquet (open a snapshot emitted with the edge slice)"
+                )));
+            }
+            let source = graphs
+                .iter()
+                .copied()
+                .find(|g| g.graphid == *model)
+                .ok_or_else(|| {
+                    CompileError(format!(
+                        "reverse on-link source model '{model}' not available to the \
+                         compiler (open the reader over all linked models)"
+                    ))
+                })?;
+            let (link_node, src_ng) = resolve(source, path)?;
+            expect_class(
+                link_node,
+                registry,
+                |c| matches!(c, IndexClass::Link),
+                path,
+                "link",
+            )?;
+            let inner = compile_expr(
+                r#where,
+                source,
+                graphs,
+                registry,
+                has_catalog,
+                has_edges,
+                has_concept_index,
+                has_ordered,
+                has_grid,
+                spatial,
+            )?;
+            Ok(format!(
+                "SELECT DISTINCT target_resource AS resource_id FROM edges \
+                 WHERE src_node = '{}' AND src_nodegroup = '{}' \
+                   AND src_resource IN ({inner})",
+                sql_lit(&link_node.nodeid),
+                sql_lit(&src_ng)
+            ))
+        }
         // Same-TILE correlation: every child must hold on ONE tile of the resource.
         // A tile is one nodegroup instance, so all children must resolve to a single
         // nodegroup (else unsatisfiable — a typed error). Promoted leaves read that
@@ -572,9 +626,9 @@ fn tile_nodegroup(
         }
         // A backlink is not node-scoped (it spans the whole resource graph), so it
         // cannot be one of an on_tile's single-nodegroup children.
-        Expr::Backlink { .. } => Err(CompileError(
+        Expr::Backlink { .. } | Expr::OnBacklink { .. } => Err(CompileError(
             "backlink cannot be an on_tile child — a tile is one nodegroup instance, \
-             but a backlink is resource-graph-wide, not node-scoped"
+             but a (reverse) backlink is resource-graph-wide, not node-scoped"
                 .into(),
         )),
         // A grid-box is a resource-level spatial prune (over the per-resource grid
@@ -847,8 +901,8 @@ fn compile_tile_cond(
         Expr::OnTile(_) => Err(CompileError(
             "nested on_tile is not supported; flatten the conditions into one on_tile".to_string(),
         )),
-        // A backlink is resource-graph-wide, not a single-tile condition.
-        Expr::Backlink { .. } => Err(CompileError(
+        // A (reverse) backlink is resource-graph-wide, not a single-tile condition.
+        Expr::Backlink { .. } | Expr::OnBacklink { .. } => Err(CompileError(
             "backlink cannot be an on_tile child — it is not node-scoped".to_string(),
         )),
         // A grid-box is a resource-level spatial prune, not a single-tile condition.
@@ -928,7 +982,9 @@ fn first_coarse_path(expr: &Expr, spatial: bool) -> Option<&str> {
             children.iter().find_map(|c| first_coarse_path(c, spatial))
         }
         Expr::Not(inner) => first_coarse_path(inner, spatial),
-        Expr::OnLink { r#where, .. } => first_coarse_path(r#where, spatial),
+        Expr::OnLink { r#where, .. } | Expr::OnBacklink { r#where, .. } => {
+            first_coarse_path(r#where, spatial)
+        }
         Expr::Concept { .. }
         | Expr::Range { .. }
         | Expr::HasLink { .. }

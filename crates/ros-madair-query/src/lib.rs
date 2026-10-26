@@ -154,6 +154,21 @@ pub enum Expr {
     /// `(target_resource, src_node)` so this target-anchored lookup zone-map
     /// prunes (the src-first forward `edges` table could not). EXACT (negatable).
     Backlink { target: String },
+    /// Typed REVERSE hop — the mirror of [`Expr::OnLink`]. `OnLink` walks a
+    /// resource's OWN links forward; `OnBacklink` selects resources of THIS model
+    /// that are the TARGET of a `path` edge whose SOURCE (of `model`) matches
+    /// `where`. It answers "buildings whose keyholder works for an NGO" with the
+    /// BUILDING as the result: `path` = the source model's link alias
+    /// (`keyholder_for`), `model` = the SOURCE model (`Person`), `where` = a
+    /// predicate over that source. Lowers to the forward edge-table semijoin read
+    /// from the target side — keep each `target_resource` whose `src_resource` is in
+    /// the inner set. Substrate-only; exact (the semijoin is not a coarse superset).
+    OnBacklink {
+        path: String,
+        model: String,
+        #[serde(rename = "where")]
+        r#where: Box<Expr>,
+    },
 }
 
 /// Operators for [`Expr::Concept`].
@@ -707,6 +722,14 @@ fn explain_expr(expr: &Expr, resolver: &PathResolver, graph: &StaticGraph) -> St
             explain_join(cs, " and ", resolver, graph)
         ),
         Expr::Backlink { target } => format!("links to {target} (through any relationship)"),
+        Expr::OnBacklink {
+            path,
+            model,
+            r#where,
+        } => format!(
+            "is the '{path}' target of a '{model}' record where {}",
+            explain_expr(r#where, resolver, graph)
+        ),
     }
 }
 
@@ -757,9 +780,9 @@ fn explain_leaf_ng(expr: &Expr, resolver: &PathResolver) -> Option<String> {
             cs.iter().find_map(|c| explain_leaf_ng(c, resolver))
         }
         Expr::Not(inner) => explain_leaf_ng(inner, resolver),
-        // Backlink is not node-scoped (no path/nodegroup) — it cannot be an
-        // OnTile leaf, so it contributes no nodegroup.
-        Expr::Backlink { .. } => None,
+        // Backlink / OnBacklink are not node-scoped in THIS model (no local
+        // path/nodegroup) — they cannot be an OnTile leaf, so contribute no nodegroup.
+        Expr::Backlink { .. } | Expr::OnBacklink { .. } => None,
     }
 }
 
