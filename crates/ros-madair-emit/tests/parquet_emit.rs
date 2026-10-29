@@ -16,7 +16,10 @@ use alizarin_core::quantize::quantize_date;
 use arrow::array::{Array, Float64Array, Int64Array, StringArray};
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use parquet::file::reader::{FileReader, SerializedFileReader};
-use ros_madair_emit::{default_registry, emit_parquet, ClusterConfig, ClusterDim};
+use ros_madair_emit::{
+    default_registry, emit_parquet, emit_parquet_with_progress, ClusterConfig, ClusterDim,
+    ProvenanceManifest,
+};
 use serde_json::json;
 
 const TALK_GRAPH: &str = "a6c412db-72e0-4099-a690-ccc75ba841a9";
@@ -595,6 +598,98 @@ fn verify_head_trusts_signed_and_flags_tamper() {
         }
         v => panic!("expected Failed after tamper, got {v:?}"),
     }
+}
+
+/// Owner-declared provenance, end to end through EMIT (not just the format serde
+/// round-trip): the CLI/library path threads a `ProvenanceManifest` into the written
+/// `manifest.json`, an absent one is OMITTED (not null), and provenance is COVERED by
+/// the signed `snapshot_id` (mutating a field moves the id — so it can't be edited back
+/// in without breaking the owner's signature). The "covered" proof recomputes the id
+/// from the parsed manifest rather than re-emitting, so it does not depend on
+/// cross-emit byte-determinism.
+#[test]
+fn emit_threads_owner_provenance_into_the_signed_manifest() {
+    let Some(dir) = corpus() else {
+        eprintln!("demo fixture absent — skipping");
+        return;
+    };
+    let registry = default_registry();
+    let cfg = HashMap::new();
+    let emit = |out: &Path, prov: Option<&ProvenanceManifest>| {
+        emit_parquet_with_progress(
+            dir.to_str().unwrap(),
+            out.to_str().unwrap(),
+            "https://example.org/",
+            &registry,
+            &cfg,
+            None, // tier
+            prov,
+            &mut |_| std::ops::ControlFlow::Continue(()),
+        )
+        .expect("emit_parquet_with_progress");
+    };
+
+    // 1. WITH provenance → the owner's fields land verbatim in manifest.json.
+    let out_with = scratch("prov-with");
+    let pm = ProvenanceManifest {
+        owner_display_name: Some("City Council · Asset Register".to_string()),
+        as_of: Some("2026-10-22T00:00:00Z".to_string()),
+        owner_colour: Some("#2F7F7A".to_string()),
+        freshness_window_secs: Some(2_592_000),
+    };
+    emit(&out_with, Some(&pm));
+    let raw = std::fs::read(out_with.join("manifest.json")).expect("manifest.json");
+    let json: serde_json::Value = serde_json::from_slice(&raw).unwrap();
+    let p = &json["provenance"];
+    assert_eq!(
+        p["owner_display_name"].as_str(),
+        Some("City Council · Asset Register")
+    );
+    assert_eq!(p["as_of"].as_str(), Some("2026-10-22T00:00:00Z"));
+    assert_eq!(p["owner_colour"].as_str(), Some("#2F7F7A"));
+    assert_eq!(p["freshness_window_secs"].as_u64(), Some(2_592_000));
+
+    // 2. WITHOUT provenance → the key is absent (omitted, never serialized as null),
+    //    which is what keeps a provenance-free head's manifest byte-identical to a
+    //    pre-provenance build (the format unit test proves the byte-level omission).
+    let out_without = scratch("prov-without");
+    emit(&out_without, None);
+    let json_wo: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(out_without.join("manifest.json")).expect("manifest.json"),
+    )
+    .unwrap();
+    assert!(
+        json_wo.get("provenance").is_none(),
+        "absent provenance is omitted, not null"
+    );
+
+    // 3. Provenance is COVERED by the snapshot_id. Parse the signed manifest, clear the
+    //    id, and recompute: it must equal the emitted id (the id covers the manifest,
+    //    provenance included). Then mutate one provenance field and recompute — the id
+    //    MUST move, so an owner's declared provenance is tamper-evident.
+    let mut m: ros_madair_format::Manifest = serde_json::from_slice(&raw).unwrap();
+    let emitted_id = m.snapshot_id.clone();
+    assert!(!emitted_id.is_empty());
+    m.snapshot_id = String::new();
+    let recomputed = ros_madair_format::snapshot_id(
+        &m.artifacts,
+        &ros_madair_format::manifest_digest_bytes(&m).unwrap(),
+    );
+    assert_eq!(
+        recomputed, emitted_id,
+        "the emitted snapshot_id covers the manifest (provenance included)"
+    );
+    m.provenance.as_mut().unwrap().owner_colour = Some("#000000".to_string());
+    let moved = ros_madair_format::snapshot_id(
+        &m.artifacts,
+        &ros_madair_format::manifest_digest_bytes(&m).unwrap(),
+    );
+    assert_ne!(
+        moved, emitted_id,
+        "mutating provenance moves the snapshot_id — it is signed, not free-text metadata"
+    );
+
+    eprintln!("OK: provenance threaded into manifest, omitted when absent, covered by the id");
 }
 
 // ---------------------------------------------------------------------------

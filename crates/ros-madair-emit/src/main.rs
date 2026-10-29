@@ -19,7 +19,9 @@ use std::process::ExitCode;
 const USAGE: &str = "usage: ros-madair-emit <data_dir> <out_dir> [--base-uri URI] \
                      [--partition-by-nodegroup] [--no-render-cache] [--memory-limit SIZE] \
                      [--tier NAME [--exclude-nodegroup NG]... [--exclude-model GRAPHID]... \
-                     [--include-resources IDS_FILE]]";
+                     [--include-resources IDS_FILE]] \
+                     [--owner-name NAME] [--owner-colour HEX] [--as-of RFC3339] \
+                     [--freshness-window-secs N]";
 
 fn usage() -> ExitCode {
     eprintln!("{USAGE}");
