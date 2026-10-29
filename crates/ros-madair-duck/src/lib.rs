@@ -496,7 +496,7 @@ impl DuckReader {
                 shadow_set_union(
                     &grid_layers,
                     &["resource_id"],
-                    "cell, resource_id, descriptor, geo_descriptor, render_summary",
+                    "cell, resource_id, descriptor, geo_descriptor, render_summary, render_fields",
                 )
             ))?;
         }
@@ -585,11 +585,14 @@ impl DuckReader {
     /// (A spatial result reads these columns for free from the same cell-pruned
     /// `GridBox` scan; this by-id method serves non-spatial renders and
     /// native/python callers.)
-    #[allow(clippy::type_complexity)] // (descriptor, geo_descriptor, render_summary) by id
+    #[allow(clippy::type_complexity)] // (descriptor, geo_descriptor, render_summary, render_fields) by id
     pub fn render_summaries(
         &self,
         uris: &[String],
-    ) -> Result<HashMap<String, (Option<String>, Option<String>, Option<String>)>, DuckError> {
+    ) -> Result<
+        HashMap<String, (Option<String>, Option<String>, Option<String>, Option<String>)>,
+        DuckError,
+    > {
         let mut out = HashMap::new();
         if uris.is_empty() || !self.has_grid {
             return Ok(out);
@@ -598,7 +601,7 @@ impl DuckReader {
             .collect::<Vec<_>>()
             .join(",");
         let sql = format!(
-            "SELECT resource_id, descriptor, geo_descriptor, render_summary FROM grid \
+            "SELECT resource_id, descriptor, geo_descriptor, render_summary, render_fields FROM grid \
              WHERE resource_id IN ({placeholders})"
         );
         let mut stmt = self.conn.prepare(&sql)?;
@@ -608,12 +611,13 @@ impl DuckReader {
                 r.get::<_, Option<String>>(1)?,
                 r.get::<_, Option<String>>(2)?,
                 r.get::<_, Option<String>>(3)?,
+                r.get::<_, Option<String>>(4)?,
             ))
         })?;
         for row in rows {
-            let (id, descriptor, geo_descriptor, summary) = row?;
+            let (id, descriptor, geo_descriptor, summary, fields) = row?;
             out.entry(id)
-                .or_insert((descriptor, geo_descriptor, summary));
+                .or_insert((descriptor, geo_descriptor, summary, fields));
         }
         Ok(out)
     }

@@ -491,23 +491,39 @@ def build_site_graph():
             "graph_id": SITE_GRAPHID, "istopnode": True, "is_collector": False, "isrequired": False,
             "issearchable": True, "exportable": False, "sortorder": 0, "ontologyclass": P + "E53_Place"}
 
-    def nd(alias, name, oc, prop):
-        return ({"nodeid": _sidn(alias), "name": name, "alias": alias, "datatype": "string",
-                 "graph_id": SITE_GRAPHID, "istopnode": False, "is_collector": True, "isrequired": False,
-                 "issearchable": True, "exportable": True, "sortorder": 0, "ontologyclass": oc,
-                 "nodegroup_id": _sidn(alias)},
+    def nd(alias, name, oc, prop, datatype="string", collection=None):
+        node = {"nodeid": _sidn(alias), "name": name, "alias": alias, "datatype": datatype,
+                "graph_id": SITE_GRAPHID, "istopnode": False, "is_collector": True, "isrequired": False,
+                "issearchable": True, "exportable": True, "sortorder": 0, "ontologyclass": oc,
+                "nodegroup_id": _sidn(alias)}
+        if collection:
+            node["config"] = {"rdmCollection": collection}
+        return (node,
                 {"nodegroupid": _sidn(alias), "cardinality": "1", "parentnodegroup_id": None},
                 {"edgeid": str(uuid.uuid5(uuid.UUID(SITE_GRAPHID), "e:" + alias)),
                  "domainnode_id": _sidn("site"), "rangenode_id": _sidn(alias),
                  "graph_id": SITE_GRAPHID, "ontologyproperty": prop})
     nm = nd("name", "Name", P + "E41_Appellation", P + "P1_is_identified_by")
     ad = nd("admin_division", "Admin division", P + "E55_Type", P + "P2_has_type")
+    # zone (E55 Type, reusing the ClusterType vocabulary): the urban character of the site,
+    # mirroring Building.cluster_type — so "registered in a coastal site" can filter.
+    zn = nd("zone", "Zone", P + "E55_Type", P + "P2_has_type", datatype="concept", collection="ClusterType")
     return {"graph": [{"graphid": SITE_GRAPHID, "name": "Site", "root": root,
-                       "nodes": [root, nm[0], ad[0]], "nodegroups": [nm[1], ad[1]], "edges": [nm[2], ad[2]]}]}
+                       "nodes": [root, nm[0], ad[0], zn[0]], "nodegroups": [nm[1], ad[1], zn[1]],
+                       "edges": [nm[2], ad[2], zn[2]]}]}
 
 
 def site_resources(footprints):
+    import collections as _c
     wards = sorted({strip_ward(f["ward"]) for f in footprints})
+    # each ward's zone = the modal footprint zone, mapped to its ClusterType label.
+    ward_zone = {}
+    by_ward = _c.defaultdict(_c.Counter)
+    for f in footprints:
+        by_ward[strip_ward(f["ward"])][f.get("zone", "residential_mixed")] += 1
+    for w in wards:
+        zkey = by_ward[w].most_common(1)[0][0] if by_ward[w] else "residential_mixed"
+        ward_zone[w] = ZONE_CLUSTER.get(zkey, "Residential")
     out = []
     for w in wards:
         rid = site_rid(w)
@@ -521,6 +537,9 @@ def site_resources(footprints):
                 {"tileid": str(uuid.uuid5(uuid.UUID(SITE_GRAPHID), f"t:{w}:adm")), "nodegroup_id": _sidn("admin_division"),
                  "parenttile_id": None, "resourceinstance_id": rid, "sortorder": 0, "provisionaledits": None,
                  "data": {_sidn("admin_division"): "Ward"}},
+                {"tileid": str(uuid.uuid5(uuid.UUID(SITE_GRAPHID), f"t:{w}:zone")), "nodegroup_id": _sidn("zone"),
+                 "parenttile_id": None, "resourceinstance_id": rid, "sortorder": 0, "provisionaledits": None,
+                 "data": {_sidn("zone"): ward_zone[w]}},
             ]})
     return out
 

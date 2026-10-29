@@ -217,6 +217,7 @@ fn tile_row_parquet_carries_promoted_columns_and_chunks() {
             row_group_size: 2,
             partition_by_nodegroup: false,
             nodegroup_hierarchical_order: false,
+            render_fields: vec![],
         },
     );
 
@@ -372,6 +373,7 @@ fn nodegroup_partitioning_isolates_each_nodegroup_into_its_own_file() {
             row_group_size: 8192,
             partition_by_nodegroup: true,
             nodegroup_hierarchical_order: false,
+            render_fields: vec![],
         },
     );
 

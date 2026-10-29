@@ -219,7 +219,7 @@ fn grid_box_prunes_to_near_resources_and_entry_table_reads() {
     let render = duck
         .render_summaries(&[NEAR_H.to_string()])
         .expect("render_summaries");
-    let (descriptor, geo_descriptor, _summary) = render.get(NEAR_H).expect("NEAR_H render");
+    let (descriptor, geo_descriptor, _summary, _fields) = render.get(NEAR_H).expect("NEAR_H render");
     assert_eq!(descriptor.as_deref(), Some("Near Hospital"));
     // geo_descriptor (v4) reaches the app THROUGH render_summaries — the accessor the
     // map uses to place a pin without hydrating the tile tree.

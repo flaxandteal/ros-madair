@@ -35,6 +35,11 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd "$HERE/../../.." && pwd)"
 COUNT="${1:-200}"
 OUT="${2:-$REPO/target/aonach-slices}"
+# REPLICAS re-samples each footprint N times (dispersed into the urban fabric) to scale the
+# building stock beyond the ~33k real footprints — deterministic, so the buildings match the
+# published docs corpus. e.g. 33172 × 2 ≈ 66k. The relational world (orgs/persons/insurance)
+# scales proportionally off the same stream.
+REPLICAS="${3:-1}"
 EMIT="${EMIT:-$REPO/target/debug/ros-madair-emit}"
 BASE="https://rosmadair.example.org/aonach_mor/"
 SEED="${SEED:-1904}"
@@ -44,11 +49,15 @@ SEED="${SEED:-1904}"
 DATA="$OUT/data"
 rm -rf "$OUT"; mkdir -p "$DATA"
 
+# Promote the responder's card/pin fields onto the grid edge (RM render_fields config — the
+# DOMAIN names them; RM reads the list). The building graph carries these; other graphs skip them.
+export ROS_MADAIR_RENDER_FIELDS="service_roles,capacity,height_m,cluster_type"
+
 echo "== 1. generate the coherent world (buildings → keyholders → orgs → coverage) =="
-python3 "$HERE/emit_buildings.py"      --count           "$COUNT" --out "$DATA" >/dev/null
-python3 "$HERE/emit_organisations.py"  --footprints-count "$COUNT" --seed "$SEED" --out "$DATA" >/dev/null
-python3 "$HERE/emit_persons.py"        --footprints-count "$COUNT" --seed "$SEED" --out "$DATA" >/dev/null
-python3 "$HERE/emit_insurance.py"      --footprints-count "$COUNT" --seed "$SEED" --out "$DATA" >/dev/null
+python3 "$HERE/emit_buildings.py"      --count           "$COUNT" --replicas "$REPLICAS" --out "$DATA" >/dev/null
+python3 "$HERE/emit_organisations.py"  --footprints-count "$COUNT" --replicas "$REPLICAS" --seed "$SEED" --out "$DATA" >/dev/null
+python3 "$HERE/emit_persons.py"        --footprints-count "$COUNT" --replicas "$REPLICAS" --seed "$SEED" --out "$DATA" >/dev/null
+python3 "$HERE/emit_insurance.py"      --footprints-count "$COUNT" --replicas "$REPLICAS" --seed "$SEED" --out "$DATA" >/dev/null
 
 echo "== 2. covered-building ids + the model graph ids =="
 python3 - "$DATA" <<'PY'
@@ -105,6 +114,24 @@ KEY="$OUT/aonach_signing.key"
 for head in building_head contact_head insurer_head; do
   "$EMIT" sign "$OUT/$head" "$KEY" --actor https://flaxandteal.co.uk --actor-name "Flax & Teal" --role endorsed >/dev/null
   printf "   %-15s " "$head:"; "$EMIT" verify "$OUT/$head"
+done
+
+echo "== 7. copy each model's graph INTO its head (the hydrate/buffer path reads graph.json"
+echo "       + graph_<gid>.json from the head dir; emit ships only parquet + manifest) =="
+for head in building_head contact_head insurer_head; do
+  python3 - "$OUT/$head" "$DATA/graphs" <<'PY'
+import json, sys, shutil, os
+hd, graphs = sys.argv[1], sys.argv[2]
+models = json.load(open(f"{hd}/manifest.json")).get("models", [])
+for i, mod in enumerate(models):
+    src = f"{graphs}/{mod['graph_id']}.json"
+    if not os.path.exists(src):
+        print(f"   MISSING graph {mod['graph_id']} ({mod['slug']})"); continue
+    shutil.copy(src, f"{hd}/graph_{mod['graph_id']}.json")
+    if i == 0:
+        shutil.copy(src, f"{hd}/graph.json")  # primary = the spine (grid-carrying) model
+print(f"   {os.path.basename(hd)}: {len(models)} graph(s) copied")
+PY
 done
 
 echo "== done =="
