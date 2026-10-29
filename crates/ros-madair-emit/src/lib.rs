@@ -43,7 +43,9 @@ pub use ros_madair_format::attest::{
 /// what this crate writes without linking the emitter (and without a
 /// hand-mirrored copy of the wire format, which is how they drift). Re-exported
 /// here so existing callers keep working.
-pub use ros_madair_format::{ArtifactEntry, Budgets, Manifest, ModelManifest, TierManifest};
+pub use ros_madair_format::{
+    ArtifactEntry, Budgets, Manifest, ModelManifest, ProvenanceManifest, TierManifest,
+};
 
 pub type EmitError = Box<dyn std::error::Error>;
 

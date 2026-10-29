@@ -180,6 +180,13 @@ fn main() -> ExitCode {
         std::collections::HashSet::new();
     let mut exclude_models: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut include_resources: Option<std::collections::HashSet<String>> = None;
+    // Owner-declared provenance (presentation/policy, not crypto identity): the
+    // display name/colour the trust UI shows beside the signature, the data's
+    // owner-asserted currency, and the owner's freshness policy. All optional.
+    let mut owner_name: Option<String> = None;
+    let mut owner_colour: Option<String> = None;
+    let mut as_of: Option<String> = None;
+    let mut freshness_window_secs: Option<u64> = None;
     let mut i = 1;
     while i < args.len() {
         match args[i].as_str() {
@@ -236,6 +243,34 @@ fn main() -> ExitCode {
             "--partition-by-nodegroup" => {
                 std::env::set_var("ROS_MADAIR_EMIT_PARTITION_BY_NODEGROUP", "1")
             }
+            // Provenance flags — owner-declared, domain-agnostic. Caller-provided
+            // (not wall-clock) so the manifest/snapshot_id stays reproducible.
+            "--owner-name" => {
+                i += 1;
+                owner_name = args.get(i).cloned();
+            }
+            "--owner-colour" | "--owner-color" => {
+                i += 1;
+                owner_colour = args.get(i).cloned();
+            }
+            "--as-of" => {
+                i += 1;
+                as_of = args.get(i).cloned();
+            }
+            "--freshness-window-secs" => {
+                i += 1;
+                match args.get(i).map(|v| v.parse::<u64>()) {
+                    Some(Ok(n)) => freshness_window_secs = Some(n),
+                    Some(Err(_)) => {
+                        eprintln!("--freshness-window-secs needs an integer (seconds)");
+                        return ExitCode::FAILURE;
+                    }
+                    None => {
+                        eprintln!("--freshness-window-secs needs a value");
+                        return ExitCode::FAILURE;
+                    }
+                }
+            }
             "--no-render-cache" => std::env::set_var("ROS_MADAIR_EMIT_RENDER_CACHE", "0"),
             "--memory-limit" => {
                 i += 1;
@@ -264,6 +299,19 @@ fn main() -> ExitCode {
         exclude_models,
         include_resources,
     });
+    // Build the provenance block only when the owner actually declared something —
+    // all-None stays None, so an undeclared head's manifest is byte-identical to
+    // before (no snapshot_id churn).
+    let provenance = (owner_name.is_some()
+        || owner_colour.is_some()
+        || as_of.is_some()
+        || freshness_window_secs.is_some())
+    .then(|| ros_madair_emit::ProvenanceManifest {
+        owner_display_name: owner_name,
+        as_of,
+        owner_colour,
+        freshness_window_secs,
+    });
 
     // The CLM reference handler is registered so the CLI indexes `reference`
     // fields (core knows no `reference` — the handler does). Default per-graph
@@ -288,6 +336,7 @@ fn main() -> ExitCode {
         &registry,
         &config_by_graph,
         tier.as_ref(),
+        provenance.as_ref(),
         &mut on_progress,
     ) {
         Ok(summaries) => {

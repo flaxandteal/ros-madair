@@ -215,6 +215,7 @@ pub fn seal_and_sign(
             format_version: ros_madair_format::FORMAT_VERSION,
             base_uri: "https://example.org/".to_string(),
             tier: None,
+            provenance: None,
             handlers: vec![],
             models: vec![],
             artifacts: vec![],

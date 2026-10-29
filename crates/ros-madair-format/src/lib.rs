@@ -168,6 +168,12 @@ pub struct Manifest {
     /// compiler can check tier permissions from the manifest alone.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tier: Option<TierManifest>,
+    /// Owner-declared provenance & currency metadata (M-prov), present when the
+    /// emitter was given it. See [`ProvenanceManifest`]. Optional and skipped
+    /// when absent, so a head emitted without it hashes — and therefore
+    /// `snapshot_id`s — exactly as before (purely additive).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provenance: Option<ProvenanceManifest>,
     /// The extension-type handlers this artifact was emitted with (I6). The
     /// query side rebuilds its registry from these rather than assuming a
     /// default: a registry mismatch is otherwise silent — a field that was
@@ -194,6 +200,48 @@ pub struct TierManifest {
     pub exclude_nodegroups: Vec<String>,
     #[serde(default)]
     pub exclude_models: Vec<String>,
+}
+
+/// Owner-declared provenance & currency metadata for one emitted head.
+///
+/// This is **presentation and policy**, NOT cryptographic identity: the
+/// attestation's signing key is what *proves* who emitted a head; these fields
+/// are the human-facing label, data-currency, recognition colour, and refresh
+/// cadence a reader shows *beside* that proof. A reviewer-register UI shows the
+/// key fingerprint; a field-register UI shows `owner_display_name`.
+///
+/// **Why this earns a manifest field when per-field layout did not** (see
+/// [`ModelManifest`]): these are **not derivable** from the schema — they are
+/// facts only the owner knows, declared at emit. And they are **domain-agnostic**:
+/// every slice has an owner, a currency date, a display colour, and a refresh
+/// cadence — a Goidelic-dictionary slice exactly as much as a building slice. RM
+/// stores and compares them; it names no domain default (the "ageing after 6h"
+/// threshold is the *owner's* policy expressed in `freshness_window_secs`, never
+/// RM's).
+///
+/// All four are caller-provided at emit (flags/config), never wall-clock — so the
+/// manifest, and therefore `snapshot_id`, stays reproducible for identical input.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ProvenanceManifest {
+    /// Human-readable owner/source name for the field-register trust UI, e.g.
+    /// `"City Council · Asset Register"`. The attestation carries the signer;
+    /// this is the label shown next to it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner_display_name: Option<String>,
+    /// The data's currency: when the OWNER asserts this content was valid — NOT
+    /// the build time (owner-provided, so deterministic and meaningful). RFC 3339.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub as_of: Option<String>,
+    /// Owner-declared recognition colour (hex, e.g. `"#2F7F7A"`) for the per-fact
+    /// provenance swatch. A recognition aid only — never the sole carrier of
+    /// identity (always paired with the name in the UI).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner_colour: Option<String>,
+    /// Owner-declared freshness window, in seconds: past `as_of + window` a reader
+    /// SHOULD present the slice as "ageing". The number is the owner's policy; RM
+    /// only stores and compares it, and names no domain default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub freshness_window_secs: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -238,6 +286,7 @@ mod tests {
             format_version: FORMAT_VERSION,
             base_uri: "https://example.org/".to_string(),
             tier: None,
+            provenance: None,
             handlers: vec![],
             models: vec![],
             artifacts: vec![],
@@ -256,5 +305,48 @@ mod tests {
         let json = serde_json::to_string(&with_id).unwrap();
         let parsed: Manifest = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed.snapshot_id, "deadbeefdeadbeef");
+    }
+
+    /// Provenance is additive: `None` is skipped (so an undeclared head hashes
+    /// exactly as a pre-provenance one would), and a declared block round-trips.
+    #[test]
+    fn provenance_is_additive_and_round_trips() {
+        let base = Manifest {
+            snapshot_id: String::new(),
+            format_version: FORMAT_VERSION,
+            base_uri: "https://example.org/".to_string(),
+            tier: None,
+            provenance: None,
+            handlers: vec![],
+            models: vec![],
+            artifacts: vec![],
+            budgets: Budgets {
+                max_result_rows: 1000,
+                max_group_count: 500,
+            },
+        };
+        // None → the key never appears, so the manifest bytes (and snapshot_id)
+        // are identical to a build that predates the field.
+        let json = serde_json::to_string(&base).unwrap();
+        assert!(!json.contains("provenance"), "{json}");
+
+        let declared = Manifest {
+            provenance: Some(ProvenanceManifest {
+                owner_display_name: Some("City Council · Asset Register".to_string()),
+                as_of: Some("2026-10-22T00:00:00Z".to_string()),
+                owner_colour: Some("#2F7F7A".to_string()),
+                freshness_window_secs: Some(2_592_000),
+            }),
+            ..base
+        };
+        let parsed: Manifest = serde_json::from_str(&serde_json::to_string(&declared).unwrap()).unwrap();
+        let p = parsed.provenance.expect("provenance present");
+        assert_eq!(p.owner_display_name.as_deref(), Some("City Council · Asset Register"));
+        assert_eq!(p.freshness_window_secs, Some(2_592_000));
+        // A pre-provenance reader (deserializing JSON lacking the key) gets None.
+        let legacy: Manifest =
+            serde_json::from_str(r#"{"format_version":3,"base_uri":"x","handlers":[],"models":[],"artifacts":[],"budgets":{"max_result_rows":1,"max_group_count":1}}"#)
+                .unwrap();
+        assert!(legacy.provenance.is_none());
     }
 }

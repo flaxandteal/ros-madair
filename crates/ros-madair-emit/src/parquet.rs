@@ -90,6 +90,14 @@ pub struct ClusterConfig {
     /// `partition_by_nodegroup` is also set, partitioning owns the physical
     /// layout and this only affects in-partition order + the sidecar.
     pub nodegroup_hierarchical_order: bool,
+    /// DOMAIN-SUPPLIED render fields: node ALIASES whose display values are promoted onto the
+    /// grid edge as a generic `render_fields` JSON column (`{alias: value}`), riding the same
+    /// cell-pruned scan as `descriptor`/`render_summary`. So a spatial result carries the fields
+    /// a card/pin needs WITHOUT a per-resource hydrate. RM names none of them — the domain does:
+    /// a responder passes `["service_roles","capacity","height_m"]`, a dictionary
+    /// `["part_of_speech","dialect"]`. Concept values resolve to their label (carried inline in
+    /// the tile value); ordered/text pass through. Empty = no column (back-compat).
+    pub render_fields: Vec<String>,
 }
 
 impl Default for ClusterConfig {
@@ -99,8 +107,85 @@ impl Default for ClusterConfig {
             row_group_size: 8192,
             partition_by_nodegroup: false,
             nodegroup_hierarchical_order: false,
+            render_fields: vec![],
         }
     }
+}
+
+/// A node's display value for the grid `render_fields` column: concept/reference → its inline
+/// label; number/text/bool → the scalar; list → the labels joined; nested object → its first
+/// scalar leaf. Domain-agnostic — operates on whatever the configured node's tile value is.
+fn render_display_value(v: &serde_json::Value) -> Option<serde_json::Value> {
+    use serde_json::Value;
+    match v {
+        Value::Null => None,
+        Value::Number(_) | Value::String(_) | Value::Bool(_) => Some(v.clone()),
+        Value::Array(a) => {
+            let parts: Vec<String> = a
+                .iter()
+                .filter_map(render_display_value)
+                .map(|e| match e {
+                    Value::String(s) => s,
+                    other => other.to_string(),
+                })
+                .collect();
+            (!parts.is_empty()).then(|| Value::String(parts.join(", ")))
+        }
+        Value::Object(m) => {
+            // Arches concept/reference wrapper carries labels inline: {labels:[{value,…}], …}.
+            if let Some(Value::Array(ls)) = m.get("labels") {
+                if let Some(Value::String(val)) = ls.first().and_then(|l| l.get("value")) {
+                    return Some(Value::String(val.clone()));
+                }
+            }
+            // localized {en: "…"} or a value field.
+            for k in ["value", "en"] {
+                if let Some(Value::String(s)) = m.get(k) {
+                    return Some(Value::String(s.clone()));
+                }
+            }
+            // otherwise the first resolvable scalar leaf.
+            m.values().find_map(render_display_value)
+        }
+    }
+}
+
+/// Build the grid `render_fields` JSON (`{alias: display_value}`) for the configured node
+/// aliases, scanning a resource's tiles. `None` when no field is configured/found (no column).
+fn build_render_fields(
+    tiles: &[alizarin_core::StaticTile],
+    graph: &StaticGraph,
+    aliases: &[String],
+) -> Option<String> {
+    if aliases.is_empty() {
+        return None;
+    }
+    // node_id → alias, for the configured aliases that exist on this graph.
+    let mut node_to_alias: std::collections::HashMap<String, &str> = std::collections::HashMap::new();
+    for a in aliases {
+        if let Some(n) = graph.get_node_by_alias(a) {
+            node_to_alias.insert(n.nodeid.clone(), a.as_str());
+        }
+    }
+    if node_to_alias.is_empty() {
+        return None;
+    }
+    let mut out = serde_json::Map::new();
+    for tile in tiles {
+        for (node_id, value) in &tile.data {
+            if value.is_null() {
+                continue;
+            }
+            if let Some(&alias) = node_to_alias.get(node_id) {
+                if !out.contains_key(alias) {
+                    if let Some(dv) = render_display_value(value) {
+                        out.insert(alias.to_string(), dv);
+                    }
+                }
+            }
+        }
+    }
+    (!out.is_empty()).then(|| serde_json::Value::Object(out).to_string())
 }
 
 /// What writing one model's Parquet produced.
@@ -693,6 +778,12 @@ fn append_resource(
             )]
         });
         let summary = build_render_summary(r.cache.as_ref());
+        // Domain-configured own-node values promoted onto the grid edge (parallel to the linked-
+        // resource `render_summary`). RM names no field — `cfg.render_fields` is the domain's list.
+        let fields = r
+            .tiles
+            .as_ref()
+            .and_then(|t| build_render_fields(t, graph, &cfg.render_fields));
         // Location descriptor (geojson Point) — prefer alizarin's `point` descriptor (a
         // true centroid / point-on-surface from the model's descriptor template, sibling of
         // `name`/`map_popup`; available since alizarin-core alpha.140); fall back to the
@@ -713,7 +804,8 @@ fn append_resource(
                 rid,
                 &name,
                 &geo_descriptor,
-                &summary
+                &summary,
+                &fields
             ])?;
         }
     }
@@ -1016,7 +1108,8 @@ impl TileStage {
                legacyid VARCHAR, descriptor VARCHAR, cluster_key UBIGINT);
              CREATE TABLE grid_stage (
                model_slug VARCHAR, cell BIGINT, resource_id VARCHAR,
-               descriptor VARCHAR, geo_descriptor VARCHAR, render_summary VARCHAR);",
+               descriptor VARCHAR, geo_descriptor VARCHAR, render_summary VARCHAR,
+               render_fields VARCHAR);",
             sql_lit(&scratch.display().to_string())
         ))
         .map_err(|e| format!("duckdb stage schema: {e}"))?;
@@ -1189,7 +1282,7 @@ impl TileStage {
         let grid_path = sibling("grid");
         self.conn
             .execute_batch(&format!(
-                "COPY (SELECT cell, resource_id, descriptor, geo_descriptor, render_summary \
+                "COPY (SELECT cell, resource_id, descriptor, geo_descriptor, render_summary, render_fields \
                  FROM grid_stage WHERE model_slug = '{slug_lit}' ORDER BY cell) \
                  TO '{}' (FORMAT PARQUET, ROW_GROUP_SIZE {rgs});",
                 grid_path.display()
@@ -1270,6 +1363,7 @@ pub fn emit_parquet(
         registry,
         config_by_graph,
         None,
+        None,
         &mut |_| std::ops::ControlFlow::Continue(()),
     )
 }
@@ -1292,6 +1386,7 @@ pub fn emit_parquet_with_progress(
     registry: &ExtensionTypeRegistry,
     config_by_graph: &HashMap<String, ClusterConfig>,
     tier: Option<&TierFilter>,
+    provenance: Option<&ros_madair_format::ProvenanceManifest>,
     on_progress: &mut dyn FnMut(crate::EmitProgress) -> std::ops::ControlFlow<()>,
 ) -> Result<Vec<ParquetModelSummary>, EmitError> {
     // The field cut: nodegroups whose tiles are dropped from every per-node store.
@@ -1335,6 +1430,18 @@ pub fn emit_parquet_with_progress(
     );
     let default_cfg = ClusterConfig {
         partition_by_nodegroup: partition_default,
+        // Domain supplies the promoted render-field aliases via env (comma-list) — RM names none.
+        // A responder sets ROS_MADAIR_RENDER_FIELDS=service_roles,capacity,height_m,cluster_type;
+        // a dictionary sets its own. A graph lacking an alias simply skips it (build_render_fields).
+        render_fields: std::env::var("ROS_MADAIR_RENDER_FIELDS")
+            .ok()
+            .map(|s| {
+                s.split(',')
+                    .map(|a| a.trim().to_string())
+                    .filter(|a| !a.is_empty())
+                    .collect()
+            })
+            .unwrap_or_default(),
         ..Default::default()
     };
     let cfgs: Vec<ClusterConfig> = models
@@ -1546,6 +1653,10 @@ pub fn emit_parquet_with_progress(
                 exclude_models,
             }
         }),
+        // Owner-declared provenance (presentation/policy, not crypto identity).
+        // Cloned straight through — caller-provided, so the manifest stays
+        // reproducible; absent → None → skipped in serialization → no id change.
+        provenance: provenance.cloned(),
         handlers: ros_madair_handlers::describe_registry(registry),
         models: manifest_models,
         artifacts,
@@ -1603,6 +1714,25 @@ mod tests {
     }
 
     // An already-canonical value (bare uuid / {uuid} marker) is untouched.
+    #[test]
+    fn render_display_value_resolves_labels_numbers_and_lists() {
+        use serde_json::json;
+        // ordered number passes through (e.g. height_m)
+        assert_eq!(render_display_value(&json!(9)), Some(json!(9)));
+        // concept/reference wrapper → its inline label (e.g. cluster_type → "Residential")
+        let concept = json!({ "list_item_id": "abc", "labels": [{ "value": "Residential", "language": "en" }], "uri": "x" });
+        assert_eq!(render_display_value(&concept), Some(json!("Residential")));
+        // concept-LIST → labels joined (e.g. service_roles)
+        let list = json!([
+            { "labels": [{ "value": "Shelter" }] },
+            { "labels": [{ "value": "Muster point" }] }
+        ]);
+        assert_eq!(render_display_value(&list), Some(json!("Shelter, Muster point")));
+        // plain string passes through; null drops
+        assert_eq!(render_display_value(&json!("Non-listed")), Some(json!("Non-listed")));
+        assert_eq!(render_display_value(&serde_json::Value::Null), None);
+    }
+
     #[test]
     fn normalize_reference_value_is_a_noop_on_canonical_shapes() {
         let bare = serde_json::json!(["388293d0-bb7d-5468-91e5-9baa4088b7de"]);
