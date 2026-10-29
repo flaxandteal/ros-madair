@@ -92,21 +92,32 @@ PY
 mapfile -t G < "$DATA/.gids"
 BUILDING="${G[0]}"; SITE="${G[1]}"; PERSON="${G[2]}"; ORG="${G[3]}"; POLICY="${G[4]}"; COVERAGE="${G[5]}"
 
+# Owner-declared provenance (presentation/policy, not crypto identity) — the field-register
+# trust UI reads these beside the signature. Caller-provided as-of (fixed) keeps the manifest
+# reproducible. Colours match the design review's per-owner swatches.
+ASOF="${ASOF:-2026-10-22T00:00:00Z}"
+
 echo "== 3. building_head (OWNER 1 — buildings + sites, no contacts) =="
 "$EMIT" "$DATA" "$OUT/building_head" --base-uri "$BASE" \
   --tier council-buildings \
+  --owner-name "City Council · Asset Register" --owner-colour "#2F7F7A" \
+  --as-of "$ASOF" --freshness-window-secs 2592000 \
   --exclude-model "$PERSON" --exclude-model "$ORG" \
   --exclude-model "$POLICY" --exclude-model "$COVERAGE" >/dev/null
 
 echo "== 4. contact_head (OWNER 2 — keyholders/persons only, shared building ids) =="
 "$EMIT" "$DATA" "$OUT/contact_head" --base-uri "$BASE" \
   --tier keyholder-contacts \
+  --owner-name "Relief Network · Keyholders" --owner-colour "#A54C86" \
+  --as-of "$ASOF" --freshness-window-secs 1209600 \
   --exclude-model "$BUILDING" --exclude-model "$SITE" \
   --exclude-model "$ORG" --exclude-model "$POLICY" --exclude-model "$COVERAGE" >/dev/null
 
 echo "== 5. insurer_head (TIERED window — covered buildings only, no contacts) =="
 "$EMIT" "$DATA" "$OUT/insurer_head" --base-uri "$BASE" \
   --tier insurer-book --include-resources "$DATA/covered_ids.txt" \
+  --owner-name "Covered Book · Insurer" --owner-colour "#6E7F2E" \
+  --as-of "$ASOF" --freshness-window-secs 2592000 \
   --exclude-model "$PERSON" --exclude-model "$ORG" >/dev/null
 
 echo "== 6. sign + verify all three (one owner key each would be ideal; one key here) =="
