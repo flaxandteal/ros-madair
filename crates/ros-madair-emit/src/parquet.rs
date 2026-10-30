@@ -760,6 +760,9 @@ fn append_resource(
     // the cell-pruned spatial scan. (Previously these were computed only inside the geo branch,
     // so `render_summaries` returned nothing for a non-geo resource — see HANDOFF-rosmadair-
     // nonspatial-render-row.md.)
+    // The gloss (description) — carried on the entry table alongside the name, so an install-time
+    // reader (a dictionary's FTS) can index English/definition without geometry (handoff 1.3).
+    let description = r.resourceinstance.descriptors.description.clone();
     let summary = build_render_summary(r.cache.as_ref());
     let fields = r
         .tiles
@@ -779,7 +782,8 @@ fn append_resource(
             key,
             &geo_descriptor,
             &summary,
-            &fields
+            &fields,
+            &description
         ])?;
     }
 
@@ -1118,7 +1122,8 @@ impl TileStage {
              CREATE TABLE resources_stage (
                model_slug VARCHAR, resource_id VARCHAR, graph_id VARCHAR,
                legacyid VARCHAR, descriptor VARCHAR, cluster_key UBIGINT,
-               geo_descriptor VARCHAR, render_summary VARCHAR, render_fields VARCHAR);
+               geo_descriptor VARCHAR, render_summary VARCHAR, render_fields VARCHAR,
+               descriptor_description VARCHAR);
              CREATE TABLE grid_stage (
                model_slug VARCHAR, cell BIGINT, resource_id VARCHAR,
                descriptor VARCHAR, geo_descriptor VARCHAR, render_summary VARCHAR,
@@ -1281,7 +1286,7 @@ impl TileStage {
         self.conn
             .execute_batch(&format!(
                 "COPY (SELECT resource_id, graph_id, legacyid, descriptor, cluster_key, \
-                 geo_descriptor, render_summary, render_fields \
+                 geo_descriptor, render_summary, render_fields, descriptor_description \
                  FROM resources_stage WHERE model_slug = '{slug_lit}' ORDER BY resource_id) \
                  TO '{}' (FORMAT PARQUET, ROW_GROUP_SIZE {rgs});",
                 resources_path.display()

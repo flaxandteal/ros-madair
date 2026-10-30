@@ -120,5 +120,15 @@ fn render_fields_resolve_for_a_non_geo_resource() {
         fields.contains("dialect") && fields.contains("Munster"),
         "dialect=Munster carried in render_fields: {fields}"
     );
-    eprintln!("OK: non-geo render_fields = {fields} (from the entry table, no grid)");
+    // 1.3: the gloss (description) is carried on the entry table too, so a dictionary's
+    // definition search can index it non-spatially.
+    let entries = duck.resource_entries(&[CAT.to_string()]).expect("resource_entries");
+    let (_g, _l, descriptor, description) = entries.get(CAT).expect("entry row present");
+    assert_eq!(descriptor.as_deref(), Some("cat"));
+    assert_eq!(
+        description.as_deref(),
+        Some("a small domestic feline"),
+        "the gloss (description) is carried non-spatially"
+    );
+    eprintln!("OK: non-geo render_fields = {fields}; gloss carried on the entry table");
 }

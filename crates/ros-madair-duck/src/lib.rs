@@ -512,7 +512,7 @@ impl DuckReader {
                     &resource_layers,
                     &["resource_id"],
                     "resource_id, graph_id, legacyid, descriptor, cluster_key, \
-                     geo_descriptor, render_summary, render_fields",
+                     geo_descriptor, render_summary, render_fields, descriptor_description",
                 )
             ))?;
         }
@@ -627,16 +627,18 @@ impl DuckReader {
         Ok(out)
     }
 
-    /// Entry-table rows for a set of resource ids: `(graph_id, legacyid, descriptor)`
-    /// read from the per-resource `resources` view — the slug/model-scoping/name
-    /// spine a consumer lists, counts, and slug-backlinks on (consumer limitation #1).
-    /// Small (no hydration `data`), sorted by `resource_id` so an id-probe prunes.
-    /// Empty for a head with no `resources` view.
-    #[allow(clippy::type_complexity)] // (graph_id, legacyid, descriptor) by id
+    /// Entry-table rows for a set of resource ids: `(graph_id, legacyid, descriptor,
+    /// description)` read from the per-resource `resources` view — the slug/model-scoping/
+    /// name/GLOSS spine a consumer lists, counts, slug-backlinks, and FTS-indexes on.
+    /// `description` is the resource's gloss (carried non-spatially, for a dictionary's
+    /// definition search). Small (no hydration `data`), sorted by `resource_id` so an
+    /// id-probe prunes. Empty for a head with no `resources` view.
+    #[allow(clippy::type_complexity)] // (graph_id, legacyid, descriptor, description) by id
     pub fn resource_entries(
         &self,
         uris: &[String],
-    ) -> Result<HashMap<String, (String, Option<String>, Option<String>)>, DuckError> {
+    ) -> Result<HashMap<String, (String, Option<String>, Option<String>, Option<String>)>, DuckError>
+    {
         let mut out = HashMap::new();
         if uris.is_empty() || !self.has_resources {
             return Ok(out);
@@ -645,7 +647,7 @@ impl DuckReader {
             .collect::<Vec<_>>()
             .join(",");
         let sql = format!(
-            "SELECT resource_id, graph_id, legacyid, descriptor FROM resources \
+            "SELECT resource_id, graph_id, legacyid, descriptor, descriptor_description FROM resources \
              WHERE resource_id IN ({placeholders})"
         );
         let mut stmt = self.conn.prepare(&sql)?;
@@ -655,11 +657,12 @@ impl DuckReader {
                 r.get::<_, String>(1)?,
                 r.get::<_, Option<String>>(2)?,
                 r.get::<_, Option<String>>(3)?,
+                r.get::<_, Option<String>>(4)?,
             ))
         })?;
         for row in rows {
-            let (id, graph_id, legacyid, descriptor) = row?;
-            out.entry(id).or_insert((graph_id, legacyid, descriptor));
+            let (id, graph_id, legacyid, descriptor, description) = row?;
+            out.entry(id).or_insert((graph_id, legacyid, descriptor, description));
         }
         Ok(out)
     }

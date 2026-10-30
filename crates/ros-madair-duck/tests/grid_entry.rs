@@ -210,7 +210,7 @@ fn grid_box_prunes_to_near_resources_and_entry_table_reads() {
     let entries = duck
         .resource_entries(&[NEAR_H.to_string()])
         .expect("resource_entries");
-    let (graph_id, legacy, descriptor) = entries.get(NEAR_H).expect("NEAR_H entry");
+    let (graph_id, legacy, descriptor, _description) = entries.get(NEAR_H).expect("NEAR_H entry");
     assert_eq!(graph_id, GRAPH);
     assert_eq!(legacy.as_deref(), Some("legacy-Near Hospital"));
     assert_eq!(descriptor.as_deref(), Some("Near Hospital"));
