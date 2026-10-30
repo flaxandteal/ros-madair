@@ -511,7 +511,8 @@ impl DuckReader {
                 shadow_set_union(
                     &resource_layers,
                     &["resource_id"],
-                    "resource_id, graph_id, legacyid, descriptor, cluster_key",
+                    "resource_id, graph_id, legacyid, descriptor, cluster_key, \
+                     geo_descriptor, render_summary, render_fields",
                 )
             ))?;
         }
@@ -579,12 +580,13 @@ impl DuckReader {
     /// carried on the grid edge, PLUS the resource's own descriptor and its
     /// `geo_descriptor` (a geojson `Point`, v4). The render header without a tile
     /// fetch — descriptor for the chip, geo_descriptor for the map pin, summary
-    /// for the card — read from one small store. Each value is per the tuple order
-    /// `(descriptor, geo_descriptor, render_summary)`, matching the grid columns.
-    /// Empty without a grid view; `geo_descriptor` is `None` for a non-geo resource.
-    /// (A spatial result reads these columns for free from the same cell-pruned
-    /// `GridBox` scan; this by-id method serves non-spatial renders and
-    /// native/python callers.)
+    /// for the card — read from the per-resource ENTRY table (one row per resource,
+    /// geo or not), so a NON-spatial corpus (a dictionary) gets its render_fields too.
+    /// Tuple order `(descriptor, geo_descriptor, render_summary, render_fields)`.
+    /// Empty without a resources view; `geo_descriptor` is `None` for a non-geo resource.
+    /// (A spatial result reads these columns for free from the cell-pruned `GridBox`
+    /// scan over the grid, which carries the SAME columns inline; this by-id method is
+    /// the universal, geometry-free path for non-spatial renders + native/python callers.)
     #[allow(clippy::type_complexity)] // (descriptor, geo_descriptor, render_summary, render_fields) by id
     pub fn render_summaries(
         &self,
@@ -594,14 +596,17 @@ impl DuckReader {
         DuckError,
     > {
         let mut out = HashMap::new();
-        if uris.is_empty() || !self.has_grid {
+        if uris.is_empty() || !self.has_resources {
             return Ok(out);
         }
         let placeholders = std::iter::repeat_n("?", uris.len())
             .collect::<Vec<_>>()
             .join(",");
+        // Read from the ENTRY table (one row per resource, geo or not) — so a NON-spatial
+        // corpus gets its render_fields too. The grid still carries the same columns inline for
+        // the cell-pruned spatial scan; this by-id path is the universal, geometry-free one.
         let sql = format!(
-            "SELECT resource_id, descriptor, geo_descriptor, render_summary, render_fields FROM grid \
+            "SELECT resource_id, descriptor, geo_descriptor, render_summary, render_fields FROM resources \
              WHERE resource_id IN ({placeholders})"
         );
         let mut stmt = self.conn.prepare(&sql)?;

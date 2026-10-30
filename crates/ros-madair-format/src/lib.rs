@@ -76,7 +76,7 @@ pub mod verify;
 // label and the raw UUID leaks. A v5 reader's `concept_labels` unnests it; the
 // version gates it. (The edge `predicate` column + EDTF `q_lo/q_hi` + the
 // entry-table reconcile remain pending and will share the next bump — not four.)
-pub const FORMAT_VERSION: u32 = 5;
+pub const FORMAT_VERSION: u32 = 6;
 
 // ---------------------------------------------------------------------------
 // Snapshot id derivation (the ONE copy — writer and reader both call it)

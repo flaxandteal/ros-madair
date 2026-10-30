@@ -750,9 +750,37 @@ fn append_resource(
     let rid = &r.resourceinstance.resourceinstanceid;
     let gid = &r.resourceinstance.graph_id;
     let legacy = &r.resourceinstance.legacyid;
+
+    // The RENDER ROW — domain-generic and NOT geo-gated. The fields a card/list/facet needs
+    // WITHOUT a per-resource hydrate: the linked-resource `render_summary`, the own-node
+    // `render_fields` (a dictionary's part_of_speech/dialect as much as a building's
+    // capacity/role), and `geo_descriptor` (a representative point for geo resources, NULL
+    // otherwise). Computed for EVERY resource and carried on the entry table, so a NON-spatial
+    // corpus gets a hydrate-free read — the grid edge still carries the same fields inline for
+    // the cell-pruned spatial scan. (Previously these were computed only inside the geo branch,
+    // so `render_summaries` returned nothing for a non-geo resource — see HANDOFF-rosmadair-
+    // nonspatial-render-row.md.)
+    let summary = build_render_summary(r.cache.as_ref());
+    let fields = r
+        .tiles
+        .as_ref()
+        .and_then(|t| build_render_fields(t, graph, &cfg.render_fields));
+    let geo_descriptor: Option<String> = r.resourceinstance.descriptors.point.clone().or_else(|| {
+        centroid.map(|(lng, lat)| format!(r#"{{"type":"Point","coordinates":[{lng},{lat}]}}"#))
+    });
     {
         let mut ra = stage.conn.appender("resources_stage")?;
-        ra.append_row(params![model_slug, rid, gid, legacy, &name, key])?;
+        ra.append_row(params![
+            model_slug,
+            rid,
+            gid,
+            legacy,
+            &name,
+            key,
+            &geo_descriptor,
+            &summary,
+            &fields
+        ])?;
     }
 
     // Grid edge (grid_<graphid>.parquet): one row per (resource, CELL THE FOOTPRINT
@@ -777,25 +805,9 @@ fn append_resource(
                 (mny + mxy) / 2.0,
             )]
         });
-        let summary = build_render_summary(r.cache.as_ref());
-        // Domain-configured own-node values promoted onto the grid edge (parallel to the linked-
-        // resource `render_summary`). RM names no field — `cfg.render_fields` is the domain's list.
-        let fields = r
-            .tiles
-            .as_ref()
-            .and_then(|t| build_render_fields(t, graph, &cfg.render_fields));
-        // Location descriptor (geojson Point) — prefer alizarin's `point` descriptor (a
-        // true centroid / point-on-surface from the model's descriptor template, sibling of
-        // `name`/`map_popup`; available since alizarin-core alpha.140); fall back to the
-        // footprint's bbox-centre (`centroid`, already computed above). It rides the same
-        // cell-pruned scan as `descriptor`, so a spatial result draws its pins without
-        // touching the tiles. bbox-centre is a representative pin, not a true centroid (a
-        // concave footprint's can fall just outside it) — fine for display, the safe fallback.
-        let geo_descriptor: Option<String> =
-            r.resourceinstance.descriptors.point.clone().or_else(|| {
-                centroid
-                    .map(|(lng, lat)| format!(r#"{{"type":"Point","coordinates":[{lng},{lat}]}}"#))
-            });
+        // `summary`, `fields` and `geo_descriptor` are computed once per resource above (the
+        // render row) and carried inline here too, so the cell-pruned spatial scan draws cards
+        // and pins without touching the tiles.
         let mut ga = stage.conn.appender("grid_stage")?;
         for cell in cells {
             ga.append_row(params![
@@ -1105,7 +1117,8 @@ impl TileStage {
                nodegroup_id VARCHAR, node_id VARCHAR, q_ordered BIGINT);
              CREATE TABLE resources_stage (
                model_slug VARCHAR, resource_id VARCHAR, graph_id VARCHAR,
-               legacyid VARCHAR, descriptor VARCHAR, cluster_key UBIGINT);
+               legacyid VARCHAR, descriptor VARCHAR, cluster_key UBIGINT,
+               geo_descriptor VARCHAR, render_summary VARCHAR, render_fields VARCHAR);
              CREATE TABLE grid_stage (
                model_slug VARCHAR, cell BIGINT, resource_id VARCHAR,
                descriptor VARCHAR, geo_descriptor VARCHAR, render_summary VARCHAR,
@@ -1267,7 +1280,8 @@ impl TileStage {
         let resources_path = sibling("resources");
         self.conn
             .execute_batch(&format!(
-                "COPY (SELECT resource_id, graph_id, legacyid, descriptor, cluster_key \
+                "COPY (SELECT resource_id, graph_id, legacyid, descriptor, cluster_key, \
+                 geo_descriptor, render_summary, render_fields \
                  FROM resources_stage WHERE model_slug = '{slug_lit}' ORDER BY resource_id) \
                  TO '{}' (FORMAT PARQUET, ROW_GROUP_SIZE {rgs});",
                 resources_path.display()
