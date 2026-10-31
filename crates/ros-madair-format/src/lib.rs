@@ -174,6 +174,11 @@ pub struct Manifest {
     /// `snapshot_id`s — exactly as before (purely additive).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provenance: Option<ProvenanceManifest>,
+    /// Split-layers pairing (spike): present when this snapshot is one half of an
+    /// owner's open/closed pair. See [`LayerPairing`]. Additive and skipped when
+    /// absent, so an undivided snapshot hashes exactly as before.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub layer: Option<LayerPairing>,
     /// The extension-type handlers this artifact was emitted with (I6). The
     /// query side rebuilds its registry from these rather than assuming a
     /// default: a registry mismatch is otherwise silent — a field that was
@@ -244,6 +249,128 @@ pub struct ProvenanceManifest {
     pub freshness_window_secs: Option<u64>,
 }
 
+/// **Split-layers pairing (spike, split-layers handoff §7).** Declares that this
+/// snapshot is one half of an owner's **open/closed layer pair** for one model.
+///
+/// # Why a manifest field (same test the others pass)
+///
+/// Like [`ProvenanceManifest`], this is **not derivable** from the schema and is
+/// **domain-agnostic**: whether a model's sensitive values are declassified, how
+/// they're distributed, and who may open them are facts only the *owner* declares
+/// at emit. RM stores and compares them; it names no domain default.
+///
+/// # Independent signatures come for free
+///
+/// An open layer and a closed layer are **two separate snapshots** (two dirs, two
+/// `manifest.json`s), composed at read by `ros-madair-duck`'s `open_layers`. Each
+/// already gets its own [`snapshot_id`] over its own bytes, independently
+/// attested by `emit sign`. This field only names the *pairing*; it needs no new
+/// signing machinery. Because it lives in the manifest, it is covered by the
+/// snapshot digest — a closed layer that lies about its own existence level or
+/// grants changes its id and fails verify.
+///
+/// Additive: `Option`, skipped when absent, so a pre-split snapshot hashes — and
+/// `snapshot_id`s — exactly as before. A reader that predates split-layers parses
+/// the manifest fine and simply sees `layer = None` (one undivided layer, today's
+/// behaviour). The FORMAT_VERSION gate belongs with the *full* feature (a reader
+/// that can't perform openings must refuse a `closed` layer rather than show a
+/// lock it can't open) — not with this metadata, which an older reader safely
+/// ignores.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LayerPairing {
+    /// Which half of the pair this snapshot is.
+    pub role: LayerRole,
+    /// The owner that published both halves — pairs an `open` with its `closed`.
+    /// Matches [`ProvenanceManifest::owner_display_name`]'s owner in practice.
+    pub owner_id: String,
+    /// The model this pair covers, e.g. `"keyholders"`. An owner may publish
+    /// several pairs; this disambiguates which closed layer an open layer's
+    /// locked fields open.
+    pub model: String,
+    /// Closed-layer policy. `None` on an `open` layer. On a `closed` layer it
+    /// carries everything the UI generates its strings from (§5: no hard-coded
+    /// owner/role/count), and everything a reader enforces before offering to
+    /// open (D1/D3/D4/D6).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub closed: Option<ClosedPolicy>,
+}
+
+/// Which half of an open/closed pair a snapshot is (split-layers §2).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LayerRole {
+    /// Readable by default: schema plus whatever the owner declassified.
+    Open,
+    /// Owner-signed sensitive values; opened via a grant. Encrypted at rest when
+    /// distributed `on_phone`.
+    Closed,
+}
+
+/// What a `closed` layer reveals and who may open it (split-layers §7, D1/D3/D4/D6).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ClosedPolicy {
+    /// What the *open* layer reveals about this closed layer (D1). `Values` is not
+    /// a variant: declassified values live in the open layer instead, so a closed
+    /// layer is always `Schema` or `Existence`.
+    pub existence: ExistenceLevel,
+    /// Where this closed layer lives (D6). The UI states it before the officer
+    /// goes out; RM must never default an owner to `on_phone` (§8.7).
+    pub distribution: Distribution,
+    /// How long one opening lasts (D3). 30 min for the pilot.
+    pub window_secs: u64,
+    /// Roles that open this layer immediately, including offline (D4). Empty ⇒
+    /// request-only.
+    #[serde(default)]
+    pub grants: Vec<String>,
+    /// If present, roles not in `grants` may request an opening; absent ⇒ no
+    /// requests accepted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub request: Option<RequestPolicy>,
+}
+
+/// Existence level (D1): what the open layer says about the closed layer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExistenceLevel {
+    /// The kind of record exists; nothing per-subject. "Not shared" — the whole
+    /// section is absent in the UI (state 3). Emit withholds counts.
+    Schema,
+    /// The open layer publishes a per-subject COUNT ("this building has 2"), set
+    /// by the owner, never derived from the closed layer (§8.1).
+    Existence,
+}
+
+/// Closed-layer distribution (D6).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Distribution {
+    /// Bundled encrypted on the phone; opens with no signal.
+    OnPhone,
+    /// Stays with its owner; fetched (and verified) when opened.
+    NeedsSignal,
+}
+
+/// Request policy for roles without a standing grant (split-layers §13 / D4).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RequestPolicy {
+    /// Human label for who approves, e.g. `"their duty officer"`.
+    pub approver_label: String,
+    /// The reason options the request sheet offers (§5 board 13).
+    pub reasons: Vec<String>,
+    /// Owner-required friction (board 07): require a reason and/or a press-and-hold.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub friction: Option<Friction>,
+}
+
+/// Owner-required friction on an opening (split-layers board 07).
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default)]
+pub struct Friction {
+    #[serde(default)]
+    pub reason: bool,
+    #[serde(default)]
+    pub hold: bool,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ModelManifest {
     pub slug: String,
@@ -287,6 +414,7 @@ mod tests {
             base_uri: "https://example.org/".to_string(),
             tier: None,
             provenance: None,
+            layer: None,
             handlers: vec![],
             models: vec![],
             artifacts: vec![],
@@ -317,6 +445,7 @@ mod tests {
             base_uri: "https://example.org/".to_string(),
             tier: None,
             provenance: None,
+            layer: None,
             handlers: vec![],
             models: vec![],
             artifacts: vec![],
@@ -348,5 +477,104 @@ mod tests {
             serde_json::from_str(r#"{"format_version":3,"base_uri":"x","handlers":[],"models":[],"artifacts":[],"budgets":{"max_result_rows":1,"max_group_count":1}}"#)
                 .unwrap();
         assert!(legacy.provenance.is_none());
+    }
+
+    /// **Spike 1 / handoff §11 Q1: the format expresses an open/closed pair with
+    /// independent signatures.** An `open` and a `closed` manifest carry the SAME
+    /// (owner, model) pairing but different roles; the pairing lives in the
+    /// manifest bytes, so each produces its OWN `snapshot_id` over its OWN bytes —
+    /// which is exactly what `emit sign` attests per layer. And the field is
+    /// additive: an undivided manifest (`layer: None`) never emits the key, so its
+    /// id is byte-identical to a pre-split build.
+    #[test]
+    fn layer_pairing_open_closed_independent_ids() {
+        fn base() -> Manifest {
+            Manifest {
+                snapshot_id: String::new(),
+                format_version: FORMAT_VERSION,
+                base_uri: "https://example.org/".to_string(),
+                tier: None,
+                provenance: None,
+                layer: None,
+                handlers: vec![],
+                models: vec![],
+                artifacts: vec![],
+                budgets: Budgets { max_result_rows: 1000, max_group_count: 500 },
+            }
+        }
+        // Each layer's id is a digest over its artifact hashes + its own manifest.
+        // Here both halves happen to carry the same artifact list, isolating the
+        // variable under test: the pairing is what makes the ids differ.
+        let artifacts = vec![ArtifactEntry {
+            path: "tiles_x.parquet".into(),
+            bytes: 1,
+            sha256: "aa".repeat(32),
+        }];
+        let id_of = |m: &Manifest| {
+            let bytes = manifest_digest_bytes(m).unwrap();
+            snapshot_id(&artifacts, &bytes)
+        };
+
+        // Additive: an undivided manifest never serializes `layer`, so its bytes
+        // (and id) are identical to a pre-split build.
+        let undivided = base();
+        assert!(!serde_json::to_string(&undivided).unwrap().contains("\"layer\""));
+
+        let open = Manifest {
+            layer: Some(LayerPairing {
+                role: LayerRole::Open,
+                owner_id: "relief-network".into(),
+                model: "keyholders".into(),
+                closed: None,
+            }),
+            ..base()
+        };
+        let closed = Manifest {
+            layer: Some(LayerPairing {
+                role: LayerRole::Closed,
+                owner_id: "relief-network".into(),
+                model: "keyholders".into(),
+                closed: Some(ClosedPolicy {
+                    existence: ExistenceLevel::Existence,
+                    distribution: Distribution::OnPhone,
+                    window_secs: 1800,
+                    grants: vec!["field-officer-ward-4".into()],
+                    request: Some(RequestPolicy {
+                        approver_label: "their duty officer".into(),
+                        reasons: vec!["active rescue".into(), "welfare check".into()],
+                        friction: Some(Friction { reason: true, hold: false }),
+                    }),
+                }),
+            }),
+            ..base()
+        };
+
+        let (undivided_id, open_id, closed_id) = (id_of(&undivided), id_of(&open), id_of(&closed));
+        // Three snapshots over the SAME artifacts, three distinct ids — the pairing
+        // is covered by the signature, so a closed layer can't lie about its policy.
+        assert_ne!(open_id, closed_id, "open and closed halves are independently signed");
+        assert_ne!(open_id, undivided_id, "a paired open layer differs from an undivided one");
+        assert_ne!(closed_id, undivided_id);
+
+        // The closed policy round-trips — the UI generates its strings from this.
+        let parsed: Manifest =
+            serde_json::from_str(&serde_json::to_string(&closed).unwrap()).unwrap();
+        let p = parsed.layer.expect("pairing").closed.expect("closed policy");
+        assert_eq!(p.existence, ExistenceLevel::Existence);
+        assert_eq!(p.distribution, Distribution::OnPhone);
+        assert_eq!(p.window_secs, 1800);
+        assert_eq!(p.grants, vec!["field-officer-ward-4".to_string()]);
+        assert_eq!(p.request.unwrap().approver_label, "their duty officer");
+
+        // A closed layer that flips its existence level to hide that it withheld a
+        // count changes its bytes, hence its id, hence fails verify against the
+        // signed id — existence-leak policy is tamper-evident, not advisory.
+        let mut tampered = closed.clone();
+        if let Some(l) = tampered.layer.as_mut() {
+            if let Some(c) = l.closed.as_mut() {
+                c.existence = ExistenceLevel::Schema;
+            }
+        }
+        assert_ne!(id_of(&tampered), closed_id, "altering the policy moves the id");
     }
 }

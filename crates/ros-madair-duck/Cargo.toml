@@ -54,3 +54,7 @@ serde_json = "1"
 # So the descendant test can COPY tiny tiles/concepts Parquets to drive the
 # range-join directly, without the SKOS-emit path.
 duckdb = { version = "1", features = ["bundled"] }
+# Spike only (examples/closed_layer_memfd.rs): memfd_create, to prove a
+# decrypted closed-layer parquet can be read from a RAM-backed anonymous fd
+# with zero disk writes (split-layers §8.4). Not a runtime dep of the crate.
+libc = "0.2"

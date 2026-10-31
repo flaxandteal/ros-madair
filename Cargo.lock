@@ -1644,6 +1644,7 @@ version = "0.1.0-alpha.33"
 dependencies = [
  "alizarin-core",
  "duckdb",
+ "libc",
  "ros-madair-compile",
  "ros-madair-emit",
  "ros-madair-format",
