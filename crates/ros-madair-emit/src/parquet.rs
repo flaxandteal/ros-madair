@@ -1383,6 +1383,7 @@ pub fn emit_parquet(
         config_by_graph,
         None,
         None,
+        None,
         &mut |_| std::ops::ControlFlow::Continue(()),
     )
 }
@@ -1406,6 +1407,7 @@ pub fn emit_parquet_with_progress(
     config_by_graph: &HashMap<String, ClusterConfig>,
     tier: Option<&TierFilter>,
     provenance: Option<&ros_madair_format::ProvenanceManifest>,
+    layer: Option<&ros_madair_format::LayerPairing>,
     on_progress: &mut dyn FnMut(crate::EmitProgress) -> std::ops::ControlFlow<()>,
 ) -> Result<Vec<ParquetModelSummary>, EmitError> {
     // The field cut: nodegroups whose tiles are dropped from every per-node store.
@@ -1676,6 +1678,11 @@ pub fn emit_parquet_with_progress(
         // Cloned straight through — caller-provided, so the manifest stays
         // reproducible; absent → None → skipped in serialization → no id change.
         provenance: provenance.cloned(),
+        // Split-layers pairing (open/closed). Same discipline as provenance:
+        // caller-declared, cloned through, absent → None → skipped → no id change.
+        // Covered by the signed snapshot_id, so a closed layer can't lie about its
+        // existence level or grants.
+        layer: layer.cloned(),
         handlers: ros_madair_handlers::describe_registry(registry),
         models: manifest_models,
         artifacts,

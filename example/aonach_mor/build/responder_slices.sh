@@ -92,6 +92,45 @@ PY
 mapfile -t G < "$DATA/.gids"
 BUILDING="${G[0]}"; SITE="${G[1]}"; PERSON="${G[2]}"; ORG="${G[3]}"; POLICY="${G[4]}"; COVERAGE="${G[5]}"
 
+echo "== 2b. split-layers: redact the keyholder OPEN layer (existence, no values) =="
+# The split-layers OPEN keyholder layer carries the keyholder_for LINK (so the app
+# can COUNT keyholders per building via cited_by — "2 keyholders recorded") but NOT
+# the name/phone VALUES or the name-bearing descriptor. The CLOSED layer (step 4b)
+# carries those, grant-gated. §8.1: the count comes from the open layer's link
+# structure, never from the closed values. Same person ids in both, so cited_by
+# (open) and descriptors (closed) line up after an opening.
+DATA_OPEN="$OUT/data_open"
+rm -rf "$DATA_OPEN"; mkdir -p "$DATA_OPEN/graphs" "$DATA_OPEN/resources/person"
+python3 - "$DATA" "$DATA_OPEN" "$PERSON" <<'PY'
+import json, sys, glob, uuid, os
+data, data_open, person_gid = sys.argv[1], sys.argv[2], sys.argv[3]
+# Keep ONLY the keyholder_for nodegroup; drop name/contact/notes/role/etc.
+KEEP = {str(uuid.uuid5(uuid.UUID(person_gid), "keyholder_for"))}
+# Copy the person graph verbatim (schema is open — the open layer IS the catalogue).
+for g in glob.glob(f"{data}/graphs/*.json"):
+    doc = json.load(open(g))
+    if doc["graph"][0]["graphid"] == person_gid:
+        json.dump(doc, open(f"{data_open}/graphs/{os.path.basename(g)}", "w"))
+kept_people = kept_links = 0
+for f in glob.glob(f"{data}/resources/person/*.json"):
+    bundle = json.load(open(f))
+    out = []
+    for r in bundle.get("business_data", {}).get("resources", []):
+        tiles = [t for t in r.get("tiles", []) if t.get("nodegroup_id") in KEEP]
+        if not tiles:
+            continue  # a person who keyholds nothing contributes no existence here
+        ri = r["resourceinstance"]
+        # Neutral descriptor — the name lives ONLY in the closed layer.
+        ri["descriptors"] = {"en": {"name": "Keyholder", "description": "", "map_popup": ""}}
+        out.append({"resourceinstance": ri, "tiles": tiles})
+        kept_people += 1
+        kept_links += sum(len(t["data"].get(next(iter(KEEP)), [])) for t in tiles)
+    if out:
+        json.dump({"business_data": {"resources": out}},
+                  open(f"{data_open}/resources/person/{os.path.basename(f)}", "w"))
+print(f"   open keyholder layer: {kept_people} keyholders, {kept_links} building links (no names)")
+PY
+
 # Owner-declared provenance (presentation/policy, not crypto identity) — the field-register
 # trust UI reads these beside the signature. Caller-provided as-of (fixed) keeps the manifest
 # reproducible. Colours match the design review's per-owner swatches.
@@ -105,13 +144,30 @@ echo "== 3. building_head (OWNER 1 — buildings + sites, no contacts) =="
   --exclude-model "$PERSON" --exclude-model "$ORG" \
   --exclude-model "$POLICY" --exclude-model "$COVERAGE" >/dev/null
 
-echo "== 4. contact_head (OWNER 2 — keyholders/persons only, shared building ids) =="
+echo "== 4. contact_head (OWNER 2 — keyholders/persons, the CLOSED layer: names+numbers) =="
+# The sensitive VALUES. layer=closed, needs_signal (stays with its owner, fetched on
+# opening), role-granted to the ward officer, 30-min window. Grant/window/reasons all
+# ride in the signed manifest — the unlock sheet generates every string from them.
 "$EMIT" "$DATA" "$OUT/contact_head" --base-uri "$BASE" \
   --tier keyholder-contacts \
   --owner-name "Relief Network · Keyholders" --owner-colour "#A54C86" \
   --as-of "$ASOF" --freshness-window-secs 1209600 \
+  --layer-role closed --layer-owner relief-network --layer-model keyholders \
+  --closed-existence existence --closed-distribution needs_signal --closed-window-secs 1800 \
+  --closed-grant field-officer-ward-4 \
+  --closed-approver "their duty officer" \
+  --closed-reason "active rescue" --closed-reason "welfare check" \
+  --closed-reason "evacuation of this building" \
   --exclude-model "$BUILDING" --exclude-model "$SITE" \
   --exclude-model "$ORG" --exclude-model "$POLICY" --exclude-model "$COVERAGE" >/dev/null
+
+echo "== 4b. contact_open_head (OWNER 2 — the OPEN layer: keyholder COUNTS, no names) =="
+# Always on the device — the catalogue. Carries the keyholder_for link so the app
+# counts "N keyholders recorded" per building; names/numbers are absent (step 2b).
+"$EMIT" "$DATA_OPEN" "$OUT/contact_open_head" --base-uri "$BASE" \
+  --owner-name "Relief Network · Keyholders" --owner-colour "#A54C86" \
+  --as-of "$ASOF" --freshness-window-secs 1209600 \
+  --layer-role open --layer-owner relief-network --layer-model keyholders >/dev/null
 
 echo "== 5. insurer_head (TIERED window — covered buildings only, no contacts) =="
 "$EMIT" "$DATA" "$OUT/insurer_head" --base-uri "$BASE" \
@@ -122,14 +178,14 @@ echo "== 5. insurer_head (TIERED window — covered buildings only, no contacts)
 
 echo "== 6. sign + verify all three (one owner key each would be ideal; one key here) =="
 KEY="$OUT/aonach_signing.key"
-for head in building_head contact_head insurer_head; do
+for head in building_head contact_open_head contact_head insurer_head; do
   "$EMIT" sign "$OUT/$head" "$KEY" --actor https://flaxandteal.co.uk --actor-name "Flax & Teal" --role endorsed >/dev/null
   printf "   %-15s " "$head:"; "$EMIT" verify "$OUT/$head"
 done
 
 echo "== 7. copy each model's graph INTO its head (the hydrate/buffer path reads graph.json"
 echo "       + graph_<gid>.json from the head dir; emit ships only parquet + manifest) =="
-for head in building_head contact_head insurer_head; do
+for head in building_head contact_open_head contact_head insurer_head; do
   python3 - "$OUT/$head" "$DATA/graphs" <<'PY'
 import json, sys, shutil, os
 hd, graphs = sys.argv[1], sys.argv[2]
@@ -146,5 +202,6 @@ PY
 done
 
 echo "== done =="
-echo "   RESPONDER composes:  $OUT/building_head  +  $OUT/contact_head"
+echo "   RESPONDER default:   $OUT/building_head  +  $OUT/contact_open_head  (counts, locked)"
+echo "   ON OPENING adds:     $OUT/contact_head   (layer=closed, needs_signal, 30-min grant)"
 echo "   INSURER opens:       $OUT/insurer_head   (tier insurer-book — contact-free, signed)"

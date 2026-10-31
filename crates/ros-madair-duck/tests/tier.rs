@@ -112,6 +112,7 @@ fn emit(tag: &str, tier: Option<ros_madair_emit::TierFilter>) -> PathBuf {
         &std::collections::HashMap::new(),
         tier.as_ref(),
         None,
+        None, // layer
         &mut |_| std::ops::ControlFlow::Continue(()),
     )
     .expect("emit");

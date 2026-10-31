@@ -21,7 +21,12 @@ const USAGE: &str = "usage: ros-madair-emit <data_dir> <out_dir> [--base-uri URI
                      [--tier NAME [--exclude-nodegroup NG]... [--exclude-model GRAPHID]... \
                      [--include-resources IDS_FILE]] \
                      [--owner-name NAME] [--owner-colour HEX] [--as-of RFC3339] \
-                     [--freshness-window-secs N]";
+                     [--freshness-window-secs N] \
+                     [--layer-role {open|closed} --layer-owner ID --layer-model NAME \
+                     [--closed-existence {schema|existence}] \
+                     [--closed-distribution {on_phone|needs_signal}] \
+                     [--closed-window-secs N] [--closed-grant ROLE]... \
+                     [--closed-approver LABEL] [--closed-reason TEXT]...]";
 
 fn usage() -> ExitCode {
     eprintln!("{USAGE}");
@@ -189,6 +194,17 @@ fn main() -> ExitCode {
     let mut owner_colour: Option<String> = None;
     let mut as_of: Option<String> = None;
     let mut freshness_window_secs: Option<u64> = None;
+    // Split-layers pairing (open/closed). `--layer-role` turns it on; the
+    // `--closed-*` flags populate the closed policy (ignored for an open layer).
+    let mut layer_role: Option<String> = None;
+    let mut layer_owner: Option<String> = None;
+    let mut layer_model: Option<String> = None;
+    let mut closed_existence: Option<String> = None;
+    let mut closed_distribution: Option<String> = None;
+    let mut closed_window_secs: Option<u64> = None;
+    let mut closed_grants: Vec<String> = Vec::new();
+    let mut closed_approver: Option<String> = None;
+    let mut closed_reasons: Vec<String> = Vec::new();
     let mut i = 1;
     while i < args.len() {
         match args[i].as_str() {
@@ -273,6 +289,55 @@ fn main() -> ExitCode {
                     }
                 }
             }
+            // Split-layers flags (spike). --layer-role {open|closed} declares this
+            // head is one half of an owner's pair; --closed-* populate the policy a
+            // reader enforces + the UI renders its strings from.
+            "--layer-role" => {
+                i += 1;
+                layer_role = args.get(i).cloned();
+            }
+            "--layer-owner" => {
+                i += 1;
+                layer_owner = args.get(i).cloned();
+            }
+            "--layer-model" => {
+                i += 1;
+                layer_model = args.get(i).cloned();
+            }
+            "--closed-existence" => {
+                i += 1;
+                closed_existence = args.get(i).cloned();
+            }
+            "--closed-distribution" => {
+                i += 1;
+                closed_distribution = args.get(i).cloned();
+            }
+            "--closed-window-secs" => {
+                i += 1;
+                match args.get(i).map(|v| v.parse::<u64>()) {
+                    Some(Ok(n)) => closed_window_secs = Some(n),
+                    _ => {
+                        eprintln!("--closed-window-secs needs an integer (seconds)");
+                        return ExitCode::FAILURE;
+                    }
+                }
+            }
+            "--closed-grant" => {
+                i += 1;
+                if let Some(v) = args.get(i) {
+                    closed_grants.push(v.clone());
+                }
+            }
+            "--closed-approver" => {
+                i += 1;
+                closed_approver = args.get(i).cloned();
+            }
+            "--closed-reason" => {
+                i += 1;
+                if let Some(v) = args.get(i) {
+                    closed_reasons.push(v.clone());
+                }
+            }
             "--no-render-cache" => std::env::set_var("ROS_MADAIR_EMIT_RENDER_CACHE", "0"),
             "--memory-limit" => {
                 i += 1;
@@ -315,6 +380,70 @@ fn main() -> ExitCode {
         freshness_window_secs,
     });
 
+    // Build the split-layers pairing when --layer-role was given. An `open` layer
+    // carries no closed policy; a `closed` layer requires existence + distribution,
+    // and otherwise is request-only (empty grants). Parsed into the typed enums so a
+    // misspelled value fails loudly here, not at read time.
+    let layer = match layer_role.as_deref() {
+        None => None,
+        Some(role_str) => {
+            let role = match role_str {
+                "open" => ros_madair_format::LayerRole::Open,
+                "closed" => ros_madair_format::LayerRole::Closed,
+                other => {
+                    eprintln!("--layer-role must be 'open' or 'closed', got {other:?}");
+                    return ExitCode::FAILURE;
+                }
+            };
+            let (Some(owner_id), Some(model)) = (layer_owner, layer_model) else {
+                eprintln!("--layer-role requires --layer-owner and --layer-model");
+                return ExitCode::FAILURE;
+            };
+            let closed = if matches!(role, ros_madair_format::LayerRole::Closed) {
+                let existence = match closed_existence.as_deref() {
+                    Some("schema") => ros_madair_format::ExistenceLevel::Schema,
+                    Some("existence") => ros_madair_format::ExistenceLevel::Existence,
+                    _ => {
+                        eprintln!("a closed layer needs --closed-existence {{schema|existence}}");
+                        return ExitCode::FAILURE;
+                    }
+                };
+                let distribution = match closed_distribution.as_deref() {
+                    Some("on_phone") => ros_madair_format::Distribution::OnPhone,
+                    Some("needs_signal") => ros_madair_format::Distribution::NeedsSignal,
+                    _ => {
+                        eprintln!(
+                            "a closed layer needs --closed-distribution {{on_phone|needs_signal}}"
+                        );
+                        return ExitCode::FAILURE;
+                    }
+                };
+                let request = closed_approver.map(|approver_label| {
+                    ros_madair_format::RequestPolicy {
+                        approver_label,
+                        reasons: closed_reasons,
+                        friction: None,
+                    }
+                });
+                Some(ros_madair_format::ClosedPolicy {
+                    existence,
+                    distribution,
+                    window_secs: closed_window_secs.unwrap_or(1800),
+                    grants: closed_grants,
+                    request,
+                })
+            } else {
+                None
+            };
+            Some(ros_madair_format::LayerPairing {
+                role,
+                owner_id,
+                model,
+                closed,
+            })
+        }
+    };
+
     // The CLM reference handler is registered so the CLI indexes `reference`
     // fields (core knows no `reference` — the handler does). Default per-graph
     // clustering (geo ⊕ descriptor); pass per-graph config programmatically.
@@ -339,6 +468,7 @@ fn main() -> ExitCode {
         &config_by_graph,
         tier.as_ref(),
         provenance.as_ref(),
+        layer.as_ref(),
         &mut on_progress,
     ) {
         Ok(summaries) => {

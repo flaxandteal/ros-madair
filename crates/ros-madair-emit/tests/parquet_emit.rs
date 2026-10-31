@@ -624,6 +624,7 @@ fn emit_threads_owner_provenance_into_the_signed_manifest() {
             &cfg,
             None, // tier
             prov,
+            None, // layer
             &mut |_| std::ops::ControlFlow::Continue(()),
         )
         .expect("emit_parquet_with_progress");

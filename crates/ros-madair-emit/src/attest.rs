@@ -216,6 +216,7 @@ pub fn seal_and_sign(
             base_uri: "https://example.org/".to_string(),
             tier: None,
             provenance: None,
+            layer: None,
             handlers: vec![],
             models: vec![],
             artifacts: vec![],
