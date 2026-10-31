@@ -326,6 +326,12 @@ pub struct ClosedPolicy {
     /// requests accepted.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub request: Option<RequestPolicy>,
+    /// Owner-required friction on EVERY opening of this layer (board 07): a reason
+    /// and/or a press-and-hold, even for a granted role. The vulnerable-person
+    /// (help-register) case; absent ⇒ a granted role opens with no friction (board
+    /// 12). The purposes offered are [`RequestPolicy::reasons`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub friction: Option<Friction>,
 }
 
 /// Existence level (D1): what the open layer says about the closed layer.
@@ -544,6 +550,7 @@ mod tests {
                         reasons: vec!["active rescue".into(), "welfare check".into()],
                         friction: Some(Friction { reason: true, hold: false }),
                     }),
+                    friction: Some(Friction { reason: true, hold: true }),
                 }),
             }),
             ..base()

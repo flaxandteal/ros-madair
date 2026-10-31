@@ -131,6 +131,54 @@ for f in glob.glob(f"{data}/resources/person/*.json"):
 print(f"   open keyholder layer: {kept_people} keyholders, {kept_links} building links (no names)")
 PY
 
+echo "== 2c. split-layers: the WELFARE help-register pair (vulnerable persons, FRICTION) =="
+# A SECOND closed layer, owned by Social Welfare Dept — the vulnerable-person case the
+# designer gates behind board 07 (reason + press-and-hold). Same open/closed split as
+# keyholders: open = the keyholder_for LINK only (the per-building COUNT, no names);
+# closed = the names, FRICTION-gated. A DISTINCT subset of persons re-cast with new ids
+# (uuid5 "welfare:"+id) so a welfare registrant is not the same resource as a keyholder.
+DATA_WELFARE="$OUT/data_welfare"; DATA_WELFARE_OPEN="$OUT/data_welfare_open"
+rm -rf "$DATA_WELFARE" "$DATA_WELFARE_OPEN"
+mkdir -p "$DATA_WELFARE/graphs" "$DATA_WELFARE/resources/person" "$DATA_WELFARE_OPEN/graphs" "$DATA_WELFARE_OPEN/resources/person"
+python3 - "$DATA" "$DATA_WELFARE" "$DATA_WELFARE_OPEN" "$PERSON" <<'PY'
+import json, sys, glob, uuid, os
+data, wc, wo, pg = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
+KH = str(uuid.uuid5(uuid.UUID(pg), "keyholder_for"))
+# copy the person graph into both heads
+for g in glob.glob(f"{data}/graphs/*.json"):
+    doc = json.load(open(g))
+    if doc["graph"][0]["graphid"] == pg:
+        json.dump(doc, open(f"{wc}/graphs/{os.path.basename(g)}", "w"))
+        json.dump(doc, open(f"{wo}/graphs/{os.path.basename(g)}", "w"))
+closed, openr = [], []
+n = people = 0
+for f in glob.glob(f"{data}/resources/person/*.json"):
+    for r in json.load(open(f)).get("business_data", {}).get("resources", []):
+        tiles = [t for t in r.get("tiles", []) if t.get("nodegroup_id") == KH]
+        if not tiles:
+            continue
+        n += 1
+        if n % 4:  # ~1 in 4 persons is a welfare registrant (a plausible subset)
+            continue
+        ri = r["resourceinstance"]
+        old = ri["resourceinstanceid"]
+        new = str(uuid.uuid5(uuid.UUID(pg), "welfare:" + old))
+        name = ((ri.get("descriptors") or {}).get("en") or {}).get("name") or "Resident"
+        def recast(d, keep_name):
+            ri2 = {**ri, "resourceinstanceid": new,
+                   "descriptors": {"en": {"name": name if keep_name else "Resident needing help",
+                                          "description": "Registered as needing assistance" if keep_name else "",
+                                          "map_popup": ""}}}
+            ts = [{**t, "resourceinstance_id": new} for t in tiles]
+            d.append({"resourceinstance": ri2, "tiles": ts})
+        recast(closed, True)   # names present — the CLOSED welfare layer
+        recast(openr, False)   # link only, neutral descriptor — the OPEN welfare layer
+        people += 1
+json.dump({"business_data": {"resources": closed}}, open(f"{wc}/resources/person/welfare.json", "w"))
+json.dump({"business_data": {"resources": openr}}, open(f"{wo}/resources/person/welfare.json", "w"))
+print(f"   welfare help-register: {people} vulnerable registrants (open=link only, closed=names)")
+PY
+
 # Owner-declared provenance (presentation/policy, not crypto identity) — the field-register
 # trust UI reads these beside the signature. Caller-provided as-of (fixed) keeps the manifest
 # reproducible. Colours match the design review's per-owner swatches.
@@ -169,6 +217,25 @@ echo "== 4b. contact_open_head (OWNER 2 — the OPEN layer: keyholder COUNTS, no
   --as-of "$ASOF" --freshness-window-secs 1209600 \
   --layer-role open --layer-owner relief-network --layer-model keyholders >/dev/null
 
+echo "== 4c. welfare pair (OWNER — Social Welfare Dept — the help register, FRICTION) =="
+# The CLOSED help register: names of vulnerable persons. FRICTION-gated (board 07) —
+# a granted role still has to choose a purpose and press-and-hold. on_phone so it opens
+# straight away in a rescue. The OPEN head carries the link only (the per-building count).
+"$EMIT" "$DATA_WELFARE" "$OUT/welfare_head" --base-uri "$BASE" \
+  --owner-name "Social Welfare Dept · Help register" --owner-colour "#8A5A2B" \
+  --as-of "$ASOF" --freshness-window-secs 1209600 \
+  --layer-role closed --layer-owner social-welfare --layer-model help-register \
+  --closed-existence existence --closed-distribution on_phone --closed-window-secs 1800 \
+  --closed-grant field-officer-ward-4 \
+  --closed-friction-reason --closed-friction-hold \
+  --closed-approver "their duty officer" \
+  --closed-reason "Rescue under way in this area" --closed-reason "Evacuating this building" \
+  --closed-reason "Welfare check at an address" >/dev/null
+"$EMIT" "$DATA_WELFARE_OPEN" "$OUT/welfare_open_head" --base-uri "$BASE" \
+  --owner-name "Social Welfare Dept · Help register" --owner-colour "#8A5A2B" \
+  --as-of "$ASOF" --freshness-window-secs 1209600 \
+  --layer-role open --layer-owner social-welfare --layer-model help-register >/dev/null
+
 echo "== 5. insurer_head (TIERED window — covered buildings only, no contacts) =="
 "$EMIT" "$DATA" "$OUT/insurer_head" --base-uri "$BASE" \
   --tier insurer-book --include-resources "$DATA/covered_ids.txt" \
@@ -178,14 +245,14 @@ echo "== 5. insurer_head (TIERED window — covered buildings only, no contacts)
 
 echo "== 6. sign + verify all three (one owner key each would be ideal; one key here) =="
 KEY="$OUT/aonach_signing.key"
-for head in building_head contact_open_head contact_head insurer_head; do
+for head in building_head contact_open_head contact_head welfare_open_head welfare_head insurer_head; do
   "$EMIT" sign "$OUT/$head" "$KEY" --actor https://flaxandteal.co.uk --actor-name "Flax & Teal" --role endorsed >/dev/null
   printf "   %-15s " "$head:"; "$EMIT" verify "$OUT/$head"
 done
 
 echo "== 7. copy each model's graph INTO its head (the hydrate/buffer path reads graph.json"
 echo "       + graph_<gid>.json from the head dir; emit ships only parquet + manifest) =="
-for head in building_head contact_open_head contact_head insurer_head; do
+for head in building_head contact_open_head contact_head welfare_open_head welfare_head insurer_head; do
   python3 - "$OUT/$head" "$DATA/graphs" <<'PY'
 import json, sys, shutil, os
 hd, graphs = sys.argv[1], sys.argv[2]

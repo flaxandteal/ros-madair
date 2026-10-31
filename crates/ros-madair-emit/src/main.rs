@@ -26,7 +26,8 @@ const USAGE: &str = "usage: ros-madair-emit <data_dir> <out_dir> [--base-uri URI
                      [--closed-existence {schema|existence}] \
                      [--closed-distribution {on_phone|needs_signal}] \
                      [--closed-window-secs N] [--closed-grant ROLE]... \
-                     [--closed-approver LABEL] [--closed-reason TEXT]...]";
+                     [--closed-approver LABEL] [--closed-reason TEXT]... \
+                     [--closed-friction-reason] [--closed-friction-hold]]";
 
 fn usage() -> ExitCode {
     eprintln!("{USAGE}");
@@ -205,6 +206,8 @@ fn main() -> ExitCode {
     let mut closed_grants: Vec<String> = Vec::new();
     let mut closed_approver: Option<String> = None;
     let mut closed_reasons: Vec<String> = Vec::new();
+    let mut closed_friction_reason = false;
+    let mut closed_friction_hold = false;
     let mut i = 1;
     while i < args.len() {
         match args[i].as_str() {
@@ -338,6 +341,8 @@ fn main() -> ExitCode {
                     closed_reasons.push(v.clone());
                 }
             }
+            "--closed-friction-reason" => closed_friction_reason = true,
+            "--closed-friction-hold" => closed_friction_hold = true,
             "--no-render-cache" => std::env::set_var("ROS_MADAIR_EMIT_RENDER_CACHE", "0"),
             "--memory-limit" => {
                 i += 1;
@@ -431,6 +436,12 @@ fn main() -> ExitCode {
                     window_secs: closed_window_secs.unwrap_or(1800),
                     grants: closed_grants,
                     request,
+                    friction: (closed_friction_reason || closed_friction_hold).then(|| {
+                        ros_madair_format::Friction {
+                            reason: closed_friction_reason,
+                            hold: closed_friction_hold,
+                        }
+                    }),
                 })
             } else {
                 None
