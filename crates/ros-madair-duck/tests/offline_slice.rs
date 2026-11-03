@@ -199,6 +199,62 @@ fn free_second_hop_over_r2_layers() {
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
+/// (A, option A) The LOCAL-layers export — the on-device path, NO httpfs: excise a
+/// region + 1-hop from already-provisioned local head dirs, re-open the layered slice,
+/// and confirm the free 2-hop (`__cache`) rode in. Proves `export_offline_layers` over
+/// `LayerSpec::Local`. Set `ROS_TEST_HEADS_DIR` (dir with building_head/ + contact_head/);
+/// skips if absent.
+#[test]
+#[ignore = "local fixture: needs ROS_TEST_HEADS_DIR with cache-ON heads"]
+fn export_offline_local_layers() {
+    use ros_madair_duck::{export_offline_layers, LayerSpec};
+    use std::path::{Path, PathBuf};
+
+    let base_dir =
+        std::env::var("ROS_TEST_HEADS_DIR").unwrap_or_else(|_| "/tmp/claude-1000/func-heads".into());
+    let building = Path::new(&base_dir).join("building_head");
+    let contact = Path::new(&base_dir).join("contact_head");
+    if !contact.join("manifest.json").exists() || !building.join("manifest.json").exists() {
+        eprintln!("no cache-ON heads at {base_dir} — skip");
+        return;
+    }
+    // A wide box over the (small) local corpus so the seed catches keyholded buildings.
+    let composed = DuckReader::open_layers(&[building.as_path()]).unwrap();
+    let (lng, lat) = composed.sample_point().unwrap().unwrap();
+    let bbox = [lng - 0.1, lat - 0.1, lng + 0.1, lat + 0.1];
+
+    let specs = vec![
+        LayerSpec::Local(PathBuf::from(&building)),
+        LayerSpec::Local(PathBuf::from(&contact)),
+    ];
+    let tmp = std::env::temp_dir().join(format!("ros-local-export-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&tmp);
+    let s = export_offline_layers(&specs, bbox, 5000, 0, &tmp).expect("export_offline_layers local");
+    eprintln!("LOCAL export: seed={} hop1={} refs={}", s.seed, s.hop1, s.refs);
+    assert_eq!(s.layer_dirs.len(), 2, "two local layers → two slice dirs");
+    assert!(s.seed > 0, "seed non-empty");
+    assert!(s.hop1 > 0, "1-hop keyholders present (no httpfs used)");
+
+    // Re-open the LAYERED slice OFFLINE and confirm a keyholder's cache (the free 2-hop).
+    let paths: Vec<&Path> = s.layer_dirs.iter().map(|p| p.as_path()).collect();
+    let slice = DuckReader::open_layers(&paths).expect("open_layers slice");
+    // a keyholder present in the slice's contact layer, with its __cache
+    let contact_slice = DuckReader::open_layers(&[s.layer_dirs[1].as_path()]).unwrap();
+    let kh = contact_slice
+        .entry_resource_ids()
+        .unwrap()
+        .into_iter()
+        .find(|id| {
+            let d = slice.resource_data_blobs(id).unwrap_or_default().join("\n");
+            d.contains("__cache")
+        })
+        .expect("a keyholder tile with __cache in the slice");
+    let data = slice.resource_data_blobs(&kh).unwrap().join("\n");
+    assert!(data.contains("__cache"), "free 2-hop cache survived into the local slice");
+    eprintln!("OK: local-layers export — free 2-hop in the offline slice, no httpfs");
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
 /// (a) Does the alizarin `__cache`/`render_summary` on a 1-hop keyholder tile reach
 /// the SECOND level (the keyholder's own linked resources — the org)? If so, the 2-hop
 /// DISPLAY rides along free in the full-grade 1-hop tiles we already excise, and no

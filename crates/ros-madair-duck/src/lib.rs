@@ -1452,6 +1452,172 @@ pub struct ExportSummary {
     pub refs_capped: bool,
 }
 
+/// A chosen layer for an offline export: a REMOTE snapshot base URL (R2/S3, read via
+/// httpfs) or a LOCAL snapshot dir (an already-provisioned head — the ON-DEVICE path,
+/// no httpfs). An export's layers must be all-remote OR all-local (not mixed).
+pub enum LayerSpec {
+    Http(String),
+    Local(std::path::PathBuf),
+}
+
+/// Compose the chosen layers into one reader for closure resolution (cross-layer hops).
+fn compose_specs(layers: &[LayerSpec]) -> Result<DuckReader, DuckError> {
+    let all_http = layers.iter().all(|l| matches!(l, LayerSpec::Http(_)));
+    let all_local = layers.iter().all(|l| matches!(l, LayerSpec::Local(_)));
+    if all_http {
+        let urls: Vec<&str> = layers
+            .iter()
+            .filter_map(|l| match l {
+                LayerSpec::Http(u) => Some(u.as_str()),
+                _ => None,
+            })
+            .collect();
+        DuckReader::open_http_layers(&urls)
+    } else if all_local {
+        let dirs: Vec<&Path> = layers
+            .iter()
+            .filter_map(|l| match l {
+                LayerSpec::Local(p) => Some(p.as_path()),
+                _ => None,
+            })
+            .collect();
+        DuckReader::open_layers(&dirs)
+    } else {
+        Err(DuckError::Compile(
+            "export: layers must be all-remote or all-local (mixed not supported)".into(),
+        ))
+    }
+}
+
+/// The `snapshot_id` of a LOCAL snapshot dir (its `manifest.json`), for provenance.
+fn local_snapshot_id(dir: &Path) -> Option<String> {
+    let bytes = std::fs::read(dir.join("manifest.json")).ok()?;
+    let v: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
+    v.get("snapshot_id")
+        .and_then(|x| x.as_str())
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string())
+}
+
+/// Open ONE layer's raw reader for excision, plus its provenance label + `snapshot_id`.
+fn open_spec(
+    composed: &DuckReader,
+    spec: &LayerSpec,
+) -> Result<(DuckReader, String, String), DuckError> {
+    match spec {
+        LayerSpec::Http(u) => {
+            let r = DuckReader::open_http(u)?;
+            let snap = composed.read_remote_snapshot_id(u).unwrap_or_default();
+            Ok((r, u.clone(), snap))
+        }
+        LayerSpec::Local(p) => {
+            let r = DuckReader::open_layers(std::slice::from_ref(&p.as_path()))?;
+            let snap = local_snapshot_id(p).unwrap_or_default();
+            Ok((r, p.to_string_lossy().into_owned(), snap))
+        }
+    }
+}
+
+/// Export a self-contained OFFLINE slice from the chosen alizarin [`LayerSpec`]s — REMOTE
+/// (R2 over httpfs) or LOCAL (already-provisioned heads, no httpfs, the ON-DEVICE path).
+/// A region around a point (`bbox`), the queryable 1-hop, and OPTIONALLY the 2-hop as
+/// linkable references. The closure is resolved over the COMPOSED layers (a hop crosses
+/// layers), then each layer's RAW rows are excised into its own `layer-<i>/` sub-dir — so
+/// [`DuckReader::open_layers`] re-composes the slice DYNAMICALLY offline rather than
+/// flattening it (keeping the open/closed boundary). Writes a derived-provenance manifest.
+///
+/// `hop2_ref_cap` DEFAULT `0` (recommended): the 2-hop rides free as DISPLAY in the
+/// full-grade 1-hop tiles' `__cache` (cache-ON heads) — no edge expansion, no fan-out.
+/// `> 0` opts into reference-grade 2-hop ENTITIES via a `neighbours(hop1)` expansion,
+/// which **fans out through a hub** — the cap bounds it and [`ExportSummary::refs_capped`]
+/// reports when it bit.
+pub fn export_offline_layers(
+    layers: &[LayerSpec],
+    bbox: [f64; 4],
+    seed_limit: usize,
+    hop2_ref_cap: usize,
+    out_dir: &Path,
+) -> Result<ExportSummary, DuckError> {
+    if layers.is_empty() {
+        return Err(DuckError::Compile("export_offline: no layers".into()));
+    }
+    // 1. compose the chosen layers and resolve the closure (cross-layer hops).
+    let composed = compose_specs(layers)?;
+    let seed = composed.ids_in_bbox(bbox, seed_limit)?;
+    let hop1 = composed.neighbours(&seed)?;
+    let mut closure: Vec<String> = seed.iter().chain(hop1.iter()).cloned().collect();
+    closure.sort();
+    closure.dedup();
+    let (refs, refs_capped): (Vec<String>, bool) = if hop2_ref_cap > 0 {
+        let full: std::collections::HashSet<&String> = closure.iter().collect();
+        let mut r: Vec<String> = composed
+            .neighbours(&hop1)?
+            .into_iter()
+            .filter(|id| !full.contains(id))
+            .collect();
+        r.sort();
+        r.dedup();
+        let capped = r.len() > hop2_ref_cap;
+        r.truncate(hop2_ref_cap);
+        (r, capped)
+    } else {
+        (Vec::new(), false)
+    };
+    // 2. excise each layer's RAW rows into its own sub-dir; collect hashes + provenance.
+    let mut layer_dirs = Vec::new();
+    let mut slice_layers = Vec::new();
+    let mut derived_from = Vec::new();
+    for (i, spec) in layers.iter().enumerate() {
+        let (layer, label, snapshot_id) = open_spec(&composed, spec)?;
+        let dir = out_dir.join(format!("layer-{i}"));
+        let written = layer.excise(&closure, &refs, Some(bbox), &dir, "slice")?;
+        let mut artifacts = Vec::new();
+        for p in &written {
+            let bytes = std::fs::read(p)
+                .map_err(|e| DuckError::Compile(format!("hash {}: {e}", p.display())))?;
+            let name = p
+                .file_name()
+                .and_then(|s| s.to_str())
+                .unwrap_or_default()
+                .to_string();
+            artifacts.push(ros_madair_format::ArtifactEntry::hashed(name, &bytes));
+        }
+        slice_layers.push(ros_madair_format::SliceLayer {
+            dir: format!("layer-{i}"),
+            artifacts,
+        });
+        derived_from.push(ros_madair_format::SourceSnapshot {
+            url: label,
+            snapshot_id,
+        });
+        layer_dirs.push(dir);
+    }
+    // 3. the derived-provenance manifest at the slice root (claim-only).
+    let manifest = ros_madair_format::DerivedManifest {
+        format_version: ros_madair_format::FORMAT_VERSION,
+        kind: "offline-slice".to_string(),
+        derived_from,
+        region: Some(bbox),
+        seed_limit: seed_limit as u64,
+        hop2_ref_cap: hop2_ref_cap as u64,
+        layers: slice_layers,
+    };
+    let manifest_path = out_dir.join("manifest.json");
+    let json = serde_json::to_string_pretty(&manifest)
+        .map_err(|e| DuckError::Compile(format!("serialize slice manifest: {e}")))?;
+    std::fs::write(&manifest_path, json)
+        .map_err(|e| DuckError::Compile(format!("write slice manifest: {e}")))?;
+    Ok(ExportSummary {
+        layer_dirs,
+        manifest: manifest_path,
+        seed: seed.len(),
+        hop1: hop1.len(),
+        refs: refs.len(),
+        refs_capped,
+    })
+}
+
+/// [`export_offline_layers`] over REMOTE (R2) layer base URLs — the desktop/browser path.
 /// Export a self-contained OFFLINE slice of a remote, LAYERED corpus:
 /// `export_offline(layers, bbox, seed_limit, hop2_ref_cap, out)` — a region around a
 /// point (`bbox`), the queryable 1-hop, and OPTIONALLY the 2-hop as linkable references,
@@ -1481,86 +1647,11 @@ pub fn export_offline(
     hop2_ref_cap: usize,
     out_dir: &Path,
 ) -> Result<ExportSummary, DuckError> {
-    // 1. compose the chosen layers and resolve the closure (cross-layer hops).
-    let composed = DuckReader::open_http_layers(layer_urls)?;
-    let seed = composed.ids_in_bbox(bbox, seed_limit)?;
-    let hop1 = composed.neighbours(&seed)?;
-    let mut closure: Vec<String> = seed.iter().chain(hop1.iter()).cloned().collect();
-    closure.sort();
-    closure.dedup();
-    // 2-hop as references: what the 1-hop links to, minus what's already full-grade,
-    // bounded by hop2_ref_cap (deterministic: sorted, then truncated).
-    let (refs, refs_capped): (Vec<String>, bool) = if hop2_ref_cap > 0 {
-        let full: std::collections::HashSet<&String> = closure.iter().collect();
-        let mut r: Vec<String> = composed
-            .neighbours(&hop1)?
-            .into_iter()
-            .filter(|id| !full.contains(id))
-            .collect();
-        r.sort();
-        r.dedup();
-        let capped = r.len() > hop2_ref_cap;
-        r.truncate(hop2_ref_cap);
-        (r, capped)
-    } else {
-        (Vec::new(), false)
-    };
-    // 2. excise each layer's RAW rows of the closure / refs into its own sub-dir, and
-    //    collect the slice's own file hashes + the source snapshot_ids for provenance.
-    let mut layer_dirs = Vec::new();
-    let mut slice_layers = Vec::new();
-    let mut derived_from = Vec::new();
-    for (i, url) in layer_urls.iter().enumerate() {
-        let layer = DuckReader::open_http(url)?;
-        let dir = out_dir.join(format!("layer-{i}"));
-        let written = layer.excise(&closure, &refs, Some(bbox), &dir, "slice")?;
-        let mut artifacts = Vec::new();
-        for p in &written {
-            let bytes = std::fs::read(p)
-                .map_err(|e| DuckError::Compile(format!("hash {}: {e}", p.display())))?;
-            let name = p
-                .file_name()
-                .and_then(|s| s.to_str())
-                .unwrap_or_default()
-                .to_string();
-            artifacts.push(ros_madair_format::ArtifactEntry::hashed(name, &bytes));
-        }
-        slice_layers.push(ros_madair_format::SliceLayer {
-            dir: format!("layer-{i}"),
-            artifacts,
-        });
-        derived_from.push(ros_madair_format::SourceSnapshot {
-            url: url.to_string(),
-            snapshot_id: composed.read_remote_snapshot_id(url).unwrap_or_default(),
-        });
-        layer_dirs.push(dir);
-    }
-
-    // 3. write the derived-provenance manifest at the slice root (claim-only — names the
-    //    sources + self-attests the slice's files; NOT a cryptographic subset proof).
-    let manifest = ros_madair_format::DerivedManifest {
-        format_version: ros_madair_format::FORMAT_VERSION,
-        kind: "offline-slice".to_string(),
-        derived_from,
-        region: Some(bbox),
-        seed_limit: seed_limit as u64,
-        hop2_ref_cap: hop2_ref_cap as u64,
-        layers: slice_layers,
-    };
-    let manifest_path = out_dir.join("manifest.json");
-    let json = serde_json::to_string_pretty(&manifest)
-        .map_err(|e| DuckError::Compile(format!("serialize slice manifest: {e}")))?;
-    std::fs::write(&manifest_path, json)
-        .map_err(|e| DuckError::Compile(format!("write slice manifest: {e}")))?;
-
-    Ok(ExportSummary {
-        layer_dirs,
-        manifest: manifest_path,
-        seed: seed.len(),
-        hop1: hop1.len(),
-        refs: refs.len(),
-        refs_capped,
-    })
+    let specs: Vec<LayerSpec> = layer_urls
+        .iter()
+        .map(|u| LayerSpec::Http(u.to_string()))
+        .collect();
+    export_offline_layers(&specs, bbox, seed_limit, hop2_ref_cap, out_dir)
 }
 
 /// A `read_parquet()` table-source over a LOCAL glob — the per-layer source the
