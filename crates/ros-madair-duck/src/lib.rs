@@ -67,6 +67,152 @@ fn configure_spatial(conn: &Connection, spatial: &SpatialSource) {
     }
 }
 
+/// Load the `httpfs` extension so `read_parquet('https://…')` range-reads a
+/// remote Parquet (reads the footer, then only the row groups the zone-map keeps)
+/// instead of pulling the whole file. This is the native analogue of the
+/// browser's `INSTALL httpfs; LOAD httpfs;` (duckdb-wasm) — it is what lets the
+/// full corpus live on R2/S3/any-Range-CDN and a reader pull a slice.
+///
+/// `httpfs` is a RUNTIME extension (not a cargo feature, no libduckdb rebuild).
+/// `Auto` installs it over the network (dev/online); `OfflineDir` loads the
+/// bundled per-platform binary with autoinstall off (the on-device path, exactly
+/// like spatial). Public `https://` objects (e.g. R2 custom-domain) need NO S3
+/// credentials — plain HTTP Range. Errors propagate: without httpfs an `https`
+/// read cannot work, so a failed load must be loud, not a later cryptic bind error.
+fn configure_httpfs(conn: &Connection, source: &SpatialSource) -> Result<(), DuckError> {
+    match source {
+        SpatialSource::None => Ok(()),
+        SpatialSource::Auto => {
+            conn.execute_batch("INSTALL httpfs; LOAD httpfs;")?;
+            Ok(())
+        }
+        SpatialSource::OfflineDir(dir) => {
+            conn.execute_batch(&format!(
+                "SET autoinstall_known_extensions=false; \
+                 SET extension_directory='{}'; \
+                 LOAD httpfs;",
+                sql_lit(&dir.display().to_string())
+            ))?;
+            Ok(())
+        }
+    }
+}
+
+/// Register a view over an explicit list of Parquet URLs (or local paths), unioned
+/// by name so several models coexist in one view. `hive` adds Hive partitioning so
+/// a partitioned `tiles_<g>/nodegroup_id=…/` set recovers the `nodegroup_id` column.
+/// Returns `false` (view NOT created) when `urls` is empty — the caller's `has_*`
+/// flag — so a snapshot missing a store opens without it.
+fn create_url_view(
+    conn: &Connection,
+    name: &str,
+    urls: &[String],
+    hive: bool,
+) -> Result<bool, DuckError> {
+    if urls.is_empty() {
+        return Ok(false);
+    }
+    let list = urls
+        .iter()
+        .map(|u| format!("'{}'", sql_lit(u)))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let opts = if hive {
+        ", hive_partitioning=true, union_by_name=true"
+    } else {
+        ", union_by_name=true"
+    };
+    conn.execute_batch(&format!(
+        "CREATE VIEW {name} AS SELECT * FROM read_parquet([{list}]{opts});"
+    ))?;
+    Ok(true)
+}
+
+/// Whether a view of this name is registered on the connection — so [`DuckReader::excise`]
+/// COPYs only the stores a snapshot actually carries.
+fn view_exists(conn: &Connection, name: &str) -> Result<bool, DuckError> {
+    let n: i64 = conn.query_row(
+        "SELECT count(*) FROM duckdb_views() WHERE view_name = ?",
+        [name],
+        |r| r.get(0),
+    )?;
+    Ok(n > 0)
+}
+
+/// Whether the spatial extension loaded (ST_Intersects available) — the switch
+/// between the exact and coarse-only `Bbox` paths. Shared by the http openers.
+fn probe_spatial(conn: &Connection) -> bool {
+    conn.query_row(
+        "SELECT count(*) > 0 FROM duckdb_functions() WHERE lower(function_name) = 'st_intersects'",
+        [],
+        |r| r.get(0),
+    )
+    .unwrap_or(false)
+}
+
+/// The per-store URL lists of ONE remote snapshot (layer), grouped from its manifest.
+struct LayerStores {
+    tiles: Vec<String>,
+    edges: Vec<String>,
+    redges: Vec<String>,
+    concepts: Vec<String>,
+    ordered: Vec<String>,
+    grid: Vec<String>,
+    resources: Vec<String>,
+    catalog: Vec<String>,
+}
+
+/// Read a remote snapshot's `manifest.json` THROUGH duckdb (httpfs json reader — no
+/// extra HTTP client) and group its artifact paths into per-store URL lists. Shared by
+/// [`DuckReader::open_http`] (one snapshot) and [`DuckReader::open_http_layers`]
+/// (compose several). `artifacts` is a list of `{path, bytes, sha256}` structs.
+fn http_layer_stores(conn: &Connection, base_url: &str) -> Result<LayerStores, DuckError> {
+    let base = base_url.trim_end_matches('/').to_string();
+    let manifest_url = format!("{base}/manifest.json");
+    let mut stmt = conn.prepare(&format!(
+        "SELECT a.path AS f FROM (SELECT UNNEST(artifacts) AS a \
+         FROM read_json_auto('{}')) t",
+        sql_lit(&manifest_url)
+    ))?;
+    let files: Vec<String> = stmt
+        .query_map([], |r| r.get::<_, String>(0))?
+        .collect::<Result<_, _>>()?;
+    drop(stmt);
+    let mut s = LayerStores {
+        tiles: vec![],
+        edges: vec![],
+        redges: vec![],
+        concepts: vec![],
+        ordered: vec![],
+        grid: vec![],
+        resources: vec![],
+        catalog: vec![],
+    };
+    // Order matters: `redges_`/`concept_catalog` before the `edges_`/`concepts_`
+    // prefixes they could be confused with.
+    for f in &files {
+        let url = format!("{base}/{f}");
+        if f.starts_with("tiles_") {
+            s.tiles.push(url);
+        } else if f.starts_with("redges_") {
+            s.redges.push(url);
+        } else if f.starts_with("edges_") {
+            s.edges.push(url);
+        } else if f.starts_with("concept_catalog") {
+            s.catalog.push(url);
+        } else if f.starts_with("concepts_") {
+            s.concepts.push(url);
+        } else if f.starts_with("ordered_") {
+            s.ordered.push(url);
+        } else if f.starts_with("grid_") {
+            s.grid.push(url);
+        } else if f.starts_with("resources_") {
+            s.resources.push(url);
+        }
+    }
+    Ok(s)
+}
+
 /// Why a DuckDB read failed.
 #[derive(Debug)]
 pub enum DuckError {
@@ -289,6 +435,397 @@ impl DuckReader {
         })
     }
 
+    /// Open a reader over a REMOTE snapshot served from a Range-honouring host
+    /// (R2 / S3 / any CDN), driven by its `manifest.json`. This is the "serve the
+    /// whole corpus from the CDN, pull only a slice" path: `httpfs` range-reads, and
+    /// the manifest's artifact list is enumerated into explicit `read_parquet([...])`
+    /// file lists — necessary because httpfs CANNOT expand a glob over plain HTTP
+    /// (R2 has no directory listing), so the Hive-partitioned
+    /// `tiles_<g>/…/data_0.parquet` partitions are named explicitly
+    /// (`hive_partitioning=true` recovers the `nodegroup_id` column). Every model in
+    /// the snapshot unions into one set of views (resource/node ids are globally
+    /// unique), so a cross-model hop resolves. The manifest is read THROUGH duckdb's
+    /// json reader over httpfs — no extra HTTP client dependency.
+    pub fn open_http(base_url: &str) -> Result<Self, DuckError> {
+        let conn = Connection::open_in_memory()?;
+        configure_httpfs(&conn, &SpatialSource::Auto)?;
+        // GridBox (the spatial seed) prunes on the grid's `cell` zone-map and needs
+        // no spatial extension; only a Bbox fine-step would. Load it best-effort so
+        // an exact Bbox still works online, but never fail the open on it.
+        let _ = conn.execute_batch("INSTALL spatial; LOAD spatial;");
+        let spatial = probe_spatial(&conn);
+
+        let s = http_layer_stores(&conn, base_url)?;
+        if !create_url_view(&conn, "tiles", &s.tiles, true)? {
+            return Err(DuckError::Compile(format!(
+                "open_http: manifest at {base_url}/manifest.json listed no tiles_* artifacts"
+            )));
+        }
+        let has_edges = create_url_view(&conn, "edges", &s.edges, false)?;
+        let _ = create_url_view(&conn, "edges_rev", &s.redges, false)?;
+        let has_concept_index = create_url_view(&conn, "concept_index", &s.concepts, false)?;
+        let has_ordered = create_url_view(&conn, "ordered_index", &s.ordered, false)?;
+        let has_grid = create_url_view(&conn, "grid", &s.grid, false)?;
+        let has_resources = create_url_view(&conn, "resources", &s.resources, false)?;
+        let has_catalog = create_url_view(&conn, "concepts", &s.catalog, false)?;
+
+        Ok(Self {
+            conn,
+            has_catalog,
+            has_edges,
+            has_concept_index,
+            has_ordered,
+            has_grid,
+            has_resources,
+            spatial,
+            excluded_nodegroups: std::collections::HashSet::new(),
+        })
+    }
+
+    /// Open a reader over SEVERAL remote layer snapshots (base-first), composed with
+    /// overlay precedence — the HTTP analogue of [`open_layers`](Self::open_layers),
+    /// reusing the exact same `shadow_set_union`/`ranked_union` composition, only with
+    /// URL-list sources instead of local globs. Used to resolve an offline slice's
+    /// closure over EXACTLY the chosen alizarin layers: a hop crosses layers (the
+    /// composed views union them), so a seed building in the base layer reaches a
+    /// keyholder in an overlay. Each layer's RAW rows are excised separately (re-open
+    /// with [`open_http`](Self::open_http)), so the exported slice re-composes
+    /// dynamically offline rather than being flattened.
+    pub fn open_http_layers(base_urls: &[&str]) -> Result<Self, DuckError> {
+        if base_urls.is_empty() {
+            return Err(DuckError::Compile("open_http_layers: no layers".into()));
+        }
+        let conn = Connection::open_in_memory()?;
+        configure_httpfs(&conn, &SpatialSource::Auto)?;
+        let _ = conn.execute_batch("INSTALL spatial; LOAD spatial;");
+        let spatial = probe_spatial(&conn);
+
+        // Per store, the (rank, source-expr) of each layer that carries it.
+        let (mut tiles, mut edges, mut redges) = (Vec::new(), Vec::new(), Vec::new());
+        let (mut concepts, mut ordered, mut grid) = (Vec::new(), Vec::new(), Vec::new());
+        let (mut resources, mut catalog) = (Vec::new(), Vec::new());
+        for (i, base) in base_urls.iter().enumerate() {
+            let s = http_layer_stores(&conn, base)?;
+            if !s.tiles.is_empty() {
+                tiles.push((i, url_src(&s.tiles, true)));
+            }
+            if !s.edges.is_empty() {
+                edges.push((i, url_src(&s.edges, false)));
+            }
+            if !s.redges.is_empty() {
+                redges.push((i, url_src(&s.redges, false)));
+            }
+            if !s.concepts.is_empty() {
+                concepts.push((i, url_src(&s.concepts, false)));
+            }
+            if !s.ordered.is_empty() {
+                ordered.push((i, url_src(&s.ordered, false)));
+            }
+            if !s.grid.is_empty() {
+                grid.push((i, url_src(&s.grid, false)));
+            }
+            if !s.resources.is_empty() {
+                resources.push((i, url_src(&s.resources, false)));
+            }
+            if !s.catalog.is_empty() {
+                catalog.push((i, url_src(&s.catalog, false)));
+            }
+        }
+        if tiles.is_empty() {
+            return Err(DuckError::Compile(
+                "open_http_layers: no tiles_* in any layer".into(),
+            ));
+        }
+        conn.execute_batch(&format!(
+            "CREATE VIEW tiles AS {};",
+            shadow_set_union(&tiles, &["resource_id", "nodegroup_id"], "*")
+        ))?;
+        // Projections are `*` (not explicit column lists): the composition only needs
+        // the KEY columns to exist, and `*` + `UNION ALL BY NAME` tolerates schema
+        // drift between a corpus's snapshot version and this reader (the R2 backdrop is
+        // an older grid schema), filling absent columns with NULL rather than binding-
+        // erroring. (The composed reader is used to resolve the closure — tiles+edges —
+        // so a looser projection on the other stores costs nothing.)
+        let has_edges = !edges.is_empty();
+        if has_edges {
+            conn.execute_batch(&format!(
+                "CREATE VIEW edges AS {};",
+                shadow_set_union(&edges, &["src_resource", "src_nodegroup"], "*")
+            ))?;
+        }
+        if !redges.is_empty() {
+            conn.execute_batch(&format!(
+                "CREATE VIEW edges_rev AS {};",
+                shadow_set_union(&redges, &["src_resource", "src_nodegroup"], "*")
+            ))?;
+        }
+        let has_catalog = !catalog.is_empty();
+        if has_catalog {
+            conn.execute_batch(&format!(
+                "CREATE VIEW concepts AS \
+                 SELECT concept_id, dfs_enter, dfs_leave, label, value_ids FROM ({}) \
+                 QUALIFY row_number() OVER (PARTITION BY concept_id ORDER BY _layer DESC) = 1;",
+                ranked_union(&catalog)
+            ))?;
+        }
+        let has_concept_index = !concepts.is_empty();
+        if has_concept_index {
+            conn.execute_batch(&format!(
+                "CREATE VIEW concept_index AS {};",
+                shadow_set_union(&concepts, &["resource_id", "nodegroup_id"], "*")
+            ))?;
+        }
+        let has_ordered = !ordered.is_empty();
+        if has_ordered {
+            conn.execute_batch(&format!(
+                "CREATE VIEW ordered_index AS {};",
+                shadow_set_union(&ordered, &["resource_id", "nodegroup_id"], "*")
+            ))?;
+        }
+        let has_grid = !grid.is_empty();
+        if has_grid {
+            conn.execute_batch(&format!(
+                "CREATE VIEW grid AS {};",
+                shadow_set_union(&grid, &["resource_id"], "*")
+            ))?;
+        }
+        let has_resources = !resources.is_empty();
+        if has_resources {
+            conn.execute_batch(&format!(
+                "CREATE VIEW resources AS {};",
+                shadow_set_union(&resources, &["resource_id"], "*")
+            ))?;
+        }
+
+        Ok(Self {
+            conn,
+            has_catalog,
+            has_edges,
+            has_concept_index,
+            has_ordered,
+            has_grid,
+            has_resources,
+            spatial,
+            excluded_nodegroups: std::collections::HashSet::new(),
+        })
+    }
+
+    /// Build the local directory of a SLICE of this (typically remote) snapshot,
+    /// named so [`open`](Self::open) re-reads it OFFLINE (`tiles_<stem>.parquet`,
+    /// `edges_<stem>.parquet`, …). Two grades of membership:
+    ///
+    /// - **`closure`** (the seed + queryable hops) is **full grade**: tiles, concepts,
+    ///   ordered, grid, resources — hydratable and queryable offline.
+    /// - **`ref_only`** (e.g. the 2-hop targets) is **reference grade**: only the
+    ///   `resources`/`grid` entry rows (id, descriptor, render_summary, geo point) and
+    ///   the `edges` that connect to them — so offline you can *name, link and locate*
+    ///   a reference, but not open or query it. NOT its tiles/concepts/ordered.
+    ///
+    /// Edge rows are kept only when BOTH endpoints are present (in `closure ∪ ref_only`),
+    /// so the slice has no edges dangling to resources it does not carry. `geo_bbox`
+    /// (`[min_lng, min_lat, max_lng, max_lat]`), when given, additionally prunes the
+    /// tile read on the `geo_*` zone-map — non-geo tiles (NULL geo, e.g. a keyholder)
+    /// are always kept — so excising the spatial seed touches a few row groups, not the
+    /// whole backdrop. Returns the written file paths. (The derived-provenance manifest
+    /// is layered on by [`export_offline`].)
+    pub fn excise(
+        &self,
+        closure: &[String],
+        ref_only: &[String],
+        geo_bbox: Option<[f64; 4]>,
+        out_dir: &Path,
+        stem: &str,
+    ) -> Result<Vec<std::path::PathBuf>, DuckError> {
+        std::fs::create_dir_all(out_dir)
+            .map_err(|e| DuckError::Compile(format!("excise: mkdir {}: {e}", out_dir.display())))?;
+        // _closure = full grade; _all = closure ∪ ref_only = everything the slice names.
+        self.conn.execute_batch(
+            "CREATE OR REPLACE TEMP TABLE _closure(id VARCHAR); \
+             CREATE OR REPLACE TEMP TABLE _all(id VARCHAR);",
+        )?;
+        {
+            let mut app = self.conn.appender("_closure")?;
+            for id in closure {
+                app.append_row([id.as_str()])?;
+            }
+            app.flush()?;
+        }
+        {
+            let mut app = self.conn.appender("_all")?;
+            for id in closure.iter().chain(ref_only.iter()) {
+                app.append_row([id.as_str()])?;
+            }
+            app.flush()?;
+        }
+        let in_closure = "resource_id IN (SELECT id FROM _closure)";
+        let in_all = "resource_id IN (SELECT id FROM _all)";
+        let geo = match geo_bbox {
+            Some([minx, miny, maxx, maxy]) => format!(
+                " AND (geo_min_lng IS NULL OR NOT(geo_max_lng < {minx} OR geo_min_lng > {maxx} \
+                 OR geo_max_lat < {miny} OR geo_min_lat > {maxy}))"
+            ),
+            None => String::new(),
+        };
+        // Edges: both endpoints present (no dangling references out of the slice).
+        let edge_filter = "src_resource IN (SELECT id FROM _all) \
+                           AND target_resource IN (SELECT id FROM _all)";
+        // (view, output basename, row filter). Full-grade stores filter on _closure;
+        // the entry/edge stores filter on _all so a reference is named, linkable, located.
+        let plan: [(&str, String, String); 7] = [
+            ("tiles", format!("tiles_{stem}.parquet"), format!("{in_closure}{geo}")),
+            ("edges", format!("edges_{stem}.parquet"), edge_filter.to_string()),
+            ("edges_rev", format!("redges_{stem}.parquet"), edge_filter.to_string()),
+            ("concept_index", format!("concepts_{stem}.parquet"), in_closure.to_string()),
+            ("ordered_index", format!("ordered_{stem}.parquet"), in_closure.to_string()),
+            ("grid", format!("grid_{stem}.parquet"), in_all.to_string()),
+            ("resources", format!("resources_{stem}.parquet"), in_all.to_string()),
+        ];
+        let mut written = Vec::new();
+        for (view, fname, filter) in plan {
+            if !view_exists(&self.conn, view)? {
+                continue;
+            }
+            let path = out_dir.join(&fname);
+            self.conn.execute_batch(&format!(
+                "COPY (SELECT * FROM {view} WHERE {filter}) TO '{}' (FORMAT PARQUET);",
+                sql_lit(&path.display().to_string())
+            ))?;
+            written.push(path);
+        }
+        Ok(written)
+    }
+
+    /// Seed helper: distinct resource ids whose tile geometry overlaps `bbox`
+    /// (`[min_lng, min_lat, max_lng, max_lat]`), zone-map-pruned, up to `limit`.
+    pub fn ids_in_bbox(&self, bbox: [f64; 4], limit: usize) -> Result<Vec<String>, DuckError> {
+        let [minx, miny, maxx, maxy] = bbox;
+        let mut stmt = self.conn.prepare(&format!(
+            "SELECT DISTINCT resource_id FROM tiles \
+             WHERE geo_min_lng IS NOT NULL \
+               AND NOT(geo_max_lng < {minx} OR geo_min_lng > {maxx} \
+                       OR geo_max_lat < {miny} OR geo_min_lat > {maxy}) \
+             ORDER BY resource_id LIMIT {limit}"
+        ))?;
+        let ids = stmt
+            .query_map([], |r| r.get::<_, String>(0))?
+            .collect::<Result<_, _>>()?;
+        Ok(ids)
+    }
+
+    /// One-hop neighbours of `ids` over the edge table, BOTH directions (resources
+    /// that reference them — e.g. a keyholder → building — and resources they
+    /// reference). The first hop of an offline slice's closure.
+    pub fn neighbours(&self, ids: &[String]) -> Result<Vec<String>, DuckError> {
+        if ids.is_empty() || !self.has_edges {
+            return Ok(Vec::new());
+        }
+        let list = ids
+            .iter()
+            .map(|u| format!("'{}'", sql_lit(u)))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let mut stmt = self.conn.prepare(&format!(
+            "SELECT DISTINCT src_resource AS id FROM edges WHERE target_resource IN ({list}) \
+             UNION \
+             SELECT DISTINCT target_resource AS id FROM edges WHERE src_resource IN ({list})"
+        ))?;
+        let out = stmt
+            .query_map([], |r| r.get::<_, String>(0))?
+            .collect::<Result<_, _>>()?;
+        Ok(out)
+    }
+
+    /// A representative geo point `(lng, lat)` from the corpus (the first tile with
+    /// geometry) — for picking a demo AO without knowing the extent up front.
+    pub fn sample_point(&self) -> Result<Option<(f64, f64)>, DuckError> {
+        match self.conn.query_row(
+            "SELECT geo_min_lng, geo_min_lat FROM tiles WHERE geo_min_lng IS NOT NULL LIMIT 1",
+            [],
+            |r| Ok((r.get::<_, f64>(0)?, r.get::<_, f64>(1)?)),
+        ) {
+            Ok(p) => Ok(Some(p)),
+            Err(duckdb::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    /// Row count of the `tiles` view (whole snapshot, or a slice). Test/diagnostic.
+    pub fn count_tiles(&self) -> Result<usize, DuckError> {
+        let n: i64 = self
+            .conn
+            .query_row("SELECT count(*) FROM tiles", [], |r| r.get(0))?;
+        Ok(n.max(0) as usize)
+    }
+
+    /// Distinct resource ids that have TILES (full/hydratable grade). Test/diagnostic.
+    pub fn tile_resource_ids(&self) -> Result<Vec<String>, DuckError> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT DISTINCT resource_id FROM tiles")?;
+        let ids = stmt
+            .query_map([], |r| r.get::<_, String>(0))?
+            .collect::<Result<_, _>>()?;
+        Ok(ids)
+    }
+
+    /// Resource ids present in the `resources` entry table (named/linkable — the
+    /// grade a reference reaches even without tiles). Empty if no entry store.
+    pub fn entry_resource_ids(&self) -> Result<Vec<String>, DuckError> {
+        if !self.has_resources {
+            return Ok(Vec::new());
+        }
+        let mut stmt = self.conn.prepare("SELECT resource_id FROM resources")?;
+        let ids = stmt
+            .query_map([], |r| r.get::<_, String>(0))?
+            .collect::<Result<_, _>>()?;
+        Ok(ids)
+    }
+
+    /// Raw hydration `data` JSON blobs of a resource's tiles (includes the alizarin
+    /// `__cache` of its directly-linked resources). Diagnostic — used to confirm the
+    /// cache gives the 2-hop display for free.
+    pub fn resource_data_blobs(&self, id: &str) -> Result<Vec<String>, DuckError> {
+        let mut stmt = self.conn.prepare("SELECT data FROM tiles WHERE resource_id = ?")?;
+        let v = stmt
+            .query_map([id], |r| r.get::<_, String>(0))?
+            .collect::<Result<_, _>>()?;
+        Ok(v)
+    }
+
+    /// Read the `snapshot_id` of a REMOTE snapshot's `manifest.json` over httpfs on this
+    /// reader's connection — used to record a slice's `derived_from`. `None` if
+    /// unreadable/absent.
+    pub fn read_remote_snapshot_id(&self, base_url: &str) -> Option<String> {
+        let url = format!("{}/manifest.json", base_url.trim_end_matches('/'));
+        self.conn
+            .query_row(
+                &format!("SELECT snapshot_id FROM read_json_auto('{}')", sql_lit(&url)),
+                [],
+                |r| r.get::<_, String>(0),
+            )
+            .ok()
+            .filter(|s| !s.is_empty())
+    }
+
+    /// A resource's `render_summary` from the grid edge (the card summary, which embeds
+    /// its linked-resource summary). Best-effort: `None` if absent OR the store/column
+    /// is missing (older-schema corpora keep render_summary on `grid`, not `resources`).
+    /// Diagnostic.
+    pub fn render_summary_of(&self, id: &str) -> Result<Option<String>, DuckError> {
+        if !self.has_grid {
+            return Ok(None);
+        }
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT render_summary FROM grid WHERE resource_id = ? LIMIT 1",
+                [id],
+                |r| r.get::<_, Option<String>>(0),
+            )
+            .ok()
+            .flatten())
+    }
+
     /// Attach a concept catalog (the `concept_catalog.parquet` projected from
     /// `RdmCache`), enabling `DescendantOrSelfOf` — a subtree range read
     /// (`dfs_enter BETWEEN pre_X AND submax_X`), zone-map-pruned to the subtree.
@@ -378,20 +915,6 @@ impl DuckReader {
             )
             .unwrap_or(false);
 
-        // base-first: the layer index IS the precedence rank (higher wins).
-        let ranked_union = |layers: &[(usize, String)]| -> String {
-            layers
-                .iter()
-                .map(|(i, g)| {
-                    format!(
-                        "SELECT *, {i} AS _layer FROM read_parquet('{}')",
-                        sql_lit(g)
-                    )
-                })
-                .collect::<Vec<_>>()
-                .join("\nUNION ALL BY NAME\n")
-        };
-
         // Tiles (required): topmost tile per (resource_id, nodegroup_id).
         let tile_layers = layers_with(&conn, dirs, "tiles_*.parquet");
         if tile_layers.is_empty() {
@@ -420,11 +943,12 @@ impl DuckReader {
         if has_edges {
             conn.execute_batch(&format!(
                 "CREATE VIEW edges AS {};",
-                shadow_set_union(
-                    &edge_layers,
-                    &["src_resource", "src_nodegroup"],
-                    "src_resource, src_node, src_nodegroup, src_tile, target_resource",
-                )
+                // `*` (not an explicit list) so the composition tolerates schema drift
+                // between a layer's snapshot version and this reader — above all an
+                // offline SLICE carved from an older-schema corpus. Composition keys on
+                // column NAMES, downstream reads by name, so `*` is equivalent for a
+                // current head and strictly more tolerant for an old one.
+                shadow_set_union(&edge_layers, &["src_resource", "src_nodegroup"], "*")
             ))?;
         }
         // Reverse edge index across layers (the sibling redges_*.parquet), so an
@@ -435,11 +959,7 @@ impl DuckReader {
         if !rev_layers.is_empty() {
             conn.execute_batch(&format!(
                 "CREATE VIEW edges_rev AS {};",
-                shadow_set_union(
-                    &rev_layers,
-                    &["src_resource", "src_nodegroup"],
-                    "src_resource, src_node, src_nodegroup, src_tile, target_resource",
-                )
+                shadow_set_union(&rev_layers, &["src_resource", "src_nodegroup"], "*")
             ))?;
         }
 
@@ -465,11 +985,7 @@ impl DuckReader {
         if has_concept_index {
             conn.execute_batch(&format!(
                 "CREATE VIEW concept_index AS {};",
-                shadow_set_union(
-                    &concept_layers,
-                    &["resource_id", "nodegroup_id"],
-                    "resource_id, tile_id, nodegroup_id, node_id, concept_id",
-                )
+                shadow_set_union(&concept_layers, &["resource_id", "nodegroup_id"], "*")
             ))?;
         }
         let ordered_layers = layers_with(&conn, dirs, "ordered_*.parquet");
@@ -477,11 +993,7 @@ impl DuckReader {
         if has_ordered {
             conn.execute_batch(&format!(
                 "CREATE VIEW ordered_index AS {};",
-                shadow_set_union(
-                    &ordered_layers,
-                    &["resource_id", "nodegroup_id"],
-                    "resource_id, tile_id, nodegroup_id, node_id, q_ordered",
-                )
+                shadow_set_union(&ordered_layers, &["resource_id", "nodegroup_id"], "*")
             ))?;
         }
         // Grid edge across layers: a resource's cell is a whole-resource fact (one
@@ -493,11 +1005,7 @@ impl DuckReader {
         if has_grid {
             conn.execute_batch(&format!(
                 "CREATE VIEW grid AS {};",
-                shadow_set_union(
-                    &grid_layers,
-                    &["resource_id"],
-                    "cell, resource_id, descriptor, geo_descriptor, render_summary, render_fields",
-                )
+                shadow_set_union(&grid_layers, &["resource_id"], "*")
             ))?;
         }
         // Entry table across layers: one row per resource, so the shadow key is
@@ -508,12 +1016,7 @@ impl DuckReader {
         if has_resources {
             conn.execute_batch(&format!(
                 "CREATE VIEW resources AS {};",
-                shadow_set_union(
-                    &resource_layers,
-                    &["resource_id"],
-                    "resource_id, graph_id, legacyid, descriptor, cluster_key, \
-                     geo_descriptor, render_summary, render_fields, descriptor_description",
-                )
+                shadow_set_union(&resource_layers, &["resource_id"], "*")
             ))?;
         }
 
@@ -592,7 +1095,15 @@ impl DuckReader {
         &self,
         uris: &[String],
     ) -> Result<
-        HashMap<String, (Option<String>, Option<String>, Option<String>, Option<String>)>,
+        HashMap<
+            String,
+            (
+                Option<String>,
+                Option<String>,
+                Option<String>,
+                Option<String>,
+            ),
+        >,
         DuckError,
     > {
         let mut out = HashMap::new();
@@ -662,7 +1173,8 @@ impl DuckReader {
         })?;
         for row in rows {
             let (id, graph_id, legacyid, descriptor, description) = row?;
-            out.entry(id).or_insert((graph_id, legacyid, descriptor, description));
+            out.entry(id)
+                .or_insert((graph_id, legacyid, descriptor, description));
         }
         Ok(out)
     }
@@ -920,10 +1432,177 @@ impl DuckReader {
     }
 }
 
+/// The outcome of an [`export_offline`]: where the per-layer slice landed and how big
+/// each membership grade turned out — so the caller can report (and notice a capped
+/// 2-hop) rather than guess.
+pub struct ExportSummary {
+    /// Per-layer slice dirs (base-first), ready to pass to [`DuckReader::open_layers`].
+    pub layer_dirs: Vec<std::path::PathBuf>,
+    /// The derived-provenance manifest written at the slice root (`<out>/manifest.json`):
+    /// which snapshots it was carved from + the slice's own artifact hashes.
+    pub manifest: std::path::PathBuf,
+    /// Seed resources (the region).
+    pub seed: usize,
+    /// Full-grade 1-hop resources (queryable offline).
+    pub hop1: usize,
+    /// Reference-grade 2-hop resources actually written (after any cap).
+    pub refs: usize,
+    /// Whether the 2-hop was CAPPED (the raw reference set was larger than `hop2_ref_cap`).
+    /// A `true` here is the hub-fan-out signal — the 2-hop reached a high-degree entity.
+    pub refs_capped: bool,
+}
+
+/// Export a self-contained OFFLINE slice of a remote, LAYERED corpus:
+/// `export_offline(layers, bbox, seed_limit, hop2_ref_cap, out)` — a region around a
+/// point (`bbox`), the queryable 1-hop, and OPTIONALLY the 2-hop as linkable references,
+/// from ONLY the chosen `layer_urls`. The closure is resolved over the COMPOSED layers
+/// (so a hop crosses layers — a seed building in the base reaches a keyholder in an
+/// overlay), then each layer's RAW rows are excised into its own `layer-<i>/` sub-dir —
+/// so [`DuckReader::open_layers`] re-composes the slice DYNAMICALLY offline rather than
+/// flattening it (which would collapse the open/closed boundary).
+///
+/// **`hop2_ref_cap` — the 2-hop policy. The DEFAULT is `0`**, and it is the recommended
+/// one: the 2-hop then comes for free as DISPLAY from the alizarin `__cache` /
+/// `render_summary` already embedded in the full-grade 1-hop tiles — no edge expansion,
+/// no fan-out. **This requires the corpus to have been emitted with `populate_caches`**;
+/// a cache-light corpus (e.g. the current R2 `aonach763k`) carries no linked-resource
+/// cache, so `0` yields no 2-hop — re-emit with caches to get it.
+///
+/// `hop2_ref_cap > 0` is the OPT-IN for a 2-hop you can independently tap-through /
+/// map offline (reference-grade entities, not just cached display). It does a real
+/// `neighbours(hop1)` expansion, which **fans out through a hub** (a shared Ward / org /
+/// insurer the 1-hop links to) to tens of thousands — the cap bounds it and
+/// [`ExportSummary::refs_capped`] reports when it bit (rather than silently truncating).
+/// A high-degree hub should really be EXCLUDED from this expansion, not just capped.
+pub fn export_offline(
+    layer_urls: &[&str],
+    bbox: [f64; 4],
+    seed_limit: usize,
+    hop2_ref_cap: usize,
+    out_dir: &Path,
+) -> Result<ExportSummary, DuckError> {
+    // 1. compose the chosen layers and resolve the closure (cross-layer hops).
+    let composed = DuckReader::open_http_layers(layer_urls)?;
+    let seed = composed.ids_in_bbox(bbox, seed_limit)?;
+    let hop1 = composed.neighbours(&seed)?;
+    let mut closure: Vec<String> = seed.iter().chain(hop1.iter()).cloned().collect();
+    closure.sort();
+    closure.dedup();
+    // 2-hop as references: what the 1-hop links to, minus what's already full-grade,
+    // bounded by hop2_ref_cap (deterministic: sorted, then truncated).
+    let (refs, refs_capped): (Vec<String>, bool) = if hop2_ref_cap > 0 {
+        let full: std::collections::HashSet<&String> = closure.iter().collect();
+        let mut r: Vec<String> = composed
+            .neighbours(&hop1)?
+            .into_iter()
+            .filter(|id| !full.contains(id))
+            .collect();
+        r.sort();
+        r.dedup();
+        let capped = r.len() > hop2_ref_cap;
+        r.truncate(hop2_ref_cap);
+        (r, capped)
+    } else {
+        (Vec::new(), false)
+    };
+    // 2. excise each layer's RAW rows of the closure / refs into its own sub-dir, and
+    //    collect the slice's own file hashes + the source snapshot_ids for provenance.
+    let mut layer_dirs = Vec::new();
+    let mut slice_layers = Vec::new();
+    let mut derived_from = Vec::new();
+    for (i, url) in layer_urls.iter().enumerate() {
+        let layer = DuckReader::open_http(url)?;
+        let dir = out_dir.join(format!("layer-{i}"));
+        let written = layer.excise(&closure, &refs, Some(bbox), &dir, "slice")?;
+        let mut artifacts = Vec::new();
+        for p in &written {
+            let bytes = std::fs::read(p)
+                .map_err(|e| DuckError::Compile(format!("hash {}: {e}", p.display())))?;
+            let name = p
+                .file_name()
+                .and_then(|s| s.to_str())
+                .unwrap_or_default()
+                .to_string();
+            artifacts.push(ros_madair_format::ArtifactEntry::hashed(name, &bytes));
+        }
+        slice_layers.push(ros_madair_format::SliceLayer {
+            dir: format!("layer-{i}"),
+            artifacts,
+        });
+        derived_from.push(ros_madair_format::SourceSnapshot {
+            url: url.to_string(),
+            snapshot_id: composed.read_remote_snapshot_id(url).unwrap_or_default(),
+        });
+        layer_dirs.push(dir);
+    }
+
+    // 3. write the derived-provenance manifest at the slice root (claim-only — names the
+    //    sources + self-attests the slice's files; NOT a cryptographic subset proof).
+    let manifest = ros_madair_format::DerivedManifest {
+        format_version: ros_madair_format::FORMAT_VERSION,
+        kind: "offline-slice".to_string(),
+        derived_from,
+        region: Some(bbox),
+        seed_limit: seed_limit as u64,
+        hop2_ref_cap: hop2_ref_cap as u64,
+        layers: slice_layers,
+    };
+    let manifest_path = out_dir.join("manifest.json");
+    let json = serde_json::to_string_pretty(&manifest)
+        .map_err(|e| DuckError::Compile(format!("serialize slice manifest: {e}")))?;
+    std::fs::write(&manifest_path, json)
+        .map_err(|e| DuckError::Compile(format!("write slice manifest: {e}")))?;
+
+    Ok(ExportSummary {
+        layer_dirs,
+        manifest: manifest_path,
+        seed: seed.len(),
+        hop1: hop1.len(),
+        refs: refs.len(),
+        refs_capped,
+    })
+}
+
+/// A `read_parquet()` table-source over a LOCAL glob — the per-layer source the
+/// composition helpers (`shadow_set_union`/`ranked_union`) interpolate as `FROM {src}`.
+fn local_src(glob: &str) -> String {
+    format!("read_parquet('{}')", sql_lit(glob))
+}
+
+/// A `read_parquet([...])` table-source over an explicit URL list (a REMOTE layer):
+/// httpfs cannot glob plain HTTP, so the partition/model files are named explicitly.
+/// `hive` recovers `nodegroup_id` for the partitioned tiles; `union_by_name` lets a
+/// layer's several model files coexist in one source.
+fn url_src(urls: &[String], hive: bool) -> String {
+    let list = urls
+        .iter()
+        .map(|u| format!("'{}'", sql_lit(u)))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let opts = if hive {
+        ", hive_partitioning=true, union_by_name=true"
+    } else {
+        ", union_by_name=true"
+    };
+    format!("read_parquet([{list}]{opts})")
+}
+
+/// Union per-layer sources tagged with their precedence rank `_layer` (base-first,
+/// higher wins). Used for the DFS-interval concept catalog, where the winner is
+/// picked by a `QUALIFY row_number() … ORDER BY _layer DESC` window.
+fn ranked_union(layers: &[(usize, String)]) -> String {
+    layers
+        .iter()
+        .map(|(i, src)| format!("SELECT *, {i} AS _layer FROM {src}"))
+        .collect::<Vec<_>>()
+        .join("\nUNION ALL BY NAME\n")
+}
+
 /// Open a layer dir as a `DuckReader` (tiles glob + optional concept catalog).
-/// For a per-layer filename pattern, the `(rank, glob)` of the layers that
+/// For a per-layer filename pattern, the `(rank, source)` of the layers that
 /// actually contain matching files — so the composed view never `read_parquet`s
-/// a zero-match glob (which errors at bind). Rank = the layer's index in `dirs`.
+/// a zero-match glob (which errors at bind). Rank = the layer's index in `dirs`;
+/// source is the `read_parquet('glob')` expression the composition interpolates.
 fn layers_with(conn: &Connection, dirs: &[&Path], pattern: &str) -> Vec<(usize, String)> {
     dirs.iter()
         .enumerate()
@@ -936,7 +1615,7 @@ fn layers_with(conn: &Connection, dirs: &[&Path], pattern: &str) -> Vec<(usize, 
                     |r| r.get(0),
                 )
                 .unwrap_or(0);
-            (n > 0).then_some((i, glob))
+            (n > 0).then_some((i, local_src(&glob)))
         })
         .collect()
 }
@@ -965,14 +1644,14 @@ fn shadow_set_union(layers: &[(usize, String)], keys: &[&str], cols: &str) -> St
     sorted
         .iter()
         .enumerate()
-        .map(|(i, (_r, glob))| {
+        .map(|(i, (_r, src))| {
             let higher = &sorted[i + 1..];
             if higher.is_empty() {
-                format!("SELECT {cols} FROM read_parquet('{}') base", sql_lit(glob))
+                format!("SELECT {cols} FROM {src} base")
             } else {
                 let higher_keys = higher
                     .iter()
-                    .map(|(_, g)| format!("SELECT {key_proj} FROM read_parquet('{}')", sql_lit(g)))
+                    .map(|(_, g)| format!("SELECT {key_proj} FROM {g}"))
                     .collect::<Vec<_>>()
                     .join(" UNION ALL ");
                 let on = keys
@@ -981,9 +1660,8 @@ fn shadow_set_union(layers: &[(usize, String)], keys: &[&str], cols: &str) -> St
                     .collect::<Vec<_>>()
                     .join(" AND ");
                 format!(
-                    "SELECT {cols} FROM read_parquet('{}') base \
-                     WHERE NOT EXISTS (SELECT 1 FROM ({higher_keys}) h WHERE {on})",
-                    sql_lit(glob)
+                    "SELECT {cols} FROM {src} base \
+                     WHERE NOT EXISTS (SELECT 1 FROM ({higher_keys}) h WHERE {on})"
                 )
             }
         })
@@ -1315,8 +1993,8 @@ mod tests {
         .unwrap();
 
         let layers = vec![
-            (0usize, base.display().to_string()),
-            (1usize, overlay.display().to_string()),
+            (0usize, local_src(&base.display().to_string())),
+            (1usize, local_src(&overlay.display().to_string())),
         ];
         let cols = "src_resource, src_node, src_nodegroup, src_tile, target_resource";
         let shadow_sql = shadow_set_union(&layers, &["src_resource", "src_nodegroup"], cols);

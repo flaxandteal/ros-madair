@@ -400,6 +400,60 @@ pub struct ArtifactEntry {
     pub sha256: String,
 }
 
+impl ArtifactEntry {
+    /// Hash file CONTENT into an entry (a `path` label + byte length + sha256). No
+    /// filesystem here — the caller reads the bytes, so this stays `wasm32`-clean.
+    pub fn hashed(path: String, content: &[u8]) -> Self {
+        ArtifactEntry {
+            path,
+            bytes: content.len() as u64,
+            sha256: hex(&Sha256::digest(content)),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Derived-slice provenance (an OFFLINE slice carved from signed snapshots)
+// ---------------------------------------------------------------------------
+
+/// Provenance of a DERIVED offline slice: which signed snapshots it was carved from,
+/// how (the seed region + hop policy), and the slice's OWN artifact hashes. This is
+/// **claim-only** provenance — it NAMES its sources and self-attests its own files; it
+/// is NOT a cryptographic subset proof (that would need per-row-group commitments in the
+/// source manifests). A verifier can confirm the slice is internally consistent and see
+/// which snapshots it claims descent from; it cannot (yet) prove every row is a faithful
+/// subset of those snapshots.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DerivedManifest {
+    pub format_version: u32,
+    /// Discriminator — `"offline-slice"`.
+    pub kind: String,
+    /// The source snapshots this slice was carved from (base-first, one per layer).
+    pub derived_from: Vec<SourceSnapshot>,
+    /// The seed region `[min_lng, min_lat, max_lng, max_lat]`, if spatially seeded.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub region: Option<[f64; 4]>,
+    /// The spatial-seed cap and the 2-hop reference cap used (`0` = no edge expansion).
+    pub seed_limit: u64,
+    pub hop2_ref_cap: u64,
+    /// The slice's own per-layer sub-dirs and the hashes of the files written there.
+    pub layers: Vec<SliceLayer>,
+}
+
+/// One source snapshot a slice descends from: its public base URL and `snapshot_id`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SourceSnapshot {
+    pub url: String,
+    pub snapshot_id: String,
+}
+
+/// One layer of a slice on disk: the sub-dir and the hashes of its excised artifacts.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SliceLayer {
+    pub dir: String,
+    pub artifacts: Vec<ArtifactEntry>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Budgets {
     pub max_result_rows: u32,
