@@ -34,8 +34,11 @@ use duckdb::Connection;
 /// under test — the test is reading those bytes back without a disk file.
 fn make_parquet_bytes(conn: &Connection, copy_sql: &str) -> Vec<u8> {
     let tmp = std::env::temp_dir().join(format!("rm-spike-fixture-{}.parquet", std::process::id()));
-    conn.execute_batch(&format!("COPY ({copy_sql}) TO '{}' (FORMAT PARQUET);", tmp.display()))
-        .expect("write fixture parquet");
+    conn.execute_batch(&format!(
+        "COPY ({copy_sql}) TO '{}' (FORMAT PARQUET);",
+        tmp.display()
+    ))
+    .expect("write fixture parquet");
     let bytes = std::fs::read(&tmp).expect("read fixture bytes");
     let _ = std::fs::remove_file(&tmp);
     bytes
@@ -48,7 +51,11 @@ fn memfd_with(bytes: &[u8], name: &str) -> (File, String) {
     // MFD_CLOEXEC = 1. memfd_create is Linux ≥ 3.17 and Android (bionic) ≥ API 30.
     let cname = CString::new(name).unwrap();
     let fd = unsafe { libc::memfd_create(cname.as_ptr(), 1) };
-    assert!(fd >= 0, "memfd_create failed: {}", std::io::Error::last_os_error());
+    assert!(
+        fd >= 0,
+        "memfd_create failed: {}",
+        std::io::Error::last_os_error()
+    );
     let mut f = unsafe { File::from_raw_fd(fd) };
     f.write_all(bytes).expect("write bytes into memfd");
     f.flush().unwrap();
@@ -71,14 +78,22 @@ fn main() {
             ('bldg-2','Arun Kumar','+353 85 5556666','keyholder')) \
          t(building_id, name, phone, role)",
     );
-    println!("closed layer: {} bytes of parquet, held only in RAM next", closed_bytes.len());
+    println!(
+        "closed layer: {} bytes of parquet, held only in RAM next",
+        closed_bytes.len()
+    );
 
     // --- 2. Read it back from an anonymous RAM fd — the decisive test.
     let (_held, closed_path) = memfd_with(&closed_bytes, "closed-keyholders");
     // Prove the fd has no on-disk name: its /proc link target is "/memfd:...(deleted)".
-    let link = std::fs::read_link(&closed_path).map(|p| p.display().to_string()).unwrap_or_default();
+    let link = std::fs::read_link(&closed_path)
+        .map(|p| p.display().to_string())
+        .unwrap_or_default();
     println!("memfd path: {closed_path}  ->  {link}");
-    assert!(link.contains("memfd:"), "must be an anonymous memfd, not a real file: {link}");
+    assert!(
+        link.contains("memfd:"),
+        "must be an anonymous memfd, not a real file: {link}"
+    );
 
     conn.execute_batch(&format!(
         "CREATE VIEW closed AS SELECT * FROM read_parquet('{closed_path}');"
@@ -86,7 +101,9 @@ fn main() {
     .expect("DuckDB must read a parquet from the RAM fd");
 
     let (n, first): (i64, String) = conn
-        .query_row("SELECT count(*), min(name) FROM closed", [], |r| Ok((r.get(0)?, r.get(1)?)))
+        .query_row("SELECT count(*), min(name) FROM closed", [], |r| {
+            Ok((r.get(0)?, r.get(1)?))
+        })
         .expect("scan the in-RAM closed layer");
     println!("read from RAM: {n} closed rows, first name = {first:?}");
     assert_eq!(n, 3, "all 3 closed rows read from memory");
@@ -106,7 +123,8 @@ fn main() {
           t(building_id, descriptor, keyholders_recorded, status)) \
          TO '{}' (FORMAT PARQUET); \
          CREATE VIEW open AS SELECT * FROM read_parquet('{}');",
-        open_path.display(), open_path.display()
+        open_path.display(),
+        open_path.display()
     ))
     .expect("open layer on disk");
 
@@ -121,7 +139,9 @@ fn main() {
         )
         .unwrap();
     let rows: Vec<(String, i64, String, String, String)> = stmt
-        .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)))
+        .query_map([], |r| {
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
+        })
         .unwrap()
         .map(|r| r.unwrap())
         .collect();
@@ -130,7 +150,11 @@ fn main() {
     for (desc, cnt, name, phone, role) in &rows {
         println!("  {desc}  (owner says {cnt} recorded)  ->  {name} · {role} · {phone}");
     }
-    assert_eq!(rows.len(), 3, "join across disk+RAM layers returns all keyholders");
+    assert_eq!(
+        rows.len(),
+        3,
+        "join across disk+RAM layers returns all keyholders"
+    );
     // The owner-published count (open) matches the real closed cardinality here —
     // but it came from the OPEN layer, never computed from `closed`.
     assert!(rows.iter().any(|r| r.0 == "Scoil Ros Bán" && r.1 == 2));

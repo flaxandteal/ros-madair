@@ -33,9 +33,7 @@ dependencies = [
 
 [[package]]
 name = "alizarin-clm-core"
-version = "2.0.0-alpha.140"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bcbc4e232ad16a66ddefde0a495bdae6e1c5a858ac342f0390009d011c505467"
+version = "2.0.0-alpha.144"
 dependencies = [
  "alizarin-core",
  "alizarin-extension-api",
@@ -48,13 +46,12 @@ dependencies = [
 
 [[package]]
 name = "alizarin-core"
-version = "2.0.0-alpha.140"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ff9e0ae621dc163f2dd807c979dbb7bbfe69101c0adb678512b02e2551847025"
+version = "2.0.0-alpha.144"
 dependencies = [
  "alizarin-extension-api",
  "chrono",
  "csv",
+ "indexmap",
  "lasso",
  "lazy_static",
  "oxiri",
@@ -69,9 +66,7 @@ dependencies = [
 
 [[package]]
 name = "alizarin-extension-api"
-version = "2.0.0-beta.9"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "437abc0aba8ddd17b4a372968564f0886e5e7ae67a8acb6155156fc50b68c5fe"
+version = "2.0.0-alpha.144"
 dependencies = [
  "serde",
  "serde_json",
@@ -1051,6 +1046,8 @@ checksum = "d466e9454f08e4a911e14806c24e16fba1b4c121d1ea474396f396069cf949d9"
 dependencies = [
  "equivalent",
  "hashbrown 0.17.1",
+ "serde",
+ "serde_core",
 ]
 
 [[package]]

@@ -792,6 +792,43 @@ impl DuckReader {
         Ok(v)
     }
 
+    /// Read ONE node's geojson value (e.g. the footprint FeatureCollection) from the tile
+    /// `data` for a set of resources — the VIEWPORT-FETCH path for real footprints at scale.
+    /// For large corpora the polygon is NOT promoted onto the grid (that would bloat it to
+    /// hundreds of MB); it stays in `data`, and the map fetches just the visible buildings'
+    /// footprints with this one batched scan (`resource_id IN (...)`). Returns
+    /// `{resource_id: node_json}` (only resources whose tile carries the node).
+    pub fn node_geoms(
+        &self,
+        ids: &[String],
+        node_id: &str,
+    ) -> Result<std::collections::HashMap<String, String>, DuckError> {
+        use std::collections::HashMap;
+        if ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let in_list = ids
+            .iter()
+            .map(|i| format!("'{}'", sql_lit(i)))
+            .collect::<Vec<_>>()
+            .join(",");
+        let path = format!("$.\"{}\"", node_id);
+        let sql = format!(
+            "SELECT resource_id, json_extract(data, '{p}') AS g FROM tiles \
+             WHERE resource_id IN ({ids}) AND json_extract(data, '{p}') IS NOT NULL",
+            p = path,
+            ids = in_list
+        );
+        let mut stmt = self.conn.prepare(&sql)?;
+        let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
+        let mut out = HashMap::new();
+        for row in rows {
+            let (id, g) = row?;
+            out.insert(id, g);
+        }
+        Ok(out)
+    }
+
     /// Read the `snapshot_id` of a REMOTE snapshot's `manifest.json` over httpfs on this
     /// reader's connection — used to record a slice's `derived_from`. `None` if
     /// unreadable/absent.

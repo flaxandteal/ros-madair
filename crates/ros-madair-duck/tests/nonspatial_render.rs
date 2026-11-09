@@ -35,10 +35,12 @@ fn write_graph(gp: &Path) {
     // A WORD model: a semantic root + a nodegroup with two string nodes. NO geometry node.
     let root = json!({"nodeid": ROOT, "name": "Word", "alias": "word", "datatype": "semantic",
                       "graph_id": GRAPH, "istopnode": true});
-    let node = |id: &str, alias: &str| json!({
+    let node = |id: &str, alias: &str| {
+        json!({
         "nodeid": id, "nodegroup_id": NG, "name": alias, "alias": alias, "datatype": "string",
         "graph_id": GRAPH, "istopnode": false, "is_collector": id == POS, "isrequired": false,
-        "issearchable": true, "exportable": false, "sortorder": 0});
+        "issearchable": true, "exportable": false, "sortorder": 0})
+    };
     let doc = json!({"graph": [{
         "graphid": GRAPH, "name": "Word", "root": root.clone(),
         "nodes": [root, node(POS, "part_of_speech"), node(DIA, "dialect")],
@@ -104,14 +106,21 @@ fn render_fields_resolve_for_a_non_geo_resource() {
     let tiles = pq.join(format!("tiles_{GRAPH}.parquet"));
     let duck = DuckReader::open(tiles.to_str().unwrap()).expect("open");
 
-    let got = duck.render_summaries(&[CAT.to_string()]).expect("render_summaries");
+    let got = duck
+        .render_summaries(&[CAT.to_string()])
+        .expect("render_summaries");
     let (descriptor, geo, _summary, fields) = got
         .get(CAT)
         .expect("render_summaries returns the non-geo resource (was empty before the fix)");
 
     assert_eq!(descriptor.as_deref(), Some("cat"), "descriptor carried");
-    assert!(geo.is_none(), "geo_descriptor is null for a non-geo resource, got {geo:?}");
-    let fields = fields.as_deref().expect("render_fields present for a non-geo resource");
+    assert!(
+        geo.is_none(),
+        "geo_descriptor is null for a non-geo resource, got {geo:?}"
+    );
+    let fields = fields
+        .as_deref()
+        .expect("render_fields present for a non-geo resource");
     assert!(
         fields.contains("part_of_speech") && fields.contains("noun"),
         "part_of_speech=noun carried in render_fields: {fields}"
@@ -122,7 +131,9 @@ fn render_fields_resolve_for_a_non_geo_resource() {
     );
     // 1.3: the gloss (description) is carried on the entry table too, so a dictionary's
     // definition search can index it non-spatially.
-    let entries = duck.resource_entries(&[CAT.to_string()]).expect("resource_entries");
+    let entries = duck
+        .resource_entries(&[CAT.to_string()])
+        .expect("resource_entries");
     let (_g, _l, descriptor, description) = entries.get(CAT).expect("entry row present");
     assert_eq!(descriptor.as_deref(), Some("cat"));
     assert_eq!(
