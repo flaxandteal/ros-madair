@@ -33,7 +33,7 @@ dependencies = [
 
 [[package]]
 name = "alizarin-clm-core"
-version = "2.0.0-alpha.144"
+version = "2.0.0-alpha.145"
 dependencies = [
  "alizarin-core",
  "alizarin-extension-api",
@@ -46,7 +46,7 @@ dependencies = [
 
 [[package]]
 name = "alizarin-core"
-version = "2.0.0-alpha.144"
+version = "2.0.0-alpha.145"
 dependencies = [
  "alizarin-extension-api",
  "chrono",
@@ -66,7 +66,7 @@ dependencies = [
 
 [[package]]
 name = "alizarin-extension-api"
-version = "2.0.0-alpha.144"
+version = "2.0.0-alpha.145"
 dependencies = [
  "serde",
  "serde_json",

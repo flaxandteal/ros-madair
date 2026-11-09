@@ -22,7 +22,7 @@ alizarin-core.workspace = true
 # published upstream version as alizarin-core, from crates.io.
 # EXACT, same line as alizarin-core: alpha.140 requires core ^alpha.140 (semver-lower
 # than beta.9, so a caret would resolve back to beta.9 and conflict). Move them together.
-alizarin-clm-core = "=2.0.0-alpha.144"
+alizarin-clm-core = "=2.0.0-alpha.145"
 serde = { version = "1", features = ["derive"] }
 # The extension-handler trait speaks `serde_json::Value`; the `number` handler
 # reads/keys it. serde_json is wasm32-clean, so the browser constraint holds.

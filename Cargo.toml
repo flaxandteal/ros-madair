@@ -57,10 +57,10 @@ debug = true
 # EXACT pin: alpha.143 is the newest line (stable cross-backend tile/key order + namespaced
 # multi-valued tile ids) but is semver-LOWER than beta.9, so a caret range would resolve back to
 # beta.9. `=` forces it.
-alizarin-core = "=2.0.0-alpha.144"
+alizarin-core = "=2.0.0-alpha.145"
 
-# OFFLINE/PRE-PUBLISH BRIDGE: a143 is not yet on crates.io (and not in this box's registry cache),
-# so point alizarin-core + alizarin-clm-core at the local a143 checkout (sibling of this repo under
+# OFFLINE/PRE-PUBLISH BRIDGE: a145 is not yet on crates.io (and not in this box's registry cache),
+# so point alizarin-core + alizarin-clm-core at the local a145 checkout (sibling of this repo under
 # magic/). REMOVE this block once a143 is published to crates.io — the `=2.0.0-alpha.143` pin above
 # then resolves from the registry and the "one registry source" invariant is restored. Patches are
 # stripped on publish, so this does not affect RM's crates.io-publishability.
