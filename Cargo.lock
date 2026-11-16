@@ -33,7 +33,9 @@ dependencies = [
 
 [[package]]
 name = "alizarin-clm-core"
-version = "2.0.0-alpha.145"
+version = "2.0.0-alpha.146"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f6f2000a441e3e3fdf715d9f9ae931c9855fadd902d0a63e165dbd4647c2a23e"
 dependencies = [
  "alizarin-core",
  "alizarin-extension-api",
@@ -46,7 +48,9 @@ dependencies = [
 
 [[package]]
 name = "alizarin-core"
-version = "2.0.0-alpha.145"
+version = "2.0.0-alpha.146"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5c8ff1fd32c7722ab8863ca9817933038a96c0c6f498d721bc9c7de8ca1afe56"
 dependencies = [
  "alizarin-extension-api",
  "chrono",
@@ -66,7 +70,9 @@ dependencies = [
 
 [[package]]
 name = "alizarin-extension-api"
-version = "2.0.0-alpha.145"
+version = "2.0.0-alpha.146"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a90fcfde2d5fe6989943da2e4ebdc0a3c12a86029e395b5e3ad0b690ff85ecd1"
 dependencies = [
  "serde",
  "serde_json",

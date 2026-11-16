@@ -54,16 +54,8 @@ debug = true
 # keeps RM's own crates crates.io-publishable (all deps are registry versions). Bump the
 # version to move alizarin. alizarin-clm-core (handlers) is the same version from crates.io.
 # (No [patch] blocks: one registry source already unifies every alizarin-core in the graph.)
-# EXACT pin: alpha.143 is the newest line (stable cross-backend tile/key order + namespaced
-# multi-valued tile ids) but is semver-LOWER than beta.9, so a caret range would resolve back to
-# beta.9. `=` forces it.
-alizarin-core = "=2.0.0-alpha.145"
-
-# OFFLINE/PRE-PUBLISH BRIDGE: a145 is not yet on crates.io (and not in this box's registry cache),
-# so point alizarin-core + alizarin-clm-core at the local a145 checkout (sibling of this repo under
-# magic/). REMOVE this block once a143 is published to crates.io — the `=2.0.0-alpha.143` pin above
-# then resolves from the registry and the "one registry source" invariant is restored. Patches are
-# stripped on publish, so this does not affect RM's crates.io-publishability.
-[patch.crates-io]
-alizarin-core = { path = "../alizarin/crates/alizarin-core" }
-alizarin-clm-core = { path = "../alizarin/ext/clm/core" }
+# EXACT pin: alpha.146 is the newest line; a caret would resolve back to the semver-HIGHER
+# 2.0.0-beta.9, so `=` forces the alpha. PUBLISHED on crates.io (a144's publish failed, fixed in
+# a145/146), so there is NO [patch] block — one registry source unifies every alizarin-core in the
+# graph, and CI / a clean clone build without the sibling checkout.
+alizarin-core = "=2.0.0-alpha.146"

@@ -3,8 +3,7 @@
 **From:** alizarin `release/2.0` at `v2.0.0-alpha.144` (`f5e1e9e`).
 **Audience:** RM maintainers.
 **Short version:** RM needs no code change to keep working on a144 (f834255 already builds and passes on it).
-Using the new **fold** primitive for layer spans is optional work, described in section 3. There is one
-blocker outside RM: the a144 crates are not on crates.io yet (section 1).
+Layer spans will **not** be RM's job (section 3). The crates.io blocker in section 1 is fixed in alpha.145.
 
 ## 1. Blocker: a144 crates are not on crates.io
 
@@ -34,10 +33,28 @@ verified against beta.9.
 | `ABI_VERSION` 3 (`TypeHandlerInfo` gains node-config fields). | RM links handlers as Rust crates, not over the C ABI. | Only matters if `ros-madair-python` loads alizarin's C-ABI extension `.so`s: rebuild them at a144. |
 | a143: `StaticTile.data` is a `BTreeMap`; output order is stable; `multi_tile_id(namespace, …)`. | Already absorbed in f834255. | None. |
 
-## 3. Using fold for layer spans (optional)
+## 3. Layer spans: RM does not compute them (revised)
 
-alizarin now does **"reduce a datatype over a set of resources and return a summary."** Spans, roles and
-the span nodegroup stay RM's (see `alizarin/AGGREGATE-FUNCTIONS-HANDOFF.md`).
+**Superseded.** An earlier version of this section had RM fold extents at emit and write span tiles.
+The agreed design (`alizarin/notes/spans-scope.md`) moves that out of RM entirely:
+
+- alizarin core has an **Aggregate** function kind: a function that reads a slice of other resources
+  and writes node values on the calling resource.
+- Core's built-in **fold** provider implements it. It's configured on the **Layer** graph's
+  `functions_x_graphs` (items of `{tileid, graph, path, where?, group_by?, into}`), uses the datatype
+  folds (geo's included, when registered), and writes only the named node values into the Layer's span
+  tiles. The Layer's owner writes those tiles' ids, roles and everything else.
+- The **layer owner** runs it at build time, on a native host. RM then indexes the Layer resource like
+  any other resource. The span summary should be stored in a non-geometry datatype, so RM's spatial
+  index doesn't treat extents as content.
+
+**What this means for RM:**
+- No span or extent logic is needed. The uncommitted `GeoExtentFold` / `ModelManifest.spatial_extent`
+  work in this checkout can be dropped, or kept only as a test cross-check against the provider's
+  spans. An extent in the manifest would also leak a closed layer's bbox and count without opening it.
+- `emit/src/geo.rs` (`extract_bbox`, the per-geometry index bbox) is unaffected.
+
+The rest of this section is kept for reference, for anyone folding directly from Rust.
 
 ### Summaries available
 
@@ -83,7 +100,7 @@ skipped += step.skipped;
 // At the end: values_seen == 0 means "no data", so write no span.
 ```
 
-### Steps
+### Steps (superseded; see the top of this section)
 
 1. **Register geo.** Add `alizarin-geo-core = "=2.0.0-alpha.145"` (no geo crate has published since a142,
    so use a `[patch.crates-io]` path to `../alizarin/ext/geo/core` until 145 lands). Call `alizarin_geo_core::register(&mut registry)` in both
@@ -104,8 +121,7 @@ skipped += step.skipped;
 
 ## 4. Not yet available
 
-- **Fold bindings (phase 2).** There is no `foldResources` on wasm, napi or Python yet, and no C-ABI fold.
-  RM's Rust crates link core directly, so this doesn't block the emitter. `ros-madair-wasm` and
-  `ros-madair-python` would need it to fold through alizarin's bindings.
+- **Aggregate bindings.** The Aggregate kind and fold provider are built in alizarin core (unreleased);
+  napi and Python bindings are next. See `alizarin/notes/spans-scope.md`.
 - **A real EDTF parser** (granularity, uncertain dates), and hull or cell-set geometry summaries.
 - **Incremental recompute** when a layer changes.
